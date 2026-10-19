@@ -124,7 +124,7 @@ configuration.
 
 | | |
 |---|---|
-| Machine | Dell Latitude 5350 |
+| Machine | Dell Latitude 5350 2-in-1|
 | CPU | Intel Core Ultra 5 135U — 12C/14T (2 P Redwood Cove + 8 E Crestmont + 2 LP E), CPUID `A06A4` |
 | iGPU | Meteor Lake-P Xe-LPG, PCI `8086:7D45`, subsystem `1028:0CB6`, rev 08 |
 | OS | macOS 15 Sequoia 15.8.1 (24H32), x86_64 |
