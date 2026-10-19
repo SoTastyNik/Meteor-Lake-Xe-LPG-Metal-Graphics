@@ -26,6 +26,30 @@ extensions* architecture, but replaces every NVIDIA-specific element: the GSP fi
 Intel GuC/HuC/GSC firmware path, the NVK backend becomes Mesa's **ANV** Intel driver, and the NVIDIA
 kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAccel`.
 
+## 📑 Contents
+
+- [What works today](#works)
+- [Status at a glance](#status)
+- [Security warning](#security)
+- [Hardware and software target](#target)
+- [Compatibility](#compatibility)
+- [Architecture](#architecture)
+- [Component inventory](#components)
+- [Implementation detail](#implementation)
+- [The current blocker](#blocker)
+- [Failure signatures](#failures)
+- [Struggles and breakthroughs](#history)
+- [Validation methodology](#validation)
+- [Diagnostics cheat-sheet](#diagnostics)
+- [Workspace layout](#workspace)
+- [Building and testing](#build)
+- [Roadmap](#roadmap)
+- [Attribution and licensing](#licensing)
+- [Design principles](#principles)
+- [Glossary](#glossary)
+- [Where this breaks with consensus](#consensus)
+
+<a name="works"></a>
 ## ✅ What works today
 
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
@@ -52,6 +76,7 @@ two different milestones; this project has finished the first and is attacking t
 
 ---
 
+<a name="status"></a>
 ## 📊 Status at a glance
 
 | Milestone | Evidence | Status |
@@ -71,6 +96,26 @@ Every row above is traceable to a dated report under `research/`. The point of t
 
 ---
 
+<a name="security"></a>
+## ⚠️ Security warning
+
+This project requires changes that weaken macOS platform security:
+
+| Setting | Effect |
+|---|---|
+| `csr-active-config = 0x0A43` | Disables large parts of System Integrity Protection |
+| `SecureBootModel = Disabled` | Disables Apple Secure Boot |
+| AMFIPass + `amfi_get_out_of_my_way=0x1` | Bypasses AMFI code-signing enforcement |
+| Custom kexts in the Auxiliary Kernel Collection | Unsigned, unnotarised kernel code runs at boot |
+
+**Do not do this on a machine holding irreplaceable data or credentials.** A boot loop, a kext panic or a
+damaged kernel collection can make the installation unbootable. Keep a known-good EFI on a separate USB
+drive and a full backup off-device. This is an experimental hardware-porting project, not a supported
+configuration.
+
+---
+
+<a name="target"></a>
 ## 🎯 Hardware and software target
 
 | | |
@@ -95,6 +140,28 @@ against.
 
 ---
 
+<a name="compatibility"></a>
+## 🖥️ Compatibility
+
+Only one configuration has evidence behind it. Everything else is honestly marked untested.
+
+| Target | Status |
+|---|---|
+| Dell Latitude 5350, `8086:7D45`, macOS 15.8.1 (24H32), x86_64 | **Tested** — Metal + Vulkan pass; desktop composition in progress |
+| Other Meteor Lake SKUs that expose `8086:7D45` | **Untested** — same device ID, likely the same path, no claim made |
+| Meteor Lake SKUs with a different device ID | **Untested** — `IOPCIPrimaryMatch` must be changed; nothing else is verified |
+| Alder Lake / Raptor Lake iGPUs | **Not targeted** — the i915 code may apply, but no evidence exists |
+| Lunar Lake (Xe2) / Panther Lake (Xe3) | **Not supported** by this port — different generation and cache behaviour |
+| macOS 15.0–15.7 | **Untested** — only 15.8.1 has hardware evidence |
+| macOS 26 Tahoe | **Untested** |
+| Apple Silicon | **Not applicable** |
+
+Changing the device ID alone is not a port. Each new target needs its own firmware match, memory/cache
+assumptions and a fresh 22-case gate before any claim is made. "Unknown" is not "works".
+
+---
+
+<a name="architecture"></a>
 ## 🧭 Architecture
 
 ```
@@ -137,6 +204,7 @@ each case logs and verifies the route it actually took rather than trusting the 
 
 ---
 
+<a name="components"></a>
 ## 🧱 Component inventory
 
 | Component | Version / base | Source in tree | Licence |
@@ -161,6 +229,7 @@ upstream package hashes are in `SHA256SUMS-upstream.txt`.
 
 ---
 
+<a name="implementation"></a>
 ## 🔬 Implementation detail, layer by layer
 
 ### 1. Kernel bring-up: i915 on LinuxKPI
@@ -255,6 +324,7 @@ Under modern macOS security the plugin and kexts must be loaded and trusted expl
 
 ---
 
+<a name="blocker"></a>
 ## 🐞 The current blocker, stated precisely
 
 This is the most important section in the document. On the physical desktop path, the failure is an
@@ -313,6 +383,32 @@ the hang.
 
 ---
 
+<a name="failures"></a>
+## 🧨 Failure signature reference
+
+When this port fails, it fails with a small set of recognisable log lines. This table maps each one to
+what it actually means and what to do next — so the next person does not have to rediscover the sequence.
+
+| Log signature | Meaning | Next action |
+|---|---|---|
+| `Prelinked injection … - Success` is **absent**; `EFI_INVALID_PARAMETER` | The kext has no `_kmod_info`; OpenCore silently skipped it | Rebuild with `KMOD_EXPLICIT_DECL`; run the `check-kmod-info` guard |
+| `EB.LD.OFS\|OPEN! Err(0xE) <usr\standalone\OS.dmg.root_hash>` → `EXITBS:START` | The boot image lacks the root-hash file — not an EFI fault | Use a full installer image, not a trimmed `BaseSystem.dmg` |
+| `GPU HANG 12:1:00dfffff` / `12:1:00b79797` | The GPU stopped progressing; the address identifies the hang, not its cause | Capture request and GuC state; do not raise the fence timeout |
+| `VK_TIMEOUT` after 5000 ms | A fence never completed | Find the first *uncompleted* submission, not the first timeout |
+| `VkResult -1000072003` | `VK_ERROR_INVALID_EXTERNAL_HANDLE` — IOSurface import was refused | Check whether the private-image fallback also completes |
+| `pipeline: Vulkan is not up in this process` | WindowServer aborted after the backend shut down | Treat as aftermath; look earlier in the log |
+| `GPUWranglerWaitForPublish` | No GPU was ever published | Check `kextstat`, then the AuxKC bundle paths |
+| `GuC TLB invalidation response timeout` | The waiter did not observe the response | Check the LinuxKPI woken path; see the lost-wake fix |
+| `EXC_BAD_ACCESS` in the stack guard, hundreds of `RenderEncoder` frames | Recursive SkyLight rendering after command-buffer failure | Bound the error path; do not recurse |
+| `Failed to create MTLTexture` (BGRA8Unorm 1920×1080, managed) | CoreDisplay allocation after GPU loss | Restore GPU execution; do not fabricate textures |
+
+**Reading rules.** The first error in the log is usually the cause; later ones are usually consequences.
+A timeout is a symptom of missing progress, not proof of a defective submission. A zeroed register dump
+is not evidence of an idle GPU unless the capture path was verified to print it.
+
+---
+
+<a name="history"></a>
 ## 🧗 How we got here — the struggles and the breakthroughs
 
 None of the above arrived in a straight line. Four separate things had to be fixed before a single
@@ -595,6 +691,7 @@ one that fails loudly. Rollback tests must assert *where* files came from, not j
 
 ---
 
+<a name="validation"></a>
 ## ✅ Validation methodology
 
 The project uses a 22-case hardware gate that runs **before** any desktop boot is armed. What it does
@@ -623,6 +720,43 @@ presented as hardware results. Mocked allocation/reclamation counts are labelled
 
 ---
 
+<a name="diagnostics"></a>
+## 🔎 Diagnostics cheat-sheet
+
+The commands used to gather every report in `research/`. Run them **before** rebooting or reinstalling:
+a failed boot's unified log is often gone after the next restart.
+
+```bash
+# Is the GPU visible to IOKit?
+ioreg -l -p IOService | grep -i -E "7d45|NMXGPU"
+
+# Did the kexts actually load (not just install)?
+kextstat | grep -i -E "nmxgpu|nmxaccel"
+
+# GPU and display state
+system_profiler SPDisplaysDataType
+
+# Our driver's messages, last 10 minutes
+log show --last 10m --predicate 'eventMessage CONTAINS "NMXGPU"'
+log show --last 10m --predicate 'eventMessage CONTAINS "CoreUltraGraphics"'
+
+# Kernel GPU events
+log show --last 10m --predicate 'eventMessage CONTAINS "GPU HANG" OR eventMessage CONTAINS "TLB"'
+
+# Newest WindowServer crash report
+ls -t ~/Library/Logs/DiagnosticReports/WindowServer*.ips | head -1
+
+# Full failure bundle, before any reinstall
+# (pass the failed boot's start and end time)
+./research/collect-desktop-failure.sh '2026-10-19 12:50:00' '2026-10-19 13:00:00'
+```
+
+The rule is **collect first, reboot second, reinstall last**. Installing a new candidate over a failed
+boot destroys the evidence that candidate failed.
+
+---
+
+<a name="workspace"></a>
 ## 📂 Workspace layout
 
 ```text
@@ -669,6 +803,7 @@ iGPU Port/
 
 ---
 
+<a name="build"></a>
 ## 🛠️ Building and testing
 
 1. **Build prerequisites** — Xcode command line tools, `meson`/`ninja` for Mesa and libdrm, the Apple
@@ -687,6 +822,7 @@ Never bypass a failed kernel-collection validation. Bring the report back instea
 
 ---
 
+<a name="roadmap"></a>
 ## 🗺️ Roadmap
 
 `ROADMAP.md` is authoritative and dated. The following is a summary of its structure, not a substitute.
@@ -715,6 +851,7 @@ future-proof claim is made for any of them.
 
 ---
 
+<a name="licensing"></a>
 ## ⚖️ Attribution and licensing
 
 This project is a **retargeting**, not original work. It stands on:
@@ -752,6 +889,7 @@ and each upstream tree's own `LICENSE`/`COPYING`), and must remain in place.
 
 ---
 
+<a name="principles"></a>
 ## 🧾 Design principles
 
 These rules are enforced by convention across the tree, and they are why the evidence in `research/`
@@ -772,6 +910,30 @@ can be trusted:
 
 ---
 
+<a name="glossary"></a>
+## 📖 Glossary
+
+| Term | Meaning |
+|---|---|
+| **AIR** | Apple Intermediate Representation — Metal's shader IR, the input to the translator |
+| **ANV** | Mesa's Intel Vulkan driver |
+| **AuxKC** | Auxiliary Kernel Collection — where third-party kexts are staged on modern macOS |
+| **CCS / `noccs`** | Colour Compression; `noccs` disables it as an isolation experiment |
+| **CLC** | Mesa's OpenCL C compiler, used here to build shader tooling for the host |
+| **DSM / GSM / GGTT** | Device physical / graphics-memory-relative / graphics-translation-table address spaces |
+| **GEM / TTM** | DRM graphics-execution memory management, and its translation-table manager |
+| **GuC / HuC / DMC / GSC** | Intel GPU microcontroller and firmware: scheduling, media, display, security |
+| **LRC** | Logical Ring Context — per-context GPU register state |
+| **LinuxKPI** | FreeBSD's Linux kernel API shim, used here to compile i915 on xnu |
+| **MATs** | Memory Attributes Tables — firmware memory-map support that selects booter quirks |
+| **PSO** | Pipeline State Object |
+| **SIP** | System Integrity Protection |
+| **SPIR-V** | Vulkan's shader IR |
+| **Xe-LPG** | The GPU generation in Meteor Lake, distinct from Xe2 (Lunar Lake) and Xe3 (Panther Lake) |
+
+---
+
+<a name="consensus"></a>
 ## 📈 Where this breaks with consensus
 
 The common claim is that modular Intel Core Ultra parts are a dead end for modern macOS graphics. On
