@@ -1,6 +1,6 @@
 # Meteor Lake Xe-LPG Hardware Acceleration for macOS
 
-![License](https://img.shields.io/badge/License-per--component_(see_below)-lightgrey.svg)
+![License](https://img.shields.io/badge/License-Custom_(Apache--2.0_original_work)-lightgrey.svg)
 ![Platform](https://img.shields.io/badge/Platform-macOS_15_Sequoia-blue)
 ![Hardware](https://img.shields.io/badge/Hardware-Intel_Core_Ultra_5_135U-orange)
 ![Graphics](https://img.shields.io/badge/Graphics-Xe--LPG%20%2F%208086%3A7D45-red)
@@ -58,7 +58,7 @@ two different milestones; this project has finished the first and is attacking t
 | Panel scanout with correct pixels | Framebuffer loads and describes 1920×1080, reaches fixed scanout; presentation samples remain zero | **Partial / unverified** |
 | Sleep-wake, brightness, external displays, video decode, long soak | No passing evidence | **Unverified** |
 
-Every row below is traceable to a dated report under `research/`. The point of the table is to keep the
+Every row above is traceable to a dated report under `research/`. The point of the table is to keep the
 **working** Metal/Vulkan stack clearly separated from the **unfinished** desktop composition.
 
 ---
@@ -305,6 +305,288 @@ the hang.
 
 ---
 
+## 🧗 How we got here — the struggles and the breakthroughs
+
+None of the above arrived in a straight line. Four separate things had to be fixed before a single
+pixel could be validated, and three of them failed silently — which is why they cost the most time.
+This section records the dead ends as carefully as the wins, because the dead ends are what constrain
+the next experiment.
+
+### Timeline of the hard parts
+
+| Date | Struggle | What actually fixed it |
+|---|---|---|
+| 8 Oct | Kext would not inject into the prelinked kernel; OpenCore reported nothing useful | Supplying a real `_kmod_info` via `KMOD_EXPLICIT_DECL` |
+| 8 Oct | macOS froze at `EXITBS:START` on every EFI change | The recovery image was missing `OS.dmg.root_hash`; not an EFI fault |
+| 8 Oct | WhateverGreen assumed to be the Alder/Meteor Lake answer | It does not support either family; abandoned |
+| 18 Oct | `MyIntelGPU` kext failed authentication on the target | Rebuilt as an i915-derived `NMXGPU` under a custom SIP mask |
+| 18 Oct | First desktop attempts died after 4 submissions | Readback fence timeout identified as the first failure |
+| 18 Oct | GuC TLB timeout, then hang on the fifth process | Lost-wake race in LinuxKPI reproduced and fixed (software only) |
+| 18 Oct | Fresh pools did not stop the hang | Accepted as a lesson: fresh allocation was necessary, not sufficient |
+| 19 Oct | A/B tests were measuring nothing | Release constructor was stripping every `NVMTL_*` variable |
+| 19 Oct | WindowServer stack exhaustion after backend loss | Terminal-error buffers bounded the recursion |
+| 19 Oct | A black-screen boot left no evidence at all | Bounded the desktop mutex and added a pre-created journal |
+| 19 Oct | Journal writes silently denied | Moved stage records to the existing syslog channel |
+| 19 Oct | Submissions past #8 invisible in logs | Per-format throttle bypassed for startup submissions |
+| 19 Oct | Crash sampler "succeeded" with no stack | Fixed PID resolution; missing output now fails loudly |
+| 19 Oct | Kernel capture showed zeros for ring state | GuC's parsed register lists were never being printed |
+| 19 Oct | Driver installed but never loaded | AuxKC referenced a deleted temporary bundle; installer rebuilt from permanent paths |
+
+---
+
+### Phase 0 — "Why will this kext not inject?" (8 October)
+
+The first blocker looked like a driver bug. It was a metadata bug.
+
+OpenCore was silently discarding the kext. The chain was:
+
+```
+KextFindKmodAddress      → Kmod = 0
+InternalPrelinkKext      → EFI_UNSUPPORTED          (Link.c:1629)
+PrelinkedInjectKext      → EFI_INVALID_PARAMETER    (reported quietly)
+```
+
+The binary had **no `_kmod_info` symbol**, so OpenCore had nothing to link the kext against.
+
+What we eliminated, and why it mattered:
+
+* **Xcode 15.4's SDK contains no `kmod_info*` and no `CreateKModInfo*`.** CI diagnostics
+  (`37789629143`, `37789952837`) confirmed this across the SDK.
+* **MacKernelSDK does not define `_kmod_info` either.** Pinned and inspected at
+  `3f750085caa17ec3a7880f11c11bf4f48cd6a164`; no archive exports it. It was therefore *not* vendored.
+* **Eight different link-flag arrangements all failed.** The symbol was simply absent.
+* **A dummy `_kmod_info` was rejected on principle.** Satisfying a guard with a fake structure would
+  have produced a kext that linked and then misbehaved.
+
+The breakthrough was reading `libkern/kmod/README` instead of guessing: the object emitted by XNU's
+`CreateKModInfo.perl` must be compiled and placed **between `-lkmodc++` and `-lkmod`**. That became
+`kmod_info.c` using `KMOD_EXPLICIT_DECL`, with a `check-kmod-info` build guard
+(`OK (_kmod_info present)`) so the failure could never silently return.
+
+Result, for the first time:
+
+```
+OC: Prelinked injection CoreUltraGraphics.kext (…) - Success
+OCAK: Local relocs 313
+```
+
+**Lesson:** a build that produces a `.kext` is not a build that can be injected. The guard now fails
+the build, not the boot.
+
+### Phase 0b — "Why does macOS freeze at EXITBS:START?" (8 October)
+
+With injection fixed, boot still stopped dead:
+
+```
+AAPL: #[EB.LD.OFS|OPEN!] Err(0xE) <"usr\standalone\OS.dmg.root_hash">
+AAPL: #[EB.RH.LRH|P!] Err(0xE) <- EB.LD.LF
+AAPL: #[EB.BST.FBS|!] Err(0xE) <- EB.RH.LRH
+AAPL: #[EB|LOG:EXITBS:START]
+```
+
+`Err(0xE)` is `STATUS_NOT_FOUND`. Apple's `boot.efi` wanted a root-hash file that was **not inside the
+recovery image at all** — confirmed by listing `BaseSystem.dmg` directly: zero matches for `root_hash`.
+
+Three controlled experiments proved this was not our configuration:
+
+* **ACPI** — bisected from 8 SSDTs to 2, both rename patches off, kext off. Byte-identical failure.
+* **SIP** — set `csr-active-config = 0x7F000000`; the log confirms `EB.CSR.S 0x7F` and
+  `EB|CSR:OUT 0x6F`. Identical failure.
+* **Quirks** — verified against the MATs guidance (`OCABC: MAT support is 1`) and against a known-good
+  Latitude 7400 EFI. Ours already matched.
+
+The image was the problem, not the EFI. `DmgLoading = Any` would not help either: that setting *relaxes*
+verification, and the file genuinely did not exist. No config change can conjure it.
+
+**Lesson:** "invariant across every config change" is evidence about the *image*, not the config.
+Chasing `SetupVirtualMap`, `DevirtualiseMmio` and `DmgLoading` was time spent on the wrong layer.
+
+### Phase 1 — The pivot to NullMoth (18 October)
+
+WhateverGreen was the obvious candidate and was ruled out from its own documentation: the last
+documented Intel family is Ice Lake, and it supports neither Alder Lake nor Meteor Lake
+([FAQ.IntelHD.en.md](https://github.com/acidanthera/WhateverGreen/blob/master/Manual/FAQ.IntelHD.en.md),
+[README](https://github.com/acidanthera/WhateverGreen/blob/master/README.md)).
+
+Rather than write a graphics driver from scratch, the project retargeted **NullMoth's NVIDIA driver**,
+keeping its Metal plugin, shader translator and userspace architecture and replacing every NVIDIA
+element with an Intel one. That decision is why the project reached real GPU submissions at all.
+
+The first target attempt, `MyIntelGPU`, failed **authentication** on the laptop — a signature problem,
+not a Meteor Lake problem. Rebuilding as an i915-derived kext under a custom SIP mask turned that into
+an attach.
+
+### Phase 2 — Assembling a stack that had never run (18 October)
+
+This phase was mostly unglamorous construction, and every number here was hard-won:
+
+* **438** i915, DRM/TTM, LinuxKPI, compatibility and IOKit sources compiled into `NMXGPU`, with AMD and
+  Xe drivers deliberately excluded and **no unresolved driver-internal symbols**.
+* **1,045** ANV build steps for the Intel Vulkan backend, plus CLC tools built separately for the Apple
+  Silicon host.
+* Firmware matched to the laptop's own Linux report rather than guessed: GuC **70.53.0**, DMC **2.23**,
+  HuC **8.5.4**, GSC **102.1.15.1926**.
+* A one-shot NVRAM opt-in so a failed attach cannot silently re-arm on every boot.
+
+The PCI probe then succeeded on the real `8086:7D45`, and `NMXAccel` began declining startup unless
+`NMXGPU` had actually claimed the device — a guard that later proved its worth.
+
+### Phase 3 — First submissions, first hang (18 October, 19:12–19:49)
+
+Registration worked. Composition did not.
+
+**0.2.4** reached the panel and copied an IOSurface into it — but all 64 diagnostic samples were zero,
+and host allocation imports returned `-1000072003` (`VK_ERROR_INVALID_EXTERNAL_HANDLE`), falling back to
+private images. Fence waits then returned `VK_TIMEOUT` after 5000 ms. WindowServer died with
+`EXC_BAD_ACCESS / KERN_PROTECTION_FAILURE` **inside the main thread's stack guard**, after 512 frames
+containing 255 `RenderEncoder` and 254 `SetScissor` calls. That was **stack exhaustion through
+recursive SkyLight rendering after command-buffer failure**, not a standalone logging bug. GPU HANG
+`12:1:00dfffff` followed at 19:13:06.637.
+
+**0.2.5** narrowed it. The first four submissions returned `VK_SUCCESS`; **submission #5**
+(`nvmtl_vk_image_read`) and the concurrent upload **#6** both timed out. `INTEL_DEBUG=stall` was
+confirmed *enabled* on the failing boot — so it is a recorded **negative result**, not a missed setting.
+Terminal-error command buffers bounded the recursion (retries spaced ~16 ms instead of tens of
+thousands of calls), but WindowServer still aborted with `pipeline: Vulkan is not up in this process`.
+
+The kernel's captured `reset_count=0`, `EIR/PGTBL_ER/fault_data=0` and zeroed ring fields looked
+reassuring. They were not evidence of anything: the capture was incomplete.
+
+**Lesson:** "the first four submissions succeed" is not progress if the fifth is where it dies. The
+first *uncompleted* submission is the measurement.
+
+### Phase 4 — The GuC lost-wake race (18 October, 23:54)
+
+**0.3.0** introduced fresh command pools. It passed four 1000-frame cases cleanly, then:
+
+```
+23:54:50.264  GuC TLB invalidation response timeout, seqno 1
+              (after the padded process finished, before the next connected)
+fifth case     hang on upload submission #1285, zero-based frame 428
+              fence returned -4 after 10,798 ms
+kernel         rcs0 request 12:2574 not yet started, GPU HANG 12:1:00b79797
+pools          1286 created / 1285 destroyed / 1 quarantined
+```
+
+The hang was real, and fresh pools were **not** the fix. But the TLB timeout pointed at the waiter, and
+that produced the most valuable software find of the project.
+
+Linux's i915 invalidation waiter sets `WQ_FLAG_WOKEN` and sleeps. Linux's woken callback *also*
+persists `TASK_WAKING`. The FreeBSD LinuxKPI callback in this port marked the flag and signalled the
+channel but **did not persist `TASK_WAKING`**. `schedule_timeout` checks `TASK_WAKING` under that
+channel lock before registering sleep — so a reply arriving between the outer flag check and
+registration could signal an **empty channel**, leaving the waiter to sleep to expiry with the flag
+already set.
+
+The fix sets `TASK_WAKING` under the same lock, following the port's existing `wake_up_task` protocol.
+The real old and patched callbacks, the real `schedule_timeout` and the real i915 `must_wait_woken` were
+extracted into a deterministic fixture: the old version **reproduces the false expiry**, the patched one
+preserves positive remaining time, across **100,000 scenarios** under ASan/UBSan.
+
+It is a verified software fix. It is **not** a claim to have cured the Dell hang, and the report says so.
+
+### Phase 5 — The gate that finally meant something (19 October)
+
+Two more failures had to be fixed before a pass was trustworthy:
+
+**The tests were measuring nothing (0.2.8).** `nvmtl_conf_knobs()`'s release constructor stripped
+**every** `NVMTL_*` environment variable before backend initialisation. Fresh-pool, diagnostics,
+readback-trace and staging settings were all inert. The shell's record of requested settings was not
+evidence of *effective* settings, and every earlier release-environment A/B conclusion had to be
+withdrawn. **0.2.9** preserved six exact controls only for the named test process and added an
+in-driver **effective-policy query**; the workload now refuses to start on any mismatch.
+
+**The collectors were selecting the wrong evidence (0.3.0).** One report required `results.txt`, so an
+early preflight exit silently selected an older report whose frame-101 device loss belonged to a
+different candidate. Another had hard-coded timestamps and attributed an unrelated historical hang.
+Selection was rewritten to take the newest report even without results, record the boot time, and
+preserve preflight metadata.
+
+Only then did the gate mean what it claimed:
+
+```
+22 cases           11 IOKit + 11 direct
+26,000 frames      1000 iterations per case
+80,020 pools       created = destroyed = completed + abandoned
+0                  live / pending / quarantined
+```
+
+That is the baseline that still stands, and it is why "Metal and Vulkan work" is a measured statement
+rather than an inference.
+
+### Phase 6 — WindowServer, one variable at a time (19 October, 12:00–13:37)
+
+Every desktop candidate failed, and each failure narrowed the search:
+
+| Candidate | Struggle | What it proved |
+|---|---|---|
+| 0.3.2 | Black screen, **no retained evidence** — only a live-log header and an empty registry | An unbounded `pthread_mutex_lock` preceded the GPU wait budget |
+| 0.3.3 | 8 submissions, 3 readbacks, then readback #4 timed out; GPU HANG `12:1:00dfffff` | Bounded `trylock` + deadline; the hang is not host-lock contention |
+| 0.3.4 | First 7 submissions, then **submission #8** (third readback) timed out with dedicated fresh staging | Staging reuse is **not required** to trigger the hang |
+| 0.3.5 | Driver installed but never loaded | AuxKC referenced a deleted temporary bundle |
+
+Three diagnostic defects had to be repaired before the failures could even be read:
+
+* **Sandboxed journal writes were denied** (`errno 1`) even with correct ownership. Stage records moved
+  to the existing syslog channel; no sandbox or SIP change was needed.
+* **A per-format eight-message throttle hid submissions past #8**, despite the caller's finite budget.
+  Startup submissions now bypass it.
+* **`sample` returned 0 while reporting `pid_for_task` failure and process 0**, producing no stack. The
+  loader now resolves an explicit positive PID, refuses 0/1, and records missing output as a failure.
+
+And the kernel capture itself was lying by omission:
+
+```
+intel_engine_coredump_alloc  → legacy register capture only when GUC_CAPTURE is absent
+GuC captures                 → attach a parsed register-list node instead
+previous summary             → printed legacy engine->head/tail/start/acthd, all zeros
+```
+
+Those zeros did **not** prove an idle ring, physical address 0, or the absence of a fault. Kernel 1.0.9
+records the owned request's fence context/sequence/flags/error, readiness and completion states,
+pending dependencies, GuC ID and scheduling snapshot, LRC address, and ring/batch GPU virtual
+addresses, plus a bounded parsed-GuC printer (3 lists, 64 registers per list/engine). It changes
+**diagnostics only** — not scheduling, reset policy or timeouts.
+
+The 13:36 boot added one more lesson, and it was self-inflicted: the installer built a preflight AuxKC
+from a temporary source path, installed that collection, then deleted the source. The kernel manager
+then reported a missing bundle at `.latitude-windowserver.xux6gR/NMXGPU.kext`, `NMXGPU` never loaded,
+and WindowServer waited in `GPUWranglerWaitForPublish` for a GPU that was never published. Local mocked
+cache tests had checked file contents and rollback but **not recorded source paths**. The installer now
+builds the final AuxKC from the permanent installed path, inspects prelink metadata for that path,
+refuses the temporary one, and verifies the candidate UUID.
+
+**Lesson:** an installer that can produce a silent "driver installed but not loaded" state is worse than
+one that fails loudly. Rollback tests must assert *where* files came from, not just that they exist.
+
+### The failures we still cannot explain, and say so
+
+* The **exact root cause** of the WindowServer hang is not established.
+* `Readback #3` succeeds and `#5` fails on the same boot; the trace does **not** prove they share an
+  image, so "reuse while pending" remains unproven.
+* The not-started request `8:24 [0x1002]` may simply be blocked behind earlier work; it is not proof
+  that its own copy instruction is defective.
+* IOSurface import refusal (`-1000072003`) cannot alone explain the stall, because the fallback's first
+  upload and readback both completed.
+* Later CoreDisplay/CoreAnimation exceptions are **aftermath**, not cause. Faking pipeline success or
+  manufacturing textures would hide the failure.
+
+### What the struggles taught us
+
+1. **Silent failures are the expensive ones.** Missing `_kmod_info`, a stripped environment, a filtered
+   log line, a sampler that "succeeds" with no output, an AuxKC pointing at a deleted directory — every
+   one of these produced a *plausible-looking* result that was wrong.
+2. **Verify the measurement before trusting the conclusion.** Four separate times, the instrument was
+   broken (stripped env, report selection, log throttle, kernel capture zeros).
+3. **"Invariant across changes" is a clue about the layer.** When nothing you change matters, you are
+   changing the wrong layer — the image, not the EFI.
+4. **Fix one variable, and keep the negative result.** `INTEL_DEBUG=stall` did not work; that is now
+   knowledge, not a retry candidate.
+5. **A verified software fix is not a hardware fix.** The lost-wake race is real, reproduced and fixed.
+   It still does not explain the desktop hang, and the documentation refuses to conflate them.
+
+---
+
 ## ✅ Validation methodology
 
 The project uses a 22-case hardware gate that runs **before** any desktop boot is armed. What it does
@@ -447,11 +729,18 @@ This project is a **retargeting**, not original work. It stands on:
 * AMFIPass 1.4.1, Lilu and VirtualSMC — by their respective authors, under their own terms. No licence
   text ships inside `AMFIPass/AMFIPass.kext` in this tree; confirm it upstream before redistribution.
 
-**The top-level licence of this repository must be reconciled with the components above before any
-distribution.** The per-component licences are preserved in-tree (`latitude-desktop/licenses/`,
-`latitude-runtime/licenses/`, and each upstream tree's own `LICENSE`/`COPYING`). Do not relicense or
-redistribute this tree until that reconciliation is complete, and note that the PolyForm Noncommercial
-terms inherited from NullMoth restrict commercial use independently of Apache-2.0.
+**Original work** (VedCloud code, scripts, patches, tests and documentation) is licensed under the
+**[Meteor Lake Xe-LPG Metal Graphics License](LICENSE)**, whose grant is substantively equivalent to
+Apache-2.0 and which is additionally available under Apache-2.0. **Third-party components are not
+licensed by it** and remain under their own terms, enumerated in Schedule A of `LICENSE`.
+
+Because the tree combines **GPL-2.0-only** code (e.g. `drm-kmod/drivers/gpu/drm/drm_gpuvm.c`,
+`dma-buf/sync_file.c`) with **GPL-3.0** code (the translator) and with **PolyForm Noncommercial** code
+(NullMoth), no single license covers the combined work: GPL-2.0-only and GPL-3.0 are mutually
+incompatible, and PolyForm NC is incompatible with both the GPL and permissive relicensing. Those
+incompatibilities are inherent to the upstreams and are not resolved by the project license. The
+per-component licences are preserved in-tree (`latitude-desktop/licenses/`, `latitude-runtime/licenses/`,
+and each upstream tree's own `LICENSE`/`COPYING`), and must remain in place.
 
 ---
 
