@@ -40,13 +40,17 @@ kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAcc
 - [Failure signatures](#failures)
 - [Struggles and breakthroughs](#history)
 - [Validation methodology](#validation)
+- [Reproduce the claims](#reproduce)
 - [Diagnostics cheat-sheet](#diagnostics)
 - [Workspace layout](#workspace)
 - [Building and testing](#build)
 - [Roadmap](#roadmap)
+- [Version history](#versions)
 - [Attribution and licensing](#licensing)
 - [Design principles](#principles)
+- [Design decisions](#adr)
 - [Glossary](#glossary)
+- [FAQ](#faq)
 - [Where this breaks with consensus](#consensus)
 
 <a name="works"></a>
@@ -720,6 +724,73 @@ presented as hardware results. Mocked allocation/reclamation counts are labelled
 
 ---
 
+<a name="reproduce"></a>
+## 🧪 Reproduce the claims
+
+Every figure in this document comes from a dated run on the physical Dell, not from a private harness.
+The scripts and the report format live in the tree, so the claims can be re-run and re-checked. All steps
+assume the **Dell Latitude 5350** (`8086:7D45`) with the runtime installed on x86_64 macOS.
+
+### 1. Confirm you are running the recorded configuration
+
+```bash
+cd latitude-runtime
+shasum -a 256 -c SHA256SUMS.txt        # shipped binaries match the manifest
+cat BUILD-MANIFEST.json                # base revisions for every patched upstream
+sw_vers; sysctl -n machdep.cpu.brand_string
+```
+
+If the hashes do not verify, stop: you are not measuring the recorded configuration.
+
+### 2. Reproduce the two smallest results (GPU work, no desktop)
+
+```bash
+./latitude-runtime/tools/latitude-vulkan-test ./latitude-runtime/tools/check.spv
+./latitude-runtime/tools/latitude-metal-test
+```
+
+Expected output:
+
+* Vulkan prints a device line for `8086:7d45` and
+  `PASS Vulkan hardware execution: real 8086:7d45, 65536 verified values, seed=…`
+* Metal prints `PASS render: 4096 pixels checked after shader execution`
+
+These are the 65,536-value and 4,096-pixel claims, in isolation.
+
+### 3. Reproduce the 22-case gate (26,000 frames)
+
+```bash
+sudo /bin/bash latitude-desktop/test-readback.sh 1000 full
+```
+
+This runs 11 IOKit + 11 direct cases at 1,000 iterations each and writes
+`latitude-desktop/reports/readback-<timestamp>/`. It does **not** arm a desktop boot; the
+`test-and-arm-desktop.sh` wrapper is what arms one after the gate passes.
+
+Then check the report directory:
+
+```bash
+grep -c ' exit=0$' results.txt        # expect 22 passing cases
+cat hang-check.txt                    # expect empty: no timestamped hang/TLB/reset/fault events
+cat desktop-gate.txt                  # candidate, case/iteration counts, boot UUID, binary hashes
+```
+
+The recorded run behind the numbers above is `readback-20261019-114424` (on the USB installer this is
+`Desktop/reports/readback-20261019-114424`), written up in
+`research/verified-0.3.1-full-gate-20261019.md`: 22 cases, 26,000 frames, **80,020 pools created /
+80,020 destroyed**, zero live, pending or quarantined.
+
+### 4. What a reproduction does and does not mean
+
+* A pass reproduces the **application matrix** for the installed candidate. It does not reproduce the
+  WindowServer result, which fails.
+* The gate checks that the loaded kernel, plugin and libdrm hashes match the package and that the boot UUID
+  is current. A pass with different binaries is a different result, not a reproduction.
+* Local unit tests (ASan/UBSan, mocked Vulkan, installer rollback fixtures) validate code paths only and
+  are never hardware evidence.
+
+---
+
 <a name="diagnostics"></a>
 ## 🔎 Diagnostics cheat-sheet
 
@@ -851,6 +922,29 @@ future-proof claim is made for any of them.
 
 ---
 
+<a name="versions"></a>
+## 🕓 Version history (0.2.4 → 0.3.5)
+
+Each candidate changed as few things as possible, and each failure narrowed the next step. The one-line
+"what changed" and "what happened" is the honest spine of the project. All dates are October 2026.
+
+| Version | What changed | What happened |
+|---|---|---|
+| 0.2.4 | First desktop path: panel claim, pipe 0 registration, IOSurface-to-panel copy | Registration confirmed; **all 64 diagnostic samples zero**, IOSurface import `-1000072003`, fence `VK_TIMEOUT` at 5000 ms, WindowServer stack exhaustion, `GPU HANG 12:1:00dfffff` |
+| 0.2.5 | Bounded terminal-error buffers so backend loss cannot recurse | Submissions 1–4 complete; **readback #5 and upload #6 time out**; `INTEL_DEBUG=stall` confirmed enabled and ineffective (recorded negative) |
+| 0.2.6 | Readback correctness patch and isolated per-case matrix | 10 direct cases pass (1,200 frames); forced IOKit fails during enumeration before any ioctl |
+| 0.2.7 | Forced-route enumeration + token classification fix, discovery fallback, prior-access sync, release trace filter | Recovered evidence: `VK_ERROR_DEVICE_LOST` after 13,072 ms and `GPU HANG 12:1:00b79797` |
+| 0.2.8 | Diagnostic comparison plus a command-pool-only fresh-allocation switch | **Invalid as a test** — the release constructor stripped every `NVMTL_*` variable; hang at frame 169 |
+| 0.2.9 | Preserve explicit controls for the test process, in-driver effective-policy query, refuse on mismatch | Restores trustworthy A/B measurement; desktop activation still disabled |
+| 0.3.0 | Fresh command pools everywhere, immediate destroy, quarantine on uncertain completion | 4,000 frames pass, then a **GuC TLB-invalidation timeout and a hang on the fifth process** (upload #1285, frame 428); 1286 created / 1285 destroyed / 1 quarantined |
+| 0.3.1 | LinuxKPI lost-wake fix (`TASK_WAKING` under the sleep-channel lock) in kernel 1.0.8 | 100,000 ASan/UBSan scenarios reproduce-then-fix the race; **full 22-case / 26,000-frame / 80,020-pool gate passes** — the standing baseline |
+| 0.3.2 | WindowServer-only serialization: no submit-ahead, defer IOSurface-writer scheduling | Black screen with **no retained evidence**; an unbounded `pthread_mutex_lock` ran before the GPU wait |
+| 0.3.3 | Bounded `trylock` + deadline, pre-created startup journal, early loader capture, sampler fix | 8 submissions / 3 readbacks, then **readback #4 times out**; `GPU HANG 12:1:00dfffff` |
+| 0.3.4 | Dedicated fresh staging scoped to this `8086:7d45` WindowServer; journal, log-throttle and sampler fixes | Submissions 1–7 pass, **submission #8** (third readback) times out — staging reuse is not required to trigger the hang |
+| 0.3.5 | `noccs` compression isolation scoped to WindowServer/device; diagnostic kernel 1.0.9 (parsed GuC registers + request state) | AuxKC pointed at a deleted temporary bundle; the installer was rebuilt from permanent paths. **Desktop result still unverified** |
+
+---
+
 <a name="licensing"></a>
 ## ⚖️ Attribution and licensing
 
@@ -910,6 +1004,30 @@ can be trusted:
 
 ---
 
+<a name="adr"></a>
+## 🧮 Design decisions
+
+The choices that shaped the port, and the alternatives that were rejected. These are the reasons the
+evidence in `research/` looks the way it does.
+
+| # | Decision | Alternative rejected | Why |
+|---|---|---|---|
+| 1 | Retarget NullMoth's driver skeleton | Write a Metal driver from scratch; use WhateverGreen | The Metal plugin, AIR→SPIR-V translator and LinuxKPI-on-xnu base already existed; WhateverGreen documents Ice Lake as its newest Intel family and supports neither Alder nor Meteor Lake |
+| 2 | Base the kernel driver on `i915` | The `xe` driver | The laptop's own Linux reference and the available xnu DRM/LinuxKPI port are i915-based; a second driver model would be a separate project |
+| 3 | Vulkan backend = ANV | NVK; software fallback | Xe-LPG is Intel silicon, and ANV is the mature Intel Vulkan backend in Mesa |
+| 4 | Keep the AIR→SPIR-V translator | Rewrite the Metal frontend | Metal hands the plugin AIR, so lowering to SPIR-V is the shortest path to ANV |
+| 5 | One-shot NVRAM opt-in for GPU activation | Always-on kext | A failed attach must not silently re-arm on every boot |
+| 6 | Fresh command pools, destroyed immediately | Cache / pop / push pool reuse | Reuse was a variable in the hang; removing it was necessary, though not sufficient |
+| 7 | Quarantine uncertain completions | Reuse resources after a timeout | Reusing work whose fence was never observed risks corrupting later submissions |
+| 8 | Bounded `trylock` + deadline on the desktop submission lock | Blocking `pthread_mutex_lock` | The 0.3.2 black screen showed an unbounded lock running before the GPU wait budget |
+| 9 | Scope dedicated staging to this WindowServer/device | Change staging globally | Isolates one variable without perturbing the passing application matrix |
+| 10 | Scope `noccs` compression isolation likewise | Disable compression everywhere | Tests compression as a variable while leaving application behaviour unchanged |
+| 11 | Kernel 1.0.9 changes diagnostics only | Change scheduling, reset policy or timeouts | No evidence supports a scheduling fix; capture the missing request/GuC state first |
+| 12 | Never reboot automatically; collect before reinstall | Auto-retry the boot | The failed boot's unified log is the evidence; rebooting or reinstalling destroys it |
+| 13 | Treat application and desktop as separate milestones | Assume one pass means "working" | 26,000 passing application frames demonstrably do not predict WindowServer success |
+
+---
+
 <a name="glossary"></a>
 ## 📖 Glossary
 
@@ -930,6 +1048,66 @@ can be trusted:
 | **SIP** | System Integrity Protection |
 | **SPIR-V** | Vulkan's shader IR |
 | **Xe-LPG** | The GPU generation in Meteor Lake, distinct from Xe2 (Lunar Lake) and Xe3 (Panther Lake) |
+
+---
+
+<a name="faq"></a>
+## ❓ FAQ
+
+**Does this actually work?**
+For applications, yes: Metal and Vulkan run on the Xe-LPG iGPU and produce exact, verified output
+(65,536 Vulkan values, 4,096 Metal pixels, 26,000 frames across 22 cases). Your entire desktop, no:
+WindowServer composition still hangs. Those are two different milestones, and this project says so plainly.
+
+**Can I install it on my laptop?**
+Only if you have this exact configuration: Dell Latitude 5350, iGPU `8086:7D45`, macOS 15.8.1. A
+different device ID needs `IOPCIPrimaryMatch` changes and a fresh evidence run; nothing else is claimed.
+There is no generic installer.
+
+**Can I use it as a daily driver, for games or video editing?**
+No. Sustained stability, WindowServer composition, hardware video decode, sleep/wake, brightness and
+external displays are all unverified. The only validated workload is the application gate.
+
+**Is it safe to install?**
+No. The setup disables large parts of SIP and AMFI and loads unsigned kexts. A boot loop or a damaged
+kernel collection can make the machine unbootable. Keep a known-good EFI on a separate USB and a full
+backup off-device.
+
+**Why does the desktop fail if Metal works?**
+WindowServer is a different workload: concurrent surface import and readback, long-lived contexts, colour
+compression and panel scanout. The application gate does not exercise that path — and the project states
+explicitly that a passing application matrix does not predict desktop success.
+
+**Why not WhateverGreen?**
+Its own documentation lists Ice Lake as the newest supported Intel family; it supports neither Alder Lake
+nor Meteor Lake.
+
+**Why `i915` and not the `xe` driver?**
+Because the available xnu DRM/LinuxKPI port and the laptop's own Linux reference report are i915-based.
+That is a project constraint, not a claim that `xe` could not work.
+
+**Why NullMoth?**
+It already provides the three hard pieces this port needs — the Metal driver plugin, the AIR→SPIR-V
+translator and the LinuxKPI-on-xnu driver skeleton — so the work becomes retargeting rather than invention.
+
+**Is the GPU really doing the work, or is it a software fallback?**
+The probes read exact values and pixels back from device memory and verify the transport route, so the
+application results are real GPU execution. A *visible desktop* is a different matter: presenting the
+firmware framebuffer is not accelerated composition, and the project does not count it as success.
+
+**Can I contribute? What do you need?**
+The same hardware and reproducible evidence: the report directory, boot UUID, exact log lines and the gate
+output. "It works for me" without logs is not usable, and neither is a local build pass presented as a
+hardware result.
+
+**Why is the license custom, and can I use this commercially?**
+No — commercial use is not permitted for the combined tree, because the NullMoth components are PolyForm
+Noncommercial 1.0.0. The custom license covers only VedCloud original work; the GPL, LGPL, MIT and BSD
+components keep their own terms. See *Attribution and licensing*.
+
+**Will this support Lunar Lake or Panther Lake?**
+That is the separate `NullMoth-Xe` target. Xe2/Xe3 cache and firmware workarounds must not be applied to
+Meteor Lake.
 
 ---
 
