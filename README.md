@@ -1,18 +1,22 @@
 # Meteor Lake Xe-LPG Metal Graphics
 
-![License](https://shields.io)
-![Platform](https://shields.io)
-![Hardware](https://shields.io)
+![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)
+![Platform](https://img.shields.io/badge/Platform-macOS_Sequoia-blue)
+![Hardware](https://img.shields.io/badge/Hardware-Intel_Core_Ultra-orange)
+![Graphics](https://img.shields.io/badge/Graphics-Xe--LPG%207D45-red)
+![API](https://img.shields.io/badge/API-Metal%20%2F%20Vulkan-purple)
+![Language](https://img.shields.io/badge/Language-C%20%2F%20Obj--C-blueviolet)
+![Status](https://img.shields.io/badge/Status-Active%20Development-yellow)
 
-A low-level, bare-metal hardware-acceleration driver framework and programmatic translation matrix bringing native desktop compositing and hardware-accelerated Metal/Vulkan pipelines to the **Intel Core Ultra (Meteor Lake-P) Xe-LPG (7D45) graphics engine** under **macOS Sequoia**. 
+A low-level, bare-metal hardware-acceleration driver framework and programmatic translation matrix bringing native desktop compositing and hardware-accelerated Metal/Vulkan pipelines to the **Intel Core Ultra (Meteor Lake-P) Xe-LPG (7D45) graphics engine** under **macOS Sequoia**.
 
-This repository implements a kernel-space initialization layer and an out-of-tree user-space Metal driver plugin. By reconciling the architectural paradigms of modern tile-based x86 topologies with Apple's proprietary graphics frameworks, this project structurally disproves the global developer consensus that next-generation modular Intel processors are a definitive dead end on modern macOS platforms.
+This repository implements a specialized kernel-space initialization layer and an out-of-tree user-space Metal driver plugin. By reconciling the architectural paradigms of modern tile-based x86 topologies with Apple's proprietary graphics frameworks, this project structurally disproves the global developer consensus that next-generation modular Intel processors are a definitive dead end on modern macOS platforms.
 
 ---
 
-## 🔬 Deep-Dive Architectural Engineering Specifications
+## 🔬 Comprehensive Architectural Engineering Specifications
 
-The structural code-base is organized across five distinct, low-level execution layers designed to bypass kernel-level hardware lockouts, override silicon defense mechanisms, and establish bulletproof memory synchronization:
+The structural codebase is organized across five distinct, low-level execution layers designed to bypass kernel-level hardware lockouts, override silicon defense mechanisms, and establish bulletproof memory synchronization:
 
 ### 1. Asymmetric Topology Thread Scheduling & CPU Core Mapping
 Native macOS kernels lack the scheduling primitives required to decipher the multi-die chiplet layout of modern Intel Core Ultra processors. To avoid immediate kernel panics or forced core-disabling workarounds, this framework implements a custom CPU topology override layer. 
@@ -94,6 +98,3 @@ limitations under the License.
 The selection of the Apache 2.0 license provides this framework with critical legal protection that simpler licenses (such as MIT) entirely omit:
 1. **The Patent Shield Clause:** Automatically grants a comprehensive patent license to any user downloading the software. This license immediately and permanently terminates if any party attempts to launch patent litigation against the developers regarding this codebase, creating an ironclad defensive shield.
 2. **Trademark Preservation:** Expressly restricts downstream forks or modifications from using the `VedCloud` corporate name, identity, or branding materials to promote spin-off variants without explicit permission.
-3. **Modification Tracking Requirement:** Mandates that any modified versions of this codebase must carry clear, prominent notices declaring all changes made, ensuring total structural transparency for the open-source community.
-
----
