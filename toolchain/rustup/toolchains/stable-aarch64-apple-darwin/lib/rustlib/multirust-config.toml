@@ -1,0 +1,21 @@
+config_version = "1"
+
+[[components]]
+pkg = "cargo"
+target = "aarch64-apple-darwin"
+is_extension = false
+
+[[components]]
+pkg = "rust-std"
+target = "aarch64-apple-darwin"
+is_extension = false
+
+[[components]]
+pkg = "rust-std"
+target = "x86_64-apple-darwin"
+is_extension = false
+
+[[components]]
+pkg = "rustc"
+target = "aarch64-apple-darwin"
+is_extension = false
