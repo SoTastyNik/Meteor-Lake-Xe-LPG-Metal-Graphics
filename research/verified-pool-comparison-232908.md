@@ -1,0 +1,7 @@
+# Verified command-pool comparison, plugin 0.2.9
+
+Fresh command pools, report 20261018-232358: actual backend mask 0xf matches expected. All three 1000-frame warmups and 1000 padded full-HD frames pass. IOKit counters show no direct calls. Live/history kernel capture contains no GPU hang/reset. Retained staging, completion witnesses and address-page caching stayed enabled.
+
+Retained pools, report 20261018-232908 on a different boot UUID: actual mask 0xd matches expected. Same three warmups pass. Padded case fails at zero-based frame 101. Upload submission #304 completes; render/event submission #305 is accepted, then its fence returns VK_ERROR_DEVICE_LOST after 14,290 ms. The previous readback #101 / submission #303 completed. The failing frame never reaches its own readback. Kernel reports rcs0 request 11:614 [0x1002] not yet started and GPU HANG 12:1:00b79797, IPEHR ff686868 / INSTDONE ffdfffff.
+
+These verified-policy clean-boot results implicate command-pool reuse or associated allocation/timing behavior. They do not prove the exact kernel/ANV defect or general stability of fresh pools. Unlike the invalid 0.2.8 comparison, both runs verify the effective flags after release initialization and both use direct diagnostics. A repeated fresh-pool run and broader output/IOSurface tests should precede desktop promotion. The first observed failure in the retained control is render submission completion, not its following readback copy. Desktop stays disabled.

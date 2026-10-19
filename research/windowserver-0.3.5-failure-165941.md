@@ -1,0 +1,21 @@
+# Candidate0.3.5: frozen cursor boot, report20261019-165941
+
+Installer20261019-165159 returned0; permanent bundle lookup succeeded at16:53:25.154, NMXGPU load notification16:53:27.468. WindowServer163 loaded candidate0.3.5 SHA153afd4b5a34008b2c27307dee646798c2180ab68a5e536d0901445d34a7fc2c. The compression-policy log at16:53:28.210 confirms INTEL_DEBUG includes noccs before ICD loading. This verifies policy application, not an independent measurement of hardware compression state.
+
+Submissions1–7 completed, including1920x1080 readbacks1–2. Submission8, readback3 on image-id2/stage-id13, owned fresh staging, acquired the desktop lock, passed presubmit and returned QueueSubmit0 at16:53:30.439. Fence returned2 after5020ms at16:53:35.460. No CPU read occurred and uncertain staging was retained. This repeats the third-readback/submission8 stall seen in0.3.4 despite noccs policy. Compression-off did not prevent this failure; its universal causality cannot be concluded from this alone.
+
+Original WindowServer163 crashed at16:53:35.8424 with SIGABRT in CoreDisplay::DisplaySurface::GetMTLTexture/SurfaceColorFill. Restart409 also crashed. Kernel16:53:43.292 request rcs0 context8/seq20: ready1 active1 started0 completed0, GuC id4098, ring0xa9d000, request head0xca8/postfix0xd78/tail0xe08. Kernel16:53:43.369 records GPU HANG12:1:00dfffff. GuC parsed capture is present: list0 count9/list1 count15/list2 count33. Engine-list registers include offset0x34=0xca4 and0x30=0xe08; preserve these as raw evidence until checked against definitions. Several list1 values are0xffffffff; don't infer all registers are valid or use legacy zero placeholders as evidence.
+
+Later WindowServer446 and473 abort in CoreAnimation pipeline creation with 'Vulkan is not up in this process', after additional fence timeouts; these are later failures, not evidence of the initiating cause. A sample of original163 exists at16:53:35.486, just after initial timeout. Collector boot16:58:54 is fallback, distinct from failed boot45AC1BB2-ADCB-4A74-8AB0-5F8F37B17744. Current-loaded kexts describe fallback only.
+
+User observed a visible but motionless cursor. This is useful behavioral evidence, not proof that more accelerated composition succeeded. Installer repair worked; desktop remains broken. No payload or boot settings changed during this log review; no hardware-suite rerun. Next investigation should use captured request/engine state and command-stream boundaries around submission8, rather than claiming the cursor establishes progress or retrying identical settings.
+
+Full evidence copied locally to port-artifacts/desktop-0.3.5/failure-detail-20261019-165941.
+
+## Follow-up source audit
+
+Verified local intel_engine_regs.h: engine-list offset0x34 is RING_HEAD,0x30 RING_TAIL,0x74 ACTHD. Captured RING_HEAD/ACTHD are0xca4; current request starts0xca8. gen8_emit_wa_tail emits MI_ARB_CHECK then MI_NOOP after the advertised request tail. This places the captured pointer just before the current request boundary, but without captured ring words and the predecessor request's recorded offsets it does not identify the instruction there. Do not assume the image copy is executing, or remove the kernel workaround on this evidence.
+
+Verified intel_guc_submission.c sched_state bits:0x150 is ENABLED|REGISTERED|CLOSED. Capture follows the first WindowServer crash by about7.45seconds, so CLOSED may reflect userspace teardown; it is not sufficient evidence of a scheduling-close race causing the hang. Other pending/blocked/banned bits are absent in this snapshot. Likewise started0 refers to the kernel's initial breadcrumb test, not independent proof that no payload instruction ever executed.
+
+This narrows investigation to the request boundary, previous-request completion/context transition and visibility of ring/context writes. It does not yet distinguish these causes. Fresh command pools, fresh staging and noccs did not prevent the reproduced stall; no additional production payload has been justified by this audit. Further candidate changes must address a reproduced or source-demonstrated defect, or be explicitly labeled diagnostic with precise evidence collected; no repeat of the22-case suite is required just to investigate this WindowServer failure.

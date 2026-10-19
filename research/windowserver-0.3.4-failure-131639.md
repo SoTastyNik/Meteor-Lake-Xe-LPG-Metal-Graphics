@@ -1,0 +1,11 @@
+# Candidate0.3.4 target failure: dedicated staging did not prevent GPU hang
+
+Report failure-detail-20261019-131639 collected13:16:39 on fallback boot13:16:04. Installed plugin hash f137d6e9cffd160ad46c9c4f72bda4a19563199a5d258981ce2b3b1a4a234bd3 matches0.3.4.
+
+Active WindowServer PID163: submissions1–7 completed. First two readbacks used distinct dedicated stages6/11, owned1, offset0, coherent memorytype0, and completed before release-after-copy. Third readback on image2 used new stage13 (different buffer/memory), owned1,1920x1080/pitch7680/8294400bytes. Submission8 acquired desktop mutex13:14:40.253; pre-submit hook returned; vkQueueSubmit succeeded13:14:40.254. Fence returnedVK_TIMEOUT2 after5000ms at13:14:45.254. Mutex released with result-2 and no CPU destination read/free. No desktop-lock-failed event.
+
+Kernel13:14:53.132: rcs0 hung context request8:20 [0x1002] not yet started;13:14:53.211 GPUHANG12:1:00dfffff. First-error GTawake1, resets0, GuCCT0tail576/CT1head226, EIR/PGTBL/fault0, same general hang signature as0.3.3. Dedicated readback allocation therefore does not prevent this failure; TLS staging reuse is not necessary for it. Do not describe the earlier/later submission count as stable performance progress.
+
+Corrected capture now retains plugin stage records. It also produced a usable140413byte sample, but it targets restarted WindowServer PID405 launched13:14:45.934, sampled13:14:47.045. Stack enters CoreDisplay pipeline setup->ensure_descriptors->nvmtl_vk_zero_dummies->WaitForFences, after original backend loss. This explains restart blockage, not the original stall. New .ips reports PID40513:14:52, PID44813:14:59 andPID46213:15:10 terminate in CoreDisplay::DisplaySurface::GetMTLTexture after dummy timeouts.
+
+Next investigation should move to kernel request dependencies/GuC dispatch and allocation/address ownership in physical desktop integration. Shared image-layout recording order and physical scanout/stolen/GGTT interactions remain unproven candidates. No evidence justifies increasing timeouts, suppressing CoreDisplay errors, a blind firmware swap, or another identical staging trial. No new driver/EFI/security changes made during this inspection, no full hardware suite rerun.

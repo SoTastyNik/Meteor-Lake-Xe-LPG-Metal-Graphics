@@ -1,0 +1,49 @@
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:52:22: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+   52 |     int node = minor(dev);
+      |                ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:121:19: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  121 |     int m = minor(dev);
+      |             ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:138:19: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  138 |     int m = minor(dev);
+      |             ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:152:36: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  152 |     int err = nmx_cdev_ioctl(minor(dev), cmd, data, fflag);
+      |                              ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:171:35: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  171 |     int err = nmx_cdev_read(minor(dev), (uint64_t)base, (size_t)len, &done, (ioflag & IO_NDELAY) ? 1 : 0);
+      |                             ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:185:32: warning: implicit conversion changes signedness: 'dev_t' (aka 'int') to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  185 |     return nmx_cdev_poll(minor(dev), events) != 0;
+      |                          ~~~~~ ^~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:252:54: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  252 |     void *h = devfs_make_node_clone(makedev(g_major, node), DEVFS_CHAR, uid, gid, mode, clone_minor, "%s", path);
+      |                                     ~~~~~~~          ^~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:252:45: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  252 |     void *h = devfs_make_node_clone(makedev(g_major, node), DEVFS_CHAR, uid, gid, mode, clone_minor, "%s", path);
+      |                                     ~~~~~~~ ^~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:381:42: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  381 |     int m = clone_minor(makedev(g_major, node), DEVFS_CLONE_ALLOC);
+      |                         ~~~~~~~          ^~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:381:33: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  381 |     int m = clone_minor(makedev(g_major, node), DEVFS_CLONE_ALLOC);
+      |                         ~~~~~~~ ^~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:384:41: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  384 |     int err = nmx_open(makedev(g_major, m), FREAD | FWRITE, 0, nullptr);
+      |                        ~~~~~~~          ^
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:384:32: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  384 |     int err = nmx_open(makedev(g_major, m), FREAD | FWRITE, 0, nullptr);
+      |                        ~~~~~~~ ^~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:392:39: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  392 |     return nmx_ioctl(makedev(g_major, open_minor), cmd, (caddr_t)data, FREAD | FWRITE, nullptr);
+      |                      ~~~~~~~          ^~~~~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:392:30: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  392 |     return nmx_ioctl(makedev(g_major, open_minor), cmd, (caddr_t)data, FREAD | FWRITE, nullptr);
+      |                      ~~~~~~~ ^~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:397:32: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  397 |     nmx_close(makedev(g_major, open_minor), FREAD | FWRITE, 0, nullptr);
+      |               ~~~~~~~          ^~~~~~~~~~
+/Users/ved/Documents/iGPU Port/NullMoth/gpu-port/xkpi/xnu/nmx_devfs.cpp:397:23: warning: implicit conversion changes signedness: 'int' to '__uint32_t' (aka 'unsigned int') [-Wsign-conversion]
+  397 |     nmx_close(makedev(g_major, open_minor), FREAD | FWRITE, 0, nullptr);
+      |               ~~~~~~~ ^~~~~~~
+16 warnings generated.

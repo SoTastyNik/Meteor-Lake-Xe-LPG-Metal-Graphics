@@ -1,0 +1,9 @@
+# Report183951: attach guard reset verified; separate HID panic
+
+Reportfailure-detail-20261019-183951 copied locally under port-artifacts/windowserver-completion-context-1.0.14. Installer183437 records previous failed-attach marker present=1, deletion success and both one-shot markers armed. The retry correction ran successfully.
+
+New panic fileKernel-2026-10-19-183921.panic: null page fault CR2=0, uptime9.116137187seconds. Top fault: VoodooI2CTouchscreenHIDEventDriver::forwardReport +0x4f. Callers: VoodooI2CMultitouchHIDEventDriver::handleInterruptReport -> IOHIDDevice::handleReport -> VoodooI2CHIDDevice::getInputReport -> simulateInterrupt -> IOTimerEventSource. VoodooI2CHID1.0 UUID92D5DDB4-D6CC-3D21-892D-DD1BDFF81676 in backtrace; NMXGPU1.0.14 is in loaded modules, not the faulting backtrace. Do not describe this as the previous GuC mutex panic or establish a GPU root cause from loaded modules alone.
+
+The same function and+0x4f offset appear in four older retained panic reports fromOct17/18, predating1.0.14. This is evidence of a recurring pre-existing HID-driver fault signature. It does not logically exclude all external memory corruption, but strongly argues investigating the HID path independently.
+
+Panicfilename is processing time after fallback, not necessarily original failure time. Collectorboot18:39:18; current retained GPU live file has only header for trialboot18:36:25 and no submitted/render/ring diagnostics. No successful attach/rendering conclusion can be drawn. No new payload, EFI or NVRAM changes made during this review. Full accelerated desktop remains unverified. Next useful work is identify/null-guard or isolate the VoodooI2CHID touchscreen report path, preserve other input where possible, then obtain an actual GPU trial capture without this early panic. No full22-case suite rerun.

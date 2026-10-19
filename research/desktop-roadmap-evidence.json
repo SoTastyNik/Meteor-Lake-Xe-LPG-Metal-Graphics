@@ -1,0 +1,360 @@
+{
+  "report": "/Volumes/SEQOUIA/iGPU-Port/Desktop/reports/20261018-194932",
+  "candidate": "desktop-0.2.5",
+  "initial_windowserver_submissions": [
+    {
+      "submission": 1,
+      "status": "completed",
+      "events": [
+        {
+          "id": 1,
+          "line": 2305,
+          "time": "2026-10-18 19:47:05.771",
+          "event": "begin surface upload, command buffer 0x7fdcff03aa00"
+        },
+        {
+          "id": 1,
+          "line": 2306,
+          "time": "2026-10-18 19:47:05.793",
+          "event": "queue result 0"
+        },
+        {
+          "id": 1,
+          "line": 2307,
+          "time": "2026-10-18 19:47:05.794",
+          "event": "fence result 0 after 0 ms"
+        }
+      ]
+    },
+    {
+      "submission": 2,
+      "status": "completed",
+      "events": [
+        {
+          "id": 2,
+          "line": 2308,
+          "time": "2026-10-18 19:47:05.802",
+          "event": "begin -[NVMTLCommandBuffer(EventSubmission) nvmtlSubmitAhead], command buffer 0x7fdd0181c200"
+        },
+        {
+          "id": 2,
+          "line": 2310,
+          "time": "2026-10-18 19:47:05.806",
+          "event": "queue result 0"
+        },
+        {
+          "id": 2,
+          "line": 2311,
+          "time": "2026-10-18 19:47:05.806",
+          "event": "fence result 0 after 0 ms"
+        }
+      ]
+    },
+    {
+      "submission": 3,
+      "status": "completed",
+      "events": [
+        {
+          "id": 3,
+          "line": 2312,
+          "time": "2026-10-18 19:47:05.873",
+          "event": "begin nvmtl_vk_image_read, command buffer 0x7fdcff03aa00"
+        },
+        {
+          "id": 3,
+          "line": 2313,
+          "time": "2026-10-18 19:47:05.875",
+          "event": "queue result 0"
+        },
+        {
+          "id": 3,
+          "line": 2314,
+          "time": "2026-10-18 19:47:05.878",
+          "event": "fence result 0 after 2 ms"
+        }
+      ]
+    },
+    {
+      "submission": 4,
+      "status": "completed",
+      "events": [
+        {
+          "id": 4,
+          "line": 2319,
+          "time": "2026-10-18 19:47:05.887",
+          "event": "begin -[NVMTLCommandBuffer(EventSubmission) nvmtlAdvancePart], command buffer 0x7fdd0181c200"
+        },
+        {
+          "id": 4,
+          "line": 2328,
+          "time": "2026-10-18 19:47:05.893",
+          "event": "queue result 0"
+        },
+        {
+          "id": 4,
+          "line": 2329,
+          "time": "2026-10-18 19:47:05.894",
+          "event": "fence result 0 after 0 ms"
+        }
+      ]
+    },
+    {
+      "submission": 5,
+      "status": "timed_out",
+      "events": [
+        {
+          "id": 5,
+          "line": 2334,
+          "time": "2026-10-18 19:47:05.895",
+          "event": "begin nvmtl_vk_image_read, command buffer 0x7fdd0181c200"
+        },
+        {
+          "id": 5,
+          "line": 2337,
+          "time": "2026-10-18 19:47:05.896",
+          "event": "queue result 0"
+        },
+        {
+          "id": 5,
+          "line": 2368,
+          "time": "2026-10-18 19:47:10.896",
+          "event": "fence result 2 after 5000 ms"
+        }
+      ]
+    },
+    {
+      "submission": 6,
+      "status": "timed_out",
+      "events": [
+        {
+          "id": 6,
+          "line": 2360,
+          "time": "2026-10-18 19:47:05.965",
+          "event": "begin surface upload, command buffer 0x7fdd0182d200"
+        },
+        {
+          "id": 6,
+          "line": 2361,
+          "time": "2026-10-18 19:47:05.985",
+          "event": "queue result 0"
+        },
+        {
+          "id": 6,
+          "line": 2371,
+          "time": "2026-10-18 19:47:10.985",
+          "event": "fence result 2 after 5000 ms"
+        }
+      ]
+    },
+    {
+      "submission": 7,
+      "status": "incomplete_trace",
+      "events": [
+        {
+          "id": 7,
+          "line": 2378,
+          "time": "2026-10-18 19:47:10.986",
+          "event": "begin -[NVMTLCommandBuffer(EventSubmission) nvmtlSubmitAhead], command buffer 0x7fdcff03aa00"
+        }
+      ]
+    }
+  ],
+  "failed_boot_crashes": [
+    {
+      "file": "WindowServer-2026-10-18-194721.000.ips",
+      "captureTime": "2026-10-18 19:47:11.6822 +0100",
+      "pid": 163,
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "flags": 518,
+        "code": 4,
+        "namespace": "COREANIMATION",
+        "details": [
+          "spec=PBGRAXb_Xh",
+          "pipeline: Vulkan is not up in this process"
+        ]
+      },
+      "recorded_frames": 56,
+      "first_symbols": [
+        "__abort_with_payload",
+        "abort_with_payload_wrapper_internal",
+        "abort_with_payload",
+        "CA::OGL::MetalContext::create_pipeline_state(CA::OGL::MetalContext::Pipeline::Spec const&, unsigned int*, std::__1::atomic<bool>*)",
+        "CA::OGL::MetalContext::draw(MTLPrimitiveType, unsigned int, unsigned int, void const*, unsigned long, unsigned long, unsigned int, unsigned int, unsigned short const*, CA::OGL::ClipPlane const*, CA::OGL::MetalBufferPool::MetalBuffer const*)",
+        "CA::OGL::MetalContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)",
+        "CA::OGL::Context::array_flush()"
+      ]
+    },
+    {
+      "file": "WindowServer-2026-10-18-194721.ips",
+      "captureTime": "2026-10-18 19:47:18.6378 +0100",
+      "pid": 371,
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "flags": 0,
+        "code": 6,
+        "namespace": "SIGNAL",
+        "indicator": "Abort trap: 6",
+        "byProc": "WindowServer",
+        "byPid": 371
+      },
+      "recorded_frames": 20,
+      "first_symbols": [
+        "__pthread_kill",
+        "pthread_kill",
+        "abort",
+        "MetalShader::CopyPipelineState(MetalContext*, bool, bool)",
+        "MetalCompositeSimpleColorLayer",
+        "MetalCompositeLayers",
+        "CompositorMetal::composite(WSCompositeSourceLayer*, WSCompositeDestination*, bool, bool)"
+      ]
+    },
+    {
+      "file": "WindowServer-2026-10-18-194730.ips",
+      "captureTime": "2026-10-18 19:47:29.6590 +0100",
+      "pid": 396,
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "flags": 0,
+        "code": 6,
+        "namespace": "SIGNAL",
+        "indicator": "Abort trap: 6",
+        "byProc": "WindowServer",
+        "byPid": 396
+      },
+      "recorded_frames": 20,
+      "first_symbols": [
+        "__pthread_kill",
+        "pthread_kill",
+        "abort",
+        "MetalShader::CopyPipelineState(MetalContext*, bool, bool)",
+        "MetalCompositeSimpleColorLayer",
+        "MetalCompositeLayers",
+        "CompositorMetal::composite(WSCompositeSourceLayer*, WSCompositeDestination*, bool, bool)"
+      ]
+    },
+    {
+      "file": "WindowServer-2026-10-18-194740.ips",
+      "captureTime": "2026-10-18 19:47:40.2750 +0100",
+      "pid": 402,
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "flags": 0,
+        "code": 6,
+        "namespace": "SIGNAL",
+        "indicator": "Abort trap: 6",
+        "byProc": "WindowServer",
+        "byPid": 402
+      },
+      "recorded_frames": 20,
+      "first_symbols": [
+        "__pthread_kill",
+        "pthread_kill",
+        "abort",
+        "MetalShader::CopyPipelineState(MetalContext*, bool, bool)",
+        "MetalCompositeSimpleColorLayer",
+        "MetalCompositeLayers",
+        "CompositorMetal::composite(WSCompositeSourceLayer*, WSCompositeDestination*, bool, bool)"
+      ]
+    },
+    {
+      "file": "WindowServer-2026-10-18-194751.ips",
+      "captureTime": "2026-10-18 19:47:50.9043 +0100",
+      "pid": 431,
+      "exception": {
+        "codes": "0x0000000000000000, 0x0000000000000000",
+        "rawCodes": [
+          0,
+          0
+        ],
+        "type": "EXC_CRASH",
+        "signal": "SIGABRT"
+      },
+      "termination": {
+        "flags": 0,
+        "code": 6,
+        "namespace": "SIGNAL",
+        "indicator": "Abort trap: 6",
+        "byProc": "WindowServer",
+        "byPid": 431
+      },
+      "recorded_frames": 20,
+      "first_symbols": [
+        "__pthread_kill",
+        "pthread_kill",
+        "abort",
+        "MetalShader::CopyPipelineState(MetalContext*, bool, bool)",
+        "MetalCompositeSimpleColorLayer",
+        "MetalCompositeLayers",
+        "CompositorMetal::composite(WSCompositeSourceLayer*, WSCompositeDestination*, bool, bool)"
+      ]
+    }
+  ],
+  "kernel_summary": [
+    {
+      "line": 3071,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: resets=0 suspended=0 iommu=0"
+    },
+    {
+      "line": 3072,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: gt=0 awake=1 EIR=00000000 PGTBL_ER=00000000 fault=00000000:00000000"
+    },
+    {
+      "line": 3073,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: gt=0 GuC-CT0 head=0 tail=509 status=00000000"
+    },
+    {
+      "line": 3074,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: gt=0 GuC-CT1 head=174 tail=0 status=00000000"
+    },
+    {
+      "line": 3075,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: gt=0 engine=0 hung=1 pid=0 comm=(null) reset=0"
+    },
+    {
+      "line": 3076,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: ring start=00000000 head=00000000 tail=00000000 ctl=00000000 active=0 batch=0"
+    },
+    {
+      "line": 3077,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: IPEIR=00000000 IPEHR=ff000000 INSTDONE=ffdfffff fault=00000000 addr=0 rq=00000870:00000940:000009d0"
+    },
+    {
+      "line": 3078,
+      "text": "2026-10-18 19:47:18.749 Df kernel[0:7bd] (NMXGPU) NMX-i915-first-error: end bounded captured-register summary"
+    }
+  ],
+  "caution": "Plugin submission IDs are not i915 request seqnos. Resource identities/generations are missing. The first observed timed-out readback is not yet a proven root cause."
+}

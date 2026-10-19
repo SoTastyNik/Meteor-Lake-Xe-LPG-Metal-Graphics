@@ -1,0 +1,14 @@
+# GitHub rejects any single file over 100 MB. These are the only files in the
+# tree that large, and all of them are reproducible rather than unique:
+#   - the four libLLVM.dylib copies are build products of the packaged bundles
+#   - the toolchain libLLVM.dylib belongs to the Rust toolchain in toolchain/
+#   - the tarball is pinned by SHA256SUMS-upstream.txt
+upstream-runtime/pkgroot/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
+latitude-desktop/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
+latitude-runtime/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
+backups/desktop-0.2.6-before/package/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
+toolchain/rustup/toolchains/stable-aarch64-apple-darwin/lib/libLLVM.dylib
+nullmoth-nvidia-2.0.2.tar.gz
+
+# macOS cruft
+.DS_Store

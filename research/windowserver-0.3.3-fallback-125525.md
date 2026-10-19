@@ -1,0 +1,7 @@
+# Candidate0.3.3 report125525: fallback, not an accelerated desktop pass
+
+Report failure-detail-20261019-125525 was collected12:55:25 on boot12:54:21 (UUID C7E08166-D93A-449F-BB55-9B3BD6A326C4). Installed plugin SHA256 matches candidate0.3.3:7f9afc41c04f990113fe646cf2d74dc4c283600bb31147df19fabe6418cfc1f9. Installer125248 completedexit0 and recorded both one-shot markers as1 at12:52:53.
+
+New journal successfully retained loader stages: ten claim queries exit0 but no active panel claim;12:54:41 fallback-skip / No panel reservation. No plugin constructor/queue/fence stages. No sample was attempted because framebuffer handoff was skipped. Live/registry logs are older12:32, not this boot. Kernel NMXAccel reports12:54:26 that NMXGPU has not claimed8086:7d45 and declines startup. All12 copied WindowServer crashes predate this attempt (latest12:00:57). No new WindowServer crash establishes an attempted0.3.3 accelerated session.
+
+USB OpenCore config does not delete/overwrite either nullmoth marker; LatitudePanelClaim injection is enabled. Installed markers were armed, but logs do not establish why the boot lacked an active GPU/panel claim. Possible marker persistence/consumption or boot-path issue remains unresolved; do not claim a driver hang fix or desktop acceleration. Next targeted attempt: run install-windowserver.sh from fallback, then afterexit0 directly restart through USB once without ResetNVRAM or an interveningboot. No full22-case rerun.
