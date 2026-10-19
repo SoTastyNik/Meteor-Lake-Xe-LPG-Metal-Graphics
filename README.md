@@ -1162,7 +1162,7 @@ iGPU Port/
 ├── backups/               # Per-candidate source/EFI snapshots (backups/desktop-0.3.5-before/, backups/kernel-1.0.11-before/ …)
 ├── build-inputs/          # Pre-flight compilation payloads
 ├── build-tree/            # Compiler intermediate object tree
-├── desktop-build/         # Versioned NVMTLDriver 0.2.4 → 0.3.5 binaries + kernel 1.0.9 → 1.0.13 link logs and tests
+├── desktop-build/         # Versioned NVMTLDriver 0.2.4 → 0.3.5 binaries + kernel 1.0.9 → 1.0.14 link logs and tests
 ├── desktop-sources/       # Patch scripts that generate each candidate (implement-*, fix-*, package-*)
 ├── drm-kmod/              # Linux DRM ported to FreeBSD via linuxkpi (i915/, drm/, ttm/, linuxkpi/)
 ├── firmware/i915/         # mtl_guc_70.bin, mtl_dmc.bin, mtl_huc_gsc.bin, mtl_gsc_1.bin (+LICENSE.i915)
@@ -1205,19 +1205,146 @@ iGPU Port/
 <a name="build"></a>
 ## 🛠️ Building and testing
 
-1. **Build prerequisites** — Xcode command line tools, `meson`/`ninja` for Mesa and libdrm, the Apple
-   `kext`/SDK path via `MacKernelSDK`, and the CLC tools (built separately for an Apple Silicon host).
-2. **Compile the components** — i915/DRM via the drm-kmod Makefiles, ANV/libdrm via meson, the plugin and
-   translator via the NullMoth build, the kexts via `MacKernelSDK`.
-3. **Package** — `latitude-runtime/install-runtime.sh` validates hashes and both kexts against the
-   target's kernel collections *before* touching live files; `BUILD-MANIFEST.json` pins every base.
-4. **Gate** — run the 22-case suite on the target. A pass is required before any desktop boot is armed.
-5. **Desktop trial** — one armed boot, then collect failure evidence with
-   `collect-desktop-failure.sh` **before** reinstalling anything.
-6. **Roll back** — `rollback-runtime.sh` restores the saved runtime and Auxiliary KC from
-   `/Library/NullMoth/latitude5350-backups` and clears the one-shot opt-in.
+The build is a pipeline: firmware is prebuilt, then the translator, the Vulkan backend, the Metal
+plugin, the kernel extension and the kexts are compiled, the runtime is packaged, and only then is the
+application gate run and a single desktop boot armed. Every step is a script in `desktop-sources/`;
+the commands below are what those scripts actually run, so any single step can be re-run by hand.
 
-Never bypass a failed kernel-collection validation. Bring the report back instead.
+Build outputs land in `desktop-build/` (kexts, plugin, logs) and `build-tree/` (the meson build
+directories). `latitude-runtime/` is the installable package that gets staged to the USB.
+
+### 0. Host and prerequisites
+
+| Requirement | Used by |
+|---|---|
+| macOS 15 Sequoia, x86_64 | everything |
+| Xcode command line tools (`xcrun` must resolve) | kernel, kexts, plugin |
+| `MacKernelSDK/` | kext/kernel headers |
+| Rust 1.87+ (`toolchain/`) | AIR→SPIR-V translator, CLC tools |
+| `llvm-dis`, `spirv-val` (SPIRV-Tools) | translator |
+| `meson` + `ninja` | Mesa (ANV), libdrm |
+| `python3` | build/package scripts |
+
+The build host may be Apple Silicon or Intel; the CLC tools are built for the host. The target is
+always the Dell Latitude 5350 (`8086:7D45`).
+
+### 1. Firmware (no build)
+
+`firmware/i915/` already holds `mtl_guc_70.bin`, `mtl_dmc.bin`, `mtl_huc_gsc.bin`, `mtl_gsc_1.bin` and
+`LICENSE.i915`. Nothing to compile.
+
+### 2. Shader translator (AIR → SPIR-V)
+
+```sh
+cd NullMoth/translator/translator
+cargo build --release
+```
+
+Needs `llvm-dis` and `spirv-val` on `PATH` (or set `METAL2VULKAN_LLVM_DIS` / `METAL2VULKAN_SPIRV_VAL`).
+This is the `metal2vulkan` component: it lowers Metal's AIR to SPIR-V for ANV.
+
+### 3. Vulkan backend (ANV) and libdrm
+
+```sh
+meson setup mesa     build-tree/mesa-build
+ninja -C build-tree/mesa-build
+meson setup libdrm   build-tree/drm-build
+ninja -C build-tree/drm-build
+```
+
+Mesa is patched via `port-artifacts/mesa-i915-darwin-mmap.patch`; libdrm carries the IOKit transport
+patch. `latitude-runtime/BUILD-MANIFEST.json` pins the exact base revision of every upstream.
+
+### 4. Metal plugin (NVMTLDriver)
+
+```sh
+python3 desktop-sources/build-windowserver-0.3.5.py
+```
+
+Compiles `NullMoth/plugin/NVMTLDevice.m` into `desktop-build/NVMTLDriver-0.3.5` (x86_64, linked
+against Metal, IOSurface and IOKit, with `Vulkan-Headers/include` on the path).
+
+### 5. Kernel extension (NMXGPU) — the hard part
+
+The kernel is a Linux DRM/i915 driver compiled for xnu through the FreeBSD LinuxKPI shim. It is two
+stages: compile the sources into object directories, then link them.
+
+**(a) Compile.** `NullMoth/gpu-port/xkpi/all.sh` builds the DRM core, TTM and dma-buf into `obj/`;
+`all-i915.sh` builds the i915 driver into `obj-i915/`. The per-file compiler is `cc-i915.sh`
+(`xcrun clang -fapple-kext -DNMXKPI=1`, with the LinuxKPI headers from `freebsd-src`).
+
+> **These compile scripts contain absolute paths from the original build machine** —
+> `/Volumes/MiniData/build/gpu-src/...` in `all.sh` and `/Users/ved/igpu-build/...` in `cc-i915.sh`.
+> They must be repointed at this tree (`NullMoth/gpu-port/xkpi`, `drm-kmod`, `freebsd-src`) before
+> they will run. This is the one step that is not reproducible as-is yet.
+
+**(b) Link.**
+
+```sh
+python3 desktop-sources/link-kernel-1.0.14.py
+```
+
+Links the 438 objects from `xkpi/{obj,obj-i915,lkobj,srcobj,xnuobj}` into
+`desktop-build/NMXGPU-1.0.14`. The script asserts exactly 438 objects and that the undefined-symbol
+set is identical to frozen 1.0.8, then prints the kext UUID.
+
+### 6. Kexts (LatitudeMTLFB, LatitudePanelClaim)
+
+```sh
+python3 desktop-sources/build.py
+```
+
+Compiles `nmxvgafb.cpp`, `nmx_virtio_gpu.cpp` and `LatitudePanelClaim.cpp`, links and codesigns
+`latitude-desktop/Library/Extensions/LatitudeMTLFB.kext` and
+`latitude-desktop/EFI-Kexts/LatitudePanelClaim.kext`.
+
+### 7. Assemble the runtime package
+
+```sh
+python3 desktop-sources/publish-completion-context-1.0.14.py   # current candidate
+# or an earlier one, e.g.: python3 desktop-sources/package-0.3.5.py
+```
+
+Stages the installable tree to `/Volumes/SEQOUIA/iGPU-Port/Desktop`, writes `SHA256SUMS.txt` and
+`BUILD-MANIFEST.json`, backs up the previous package, and verifies codesign and shell syntax. The
+USB must be mounted. No target install, NVRAM edit, GPU suite or reboot happens here.
+
+### 8. Application gate (before any desktop boot)
+
+```sh
+cd latitude-runtime
+shasum -a 256 -c SHA256SUMS.txt
+./tools/latitude-vulkan-test ./tools/check.spv
+./tools/latitude-metal-test
+sudo ./test-readback.sh 1000 full
+```
+
+22 cases / 26,000 frames across both transports. A pass is required before a desktop boot is armed.
+
+### 9. Install on the Dell (one desktop boot)
+
+```sh
+sudo /bin/bash /Volumes/SEQOUIA/iGPU-Port/install-windowserver.sh
+```
+
+Checks the CPU (Ultra 5 135U), GFX0 (`8086:7D45`), that SIP/AMFI are disabled and AMFIPass is loaded;
+stages kernel + framebuffer + AuxKC with rollback; arms one desktop boot. Then reboot through the
+USB once (no ResetNVRAM). **Collect before reinstalling:**
+
+```sh
+sudo /bin/bash /Volumes/SEQOUIA/iGPU-Port/collect-desktop-failure.sh
+```
+
+### 10. Roll back
+
+```sh
+sudo /bin/bash latitude-runtime/rollback-runtime.sh
+```
+
+Restores the saved runtime and Auxiliary KC from `/Library/NullMoth/latitude5350-backups` and clears
+the one-shot opt-in.
+
+**Never bypass a failed kernel-collection validation. Bring the report back instead.**
 
 ---
 
