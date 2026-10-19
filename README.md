@@ -81,21 +81,32 @@ The mission-critical logic of this framework is contained within a tightly targe
 
 ---
 
-## 📜 Apache License 2.0 & Legal Defensibility
+## 📂 Local Workspace Directory Structure
 
-This project is open-sourced under the **Apache License 2.0**. 
+The runtime workspace layout deployed locally at `/Users/ved/Documents/iGPU Port` contains the following foundational submodules, build modules, and artifact targets:
 
 ```text
-Copyright 2026 VedCloud
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    [http://apache.org](http://apache.org)
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+iGPU Port/
+├── accel-build/           # Hardware acceleration staging builds
+├── AMFIPass/              # Apple Mobile File Integrity bypass utilities
+├── backups/               # Configuration and state rollbacks
+├── build-inputs/          # Pre-flight compilation assets and payloads
+├── build-tree/            # Active compiler intermediate object tree
+├── desktop-build/         # WindowServer desktop compositor target outputs
+├── desktop-sources/       # Compositor interface hooks and windowing glue
+├── drm-kmod/              # Ported Direct Rendering Manager kernel modules
+├── firmware/              # Extracted Intel GuC / HuC microcode payloads
+├── freebsd-src/           # Upstream compatibility and translation headers
+├── latitude-desktop/      # Dell Latitude cross-hardware fallback layers
+├── latitude-runtime/      # Auxiliary runtime libraries for mobile form factors
+├── libdrm/                # Modified userspace DRM abstraction layer
+├── MacKernelSDK/          # Kernel-space headers and build macros for macOS
+├── mesa/                  # Core Mesa 3D graphics library (Gallium3D / Vulkan)
+├── MyIntelGPU/            # Proprietary register definitions and helper routines
+├── NullMoth/              # Base hardware stubbing harness
+├── NullMoth-Xe/           # Xe-specific hardware initialization stub
+├── ogkm610/               # Display pipe and panel timing overrides
+├── port-artifacts/        # Final compiled KEXT and bundle outputs
+├── research/              # Documentation, telemetry dumps, and register notes
+├── toolchain/             # Cross-compilation toolchain binaries and wrappers
+└── upstream-runtime/      # Upstream synchronization sources
