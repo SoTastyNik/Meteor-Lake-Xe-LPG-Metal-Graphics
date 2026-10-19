@@ -1,7 +1,5 @@
 # Meteor Lake Xe-LPG Hardware Acceleration for macOS
 
-
-line 2
 ![License](https://img.shields.io/badge/License-per--component_(see_below)-lightgrey.svg)
 ![Platform](https://img.shields.io/badge/Platform-macOS_15_Sequoia-blue)
 ![Hardware](https://img.shields.io/badge/Hardware-Intel_Core_Ultra_5_135U-orange)
