@@ -1,0 +1,142 @@
+--- a/libdrm/xf86drm.c
++++ b/libdrm/xf86drm.c
+@@ -149,6 +149,8 @@
+ #define stat(path, st) drm_darwin_stat(path, st)
+ #define fstat(fd, st) drm_darwin_fstat(fd, st)
+ static int drm_darwin_sandbox_devices(uint32_t flags, drmDevicePtr devices[], int max_devices);
++static int nmx_test_route(void);
++static int drm_darwin_token_type(int fd);
+ static int drm_darwin_token_device(int fd, uint32_t flags, drmDevicePtr *device);
+ #endif
+ #ifdef __APPLE__
+@@ -3410,6 +3412,10 @@
+ 
+ drm_public int drmGetNodeTypeFromFd(int fd)
+ {
++#ifdef __APPLE__
++    if (drm_darwin_token_type(fd) == DRM_NODE_RENDER)
++        return DRM_NODE_RENDER;
++#endif
+     struct stat sbuf;
+     int maj, min, type;
+ 
+@@ -4923,9 +4929,17 @@
+     if (drm_device_validate_flags(flags))
+         return -EINVAL;
+ 
++#ifdef __APPLE__
++    /* Select the same transport for discovery and rendering. A forced IOKit
++     * process must not enumerate through temporary devfs descriptors. */
++    const int route = nmx_test_route();
++    if (route < 0) return -EINVAL;
++    if (route == 2)
++        return drm_darwin_sandbox_devices(flags, devices, max_devices);
++#endif
+     sysdir = opendir(DRM_DIR_NAME);
+ #ifdef __APPLE__
+-    if (!sysdir && (errno == EPERM || errno == EACCES))
++    if (!sysdir && route != 1 && (errno == EPERM || errno == EACCES))
+         return drm_darwin_sandbox_devices(flags, devices, max_devices);
+ #endif
+     if (!sysdir)
+@@ -4964,7 +4978,13 @@
+     }
+ 
+     closedir(sysdir);
+-
++#ifdef __APPLE__
++    /* Directory access can succeed while individual node queries are denied. */
++    if (device_count == 0 && route == 0) {
++        ret = drm_darwin_sandbox_devices(flags, devices, max_devices);
++        if (ret > 0) return ret;
++    }
++#endif
+     if (devices != NULL)
+         return MIN2(device_count, max_devices);
+ 
+@@ -5469,6 +5489,8 @@
+         if (kr != KERN_SUCCESS) {
+             os_log_error(nmx_log(), "DRM client on %{public}s: IOServiceOpen 0x%x", providers[i], kr);
+             conn = 0;
++        } else {
++            os_log(nmx_log(), "IOKit DRM connected through %{public}s", providers[i]);
+         }
+         IOObjectRelease(svc);
+     }
+@@ -5552,6 +5574,7 @@
+                                            (request & IOC_IN) ? len : 0, &err, &nout,
+                                            (request & IOC_OUT) ? arg : NULL, &outlen);
+     if (kr != KERN_SUCCESS) {
++        os_log_error(nmx_log(), "ioctl 0x%{public}lx transport failure: kr=0x%{public}x output-count=%{public}u", request, kr, nout);
+         errno = EIO;
+         return -1;
+     }
+@@ -5728,23 +5751,25 @@
+     return devices != NULL ? 0 : 1;
+ }
+ 
+-static int drm_darwin_token_device(int fd, uint32_t flags, drmDevicePtr *device)
++static int drm_darwin_token_type(int fd)
+ {
+     io_connect_t conn = nmx_uc_get(fd, 0);
+     struct nmx_uc *u;
+     bool token = false;
+-
+-    (void)flags;
+-    if (!conn)
+-        return -ENOENT;
++    if (!conn) return -1;
+     pthread_mutex_lock(&nmx_ucs_lock);
+     for (u = nmx_ucs; u != NULL; u = u->next)
+-        if (u->fd == fd && u->conn == conn)
+-            token = u->token;
++        if (u->fd == fd && u->conn == conn) token = u->token;
+     pthread_mutex_unlock(&nmx_ucs_lock);
+-    if (!token)
+-        return -ENOENT;
+-    return drm_darwin_uc_device(conn, device);
++    return token ? DRM_NODE_RENDER : -1;
++}
++
++static int drm_darwin_token_device(int fd, uint32_t flags, drmDevicePtr *device)
++{
++    (void)flags;
++    if (drm_darwin_token_type(fd) != DRM_NODE_RENDER) return -ENOENT;
++    io_connect_t conn = nmx_uc_get(fd, 0);
++    return conn ? drm_darwin_uc_device(conn, device) : -ENOENT;
+ }
+ 
+ /* the NullMoth DRM node ioctls (the kext's nmx_drm_uapi.h; the two must stay identical) */
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -5778,10 +5778,8 @@
+     nvk_cmdbuf *const c = &sl->cb;
+     if (nvmtl_vk_cmd_begin(q, c)) return -1;
+     VkImageSubresourceRange range = { nvmtl_barrier_aspect(img), 0, 1, 0, 1 };
+-    VkImageMemoryBarrier toDst = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, NULL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, (VkImage)img->img, range };
+-    pvkCmdPipelineBarrier(c->cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &toDst);
++    VkImageMemoryBarrier toDst = nvmtl_surface_upload_before(img, range);
++    pvkCmdPipelineBarrier(c->cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &toDst);
+     VkBufferImageCopy bic = { 0, 0, 0, { nvmtl_copy_aspect(img), 0, 0, 1 }, { 0, 0, 0 }, { img->w, img->h, 1 } };
+     pvkCmdCopyBufferToImage(c->cb, (VkBuffer)sl->buf.buf, (VkImage)img->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
+     VkImageMemoryBarrier toRead = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, NULL,
+@@ -5848,7 +5846,7 @@
+     }
+     uint64_t tid=0; pthread_threadid_np(NULL,&tid);
+     const int trace = id<=32 || getenv("NVMTL_READBACK_TRACE") != NULL;
+-    if (trace) nvlog("first-submit readback #%llu thread=%llu image-id=%llu stage-id=%llu img=%p stage=%p memory=%p offset=%zu type=%u coherent=1 layout=%u mip=%u layer=%u rect=%u,%u,%u,%u pitch=%zu bytes=%zu owned=%d cb=%p",
++    if (trace) nvlog("first-submit: readback #%llu thread=%llu image-id=%llu stage-id=%llu img=%p stage=%p memory=%p offset=%zu type=%u coherent=1 layout=%u mip=%u layer=%u rect=%u,%u,%u,%u pitch=%zu bytes=%zu owned=%d cb=%p",
+         (unsigned long long)id,(unsigned long long)tid,(unsigned long long)image_id,(unsigned long long)stage.trace_id,img->img,stage.buf,stage.mem,stage.poff,mt,img->layout,level,layer,x,y,w,h,row_bytes,plan.bytes,owned,c.cb);
+     pvkCmdPipelineBarrier(c.cb,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
+         0,0,NULL,0,NULL,1,&plan.before);
+@@ -5861,7 +5859,7 @@
+     pvkCmdPipelineBarrier(c.cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+         0,0,NULL,0,NULL,1,&plan.after);
+     int rc=nvmtl_vk_submit_wait_at(&c,"image readback");
+-    if (trace || rc) nvlog("first-submit readback #%llu completion=%d stage=%p disposition=%s",
++    if (trace || rc) nvlog("first-submit: readback #%llu completion=%d stage=%p disposition=%s",
+         (unsigned long long)id,rc,stage.buf,rc ? "retained-no-cpu-read" : owned ? "release-after-copy" : "tls-retained");
+     /* On an uncertain submission, retain its allocation. Backend shutdown
+        prevents further copies; freeing potentially pending memory is unsafe. */

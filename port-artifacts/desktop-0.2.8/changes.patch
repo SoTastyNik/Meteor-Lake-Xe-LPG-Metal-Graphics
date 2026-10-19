@@ -1,0 +1,154 @@
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -2477,17 +2477,22 @@
+     }
+     return on;
+ }
++static int nvmtl_command_pool_fresh(void)
++{
++    const char *e=getenv("NVMTL_COMMAND_POOL_FRESH");
++    return e && !strcmp(e,"1");
++}
+ static VkCommandPool nvmtl_keep_pool_pop(void)
+ {
+     VkCommandPool p = VK_NULL_HANDLE;
+-    if (!nvmtl_keep_on()) return p;
++    if (!nvmtl_keep_on() || nvmtl_command_pool_fresh()) return p;
+     pthread_mutex_lock(&g_keep_lock); if (g_keep_npool) p = g_keep_pool[--g_keep_npool]; pthread_mutex_unlock(&g_keep_lock);
+     return p;
+ }
+ static int nvmtl_keep_pool_push(VkCommandPool p)
+ {
+     int kept = 0;
+-    if (!nvmtl_keep_on()) return 0;
++    if (!nvmtl_keep_on() || nvmtl_command_pool_fresh()) return 0;
+     pthread_mutex_lock(&g_keep_lock); if (g_keep_npool < NVMTL_KEEP) { g_keep_pool[g_keep_npool++] = p; kept = 1; } pthread_mutex_unlock(&g_keep_lock);
+     return kept;
+ }
+@@ -4336,7 +4341,7 @@
+     return -1;
+ #endif
+     (void)q;
+-    if (nvmtl_vk_init()) return -1;
++    if (nvmtl_vk_init()) { nvlog("vk: recording FAILED phase=backend-init state=%d",g_state); return -1; }
+     const uint64_t b0 = nvmtl_perf_now();
+     memset(out, 0, sizeof *out);
+     VkCommandPool pool = nvmtl_keep_pool_pop();
+@@ -5275,6 +5280,11 @@
+         nvlog("vk: submit census over %llu submissions - %s", (unsigned long long)total, line);
+     }
+ }
++static int nvmtl_submit_trace(uint64_t id)
++{
++    const char *diagnostic=getenv("NVMTL_DIAGNOSTIC_STDERR");
++    return g_vendor==0x8086 && (id<=24 || (diagnostic && !strcmp(diagnostic,"1")));
++}
+ int nvmtl_vk_submit_wait_at(nvk_cmdbuf *c, const char *who)
+ {
+     nvmtl_inflight f;
+@@ -5286,10 +5296,10 @@
+     nvmtl_subwho_note(who, 0);
+     memset(f, 0, sizeof *f); f->c = c;
+     f->diagnostic_id = atomic_fetch_add(&g_submit_diagnostic, 1) + 1;
+-    if (f->diagnostic_id <= 24 && g_vendor == 0x8086)
++    if (nvmtl_submit_trace(f->diagnostic_id))
+         nvlog("first-submit: #%llu begin %s, command buffer %p", (unsigned long long)f->diagnostic_id, who ?: "?", c ? c->cb : NULL);
+     uint64_t *const pt = f->pt;
+-    if (g_state != 1 || !c || !c->cb) return -2;
++    if (g_state != 1 || !c || !c->cb) { nvlog("vk: submit FAILED phase=backend-or-command state=%d command=%p", g_state, c ? c->cb : NULL); return -2; }
+     if (c->counter_error || nvmtl_counter_flush(c)) { nvmtl_cmd_retire(c); return -1; }
+     VkCommandBuffer counter_reset = VK_NULL_HANDLE;
+     if (nvmtl_counter_reset_finish(c, &counter_reset)) { nvmtl_cmd_retire(c); return -1; }
+@@ -5305,11 +5315,11 @@
+     const uint32_t wseq = nvmtl_keep_on() ? nvmtl_wit_record(c) : 0;
+     VkResult result = pvkEndCommandBuffer(c->cb);
+     const uint64_t sB = nvmtl_perf_now();
+-    if (result != VK_SUCCESS) { nvmtl_cmd_retire(c); return -1; }
++    if (result != VK_SUCCESS) { nvlog("vk: submit FAILED phase=vkEndCommandBuffer result=%d", result); nvmtl_cmd_retire(c); return -1; }
+     VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO }; VkFence fence;
+     result = pvkCreateFence(g_dev, &fci, NULL, &fence);
+     const uint64_t sC = nvmtl_perf_now();
+-    if (result != VK_SUCCESS) { nvmtl_cmd_retire(c); return -1; }
++    if (result != VK_SUCCESS) { nvlog("vk: submit FAILED phase=vkCreateFence result=%d", result); nvmtl_cmd_retire(c); return -1; }
+     nvmtl_prologue *const pre = &f->pre;
+     pthread_mutex_lock(&nvmtl_submit_mutex);
+     if (pro && nvmtl_pre_submit_hook) {
+@@ -5341,7 +5351,7 @@
+     if (pt[0]) { pt[1] = pt[0] + (sA - pt[0]) + (sD - sC); pt[2] = pt[1] + (sB - sA) + (sE - sD); pt[3] = pt[2] + (sC - sB); }
+     result = g_state == 1 ? pvkQueueSubmit(g_queue, 1, &si, fence) : VK_ERROR_DEVICE_LOST;
+     pthread_mutex_unlock(&nvmtl_submit_mutex);
+-    if (f->diagnostic_id <= 24 && g_vendor == 0x8086)
++    if (nvmtl_submit_trace(f->diagnostic_id))
+         nvlog("first-submit: #%llu queue result %d", (unsigned long long)f->diagnostic_id, result);
+     pt[4] = nvmtl_perf_now();
+     g_cmd_submitted++;
+@@ -5366,7 +5376,7 @@
+         if (wr != VK_TIMEOUT) break;
+         if (waited_ms >= budget_ms) break;
+     }
+-    if ((f->diagnostic_id <= 24 || wr != VK_SUCCESS) && g_vendor == 0x8086)
++    if (nvmtl_submit_trace(f->diagnostic_id) || (wr != VK_SUCCESS && g_vendor == 0x8086))
+         nvlog("first-submit: #%llu fence result %d after %ld ms", (unsigned long long)f->diagnostic_id, wr, waited_ms);
+     pt[5] = nvmtl_perf_now();
+     atomic_fetch_add(&g_submit_wait_ns, clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0);
+@@ -5823,7 +5833,9 @@
+     nvmtl_vk_image_upload_barrier(img);
+     const int owned = getenv("NVMTL_READBACK_STAGE_FRESH") != NULL;
+     nvk_buffer stage = {0};
+-    if (owned ? nvmtl_vk_buffer_create(plan.bytes, 3, &stage) : nvmtl_vk_stage(q, plan.bytes, &stage)) return -1;
++    if (owned ? nvmtl_vk_buffer_create(plan.bytes, 3, &stage) : nvmtl_vk_stage(q, plan.bytes, &stage)) {
++        nvlog("readback FAILED phase=staging-allocation image=%p bytes=%zu owned=%d",img->img,plan.bytes,owned); return -1;
++    }
+     /* All staging allocation paths require HOST_VISIBLE|HOST_COHERENT. Refuse
+        an unknown or incompatible memory type rather than reading stale bytes. */
+     const uint32_t mt = stage.memtype1 ? stage.memtype1-1 : UINT32_MAX;
+@@ -5834,7 +5846,10 @@
+         if (owned) nvmtl_vk_buffer_destroy(&stage); return -1;
+     }
+     nvk_cmdbuf c;
+-    if (nvmtl_vk_cmd_begin(q, &c)) { if (owned) nvmtl_vk_buffer_destroy(&stage); return -1; }
++    if (nvmtl_vk_cmd_begin(q, &c)) {
++        nvlog("readback FAILED phase=record-begin image=%p stage=%p bytes=%zu",img->img,stage.buf,plan.bytes);
++        if (owned) nvmtl_vk_buffer_destroy(&stage); return -1;
++    }
+     static _Atomic uint64_t sequence;
+     const uint64_t id = atomic_fetch_add(&sequence,1)+1;
+     static _Atomic uint64_t image_sequence;
+@@ -5863,7 +5878,10 @@
+         (unsigned long long)id,rc,stage.buf,rc ? "retained-no-cpu-read" : owned ? "release-after-copy" : "tls-retained");
+     /* On an uncertain submission, retain its allocation. Backend shutdown
+        prevents further copies; freeing potentially pending memory is unsafe. */
+-    if (rc) return -1;
++    if (rc) {
++        nvlog("readback FAILED phase=submit-or-completion result=%d image-id=%llu stage-id=%llu; CPU destination untouched",rc,(unsigned long long)image_id,(unsigned long long)stage.trace_id);
++        return rc;
++    }
+     for (uint32_t row=0;row<plan.rows;row++) memcpy((uint8_t *)dst+(size_t)row*row_bytes,
+         (const uint8_t *)stage.map+(size_t)row*plan.packed_row,plan.packed_row);
+     if (owned) nvmtl_vk_buffer_destroy(&stage);
+--- a/NullMoth/plugin/NVMTLDevice.m
++++ b/NullMoth/plugin/NVMTLDevice.m
+@@ -97,11 +97,22 @@
+     return path;
+ }
+ void nvlog(const char *fmt, ...) {
+-    uint64_t rep; if (nvlog_dropped(fmt, &rep)) return;
++    const char *diagnostic_env = getenv("NVMTL_DIAGNOSTIC_STDERR");
++    const int diagnostic = diagnostic_env && !strcmp(diagnostic_env, "1");
++    uint64_t rep; const int dropped = nvlog_dropped(fmt, &rep);
++    if (dropped && !diagnostic) return;
+     char b[512]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a);
+     char t[640];
+     if (rep) snprintf(t, sizeof t, "%s   [logged %llu times now]", b, (unsigned long long)rep);
+     else     snprintf(t, sizeof t, "%s", b);
++    /* Explicit test clients retain failures and copy/submit traces directly,
++       independently of per-site syslog throttling or historical-log queries. */
++    if (diagnostic && nvmtl_log_failure(t)) {
++        fprintf(stderr, "NVMTL-DIAG pid=%d ns=%llu %s\n", getpid(),
++            (unsigned long long)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), t);
++        fflush(stderr);
++    }
++    if (dropped) return;
+ #if NVMTL_RELEASE
+     if (nvmtl_log_failure(t)) syslog(LOG_ERR, "NullMoth: %s", t);
+ #else

@@ -1,0 +1,239 @@
+panic(cpu 0 caller 0xffffff7fb3a737a6): NullMoth xkpi: mutex 0xffffff95128a9088 (?) used before mtx_init
+Panicked task 0xffffff90457aa980: 245 threads: pid 0: kernel_task
+Backtrace (CPU 0), panicked thread: 0xffffff86ada4db30, Frame : Return Address
+0xffffffd6c8abfa70 : 0xffffff801c9d27b1 mach_kernel : _handle_debugger_trap + 0x4c1
+0xffffffd6c8abfac0 : 0xffffff801cb48e06 mach_kernel : _kdp_i386_trap + 0x126
+0xffffffd6c8abfb00 : 0xffffff801cb37f5c mach_kernel : _kernel_trap + 0x75c
+0xffffffd6c8abfbc0 : 0xffffff801c967971 mach_kernel : _return_from_trap + 0xc1
+0xffffffd6c8abfbe0 : 0xffffff801c9d2aa7 mach_kernel : _DebuggerTrapWithState + 0x67
+0xffffffd6c8abfce0 : 0xffffff801c9d212b mach_kernel : _panic_trap_to_debugger + 0x1fb
+0xffffffd6c8abfd50 : 0xffffff801d1d07bd mach_kernel : _panic + 0x81
+0xffffffd6c8abfe40 : 0xffffff7fb3a737a6 com.nullmoth.NMXGPU : _nmx_mtx_lock.cold.1 + 0x26
+0xffffffd6c8abfe50 : 0xffffff7fb3a3b996 com.nullmoth.NMXGPU : _nmx_mtx_lock + 0x66
+0xffffffd6c8abfe80 : 0xffffff7fb3987a31 com.nullmoth.NMXGPU : _guc_retire_inflight_request_prio + 0x31
+0xffffffd6c8abfeb0 : 0xffffff7fb38c7a64 com.nullmoth.NMXGPU : _signal_irq_work + 0x154
+0xffffffd6c8abff20 : 0xffffff7fb3a2e3b6 com.nullmoth.NMXGPU : _linux_irq_work_fn + 0x16
+0xffffffd6c8abff40 : 0xffffff7fb3a4415b com.nullmoth.NMXGPU : _taskqueue_run_locked + 0x4b
+0xffffffd6c8abff70 : 0xffffff7fb3a44338 com.nullmoth.NMXGPU : _taskqueue_thread_loop + 0x38
+0xffffffd6c8abffa0 : 0xffffff801c96719e mach_kernel : _call_continuation + 0x2e
+      Kernel Extensions in backtrace:
+         com.nullmoth.NMXGPU(1.0.13)[121AACAE-4C53-3357-9356-38C79222A842]@0xffffff7fb37fb000->0xffffff7fb3ae9fff
+            dependency: com.apple.iokit.IOACPIFamily(1.4)[50D529B0-A929-3533-839B-6CE41FC937F2]@0xffffff801ea07000->0xffffff801ea08fff
+            dependency: com.apple.iokit.IOGraphicsFamily(599)[CA8B49BC-3655-312C-91AA-FB848251C78E]@0xffffff7fb2294000->0xffffff7fb22c2fff
+            dependency: com.apple.iokit.IOPCIFamily(2.9)[14F7449E-38DC-3E0F-8AFF-51A4550C9FFE]@0xffffff801ee86000->0xffffff801eebafff
+
+Process name corresponding to current thread (0xffffff86ada4db30): kernel_task
+Boot args: -v debug=0x100 keepsyms=1 itlwm_he=1 itlwm_mtl_internal_aux=1 amfi_get_out_of_my_way=0x1 amfi=0x80 ipc_control_port_options=0 
+
+Mac OS version:
+24H32
+
+Kernel version:
+Darwin Kernel Version 24.6.0: Sun Aug 23 20:30:56 PDT 2026; root:xnu-11417.140.69.712.69~1/RELEASE_X86_64
+Kernel UUID: B7B3E8AD-9CA6-382C-BD56-8D52139342A4
+roots installed: 0
+KernelCache slide: 0x000000001c600000
+KernelCache base:  0xffffff801c800000
+Kernel slide:      0x000000001c6e8000
+Kernel text base:  0xffffff801c8e8000
+__HIB  text base: 0xffffff801c700000
+System model name: MacBookPro16,2 (Mac-5F9802EFE386AA28)
+System shutdown begun: NO
+Panic diags file available: YES (0x0)
+Hibernation exit count: 0
+
+System uptime in nanoseconds: 8036765554
+Last Sleep:           absolute           base_tsc          base_nano
+  Uptime  : 0x00000001df1e5bd5
+  Sleep   : 0x0000000000000000 0x0000000000000000 0x0000000000000000
+  Wake    : 0x0000000000000000 0x0000001a5f991d9f 0x0000000000000000
+Compressor Info: 0% of compressed pages limit (OK) and 0% of segments limit (OK) with 0 swapfiles and OK swap space
+Zone info:
+  Zone map: 0xffffff8044837000 - 0xffffffa044837000
+  . PGZ   : 0xffffff8044837000 - 0xffffff8046838000
+  . VM    : 0xffffff8046838000 - 0xffffff8513037000
+  . RO    : 0xffffff8513037000 - 0xffffff86ac841000
+  . GEN0  : 0xffffff86ac841000 - 0xffffff8b79040000
+  . GEN1  : 0xffffff8b79040000 - 0xffffff904583f000
+  . GEN2  : 0xffffff904583f000 - 0xffffff951203e000
+  . GEN3  : 0xffffff951203e000 - 0xffffff99de83d000
+  . DATA  : 0xffffff99de83d000 - 0xffffffa044837000
+  Metadata: 0xffffffd6a1fc5000 - 0xffffffd6c1fc5000
+  Bitmaps : 0xffffffd6c1fc5000 - 0xffffffd6c4fc5000
+  Extra   : 0 - 0
+
+last started kext at 7958531043: @UVCService	1 (addr 0xffffff7fb2500000, size 4096)
+loaded kexts:
+com.nullmoth.LatitudeMTLFB	0.2.4
+com.nullmoth.NMXAGDC	0.1
+com.nullmoth.NMXAccel	0.2.4
+com.nullmoth.NMXNPU	1.0.0
+com.nullmoth.NMXGPU	1.0.13
+as.acidanthera.voodoo.driver.PS2Keyboard	2.3.8
+as.acidanthera.voodoo.driver.PS2Mouse	2.3.8
+as.acidanthera.voodoo.driver.PS2Trackpad	2.3.8
+me.kishorprins.VoodooInput	1.1.7
+com.alexandred.VoodooI2CHID	1
+ru.joedm.SMCSuperIO	1.3.9
+com.alexandred.VoodooI2C	2.9.1
+com.zxystd.AirportItlwm	2.4.0
+com.dhinakg.USBToolBox.kext	1.2.0
+com.vedcloud.LatitudeMTLProbe	0.1.0
+com.nullmoth.LatitudePanelClaim	0.2.3
+fish.goldfish64.UEFIGraphicsFB	1.0.0
+org.coolstar.VoodooGPIO	1.2.0
+as.acidanthera.voodoo.driver.PS2!C	2.3.8
+as.vit9696.SMCProcessor	1.3.9
+com.dhinakg.AMFIPass	1.4.1
+com.alexandred.VoodooI2CServices	1
+ru.usrsse2.SMCLightSensor	1.3.9
+ru.usrsse2.SMCBatteryManager	1.3.9
+as.vit9696.VirtualSMC	1.3.9
+as.vit9696.RestrictEvents	1.1.7
+org.acidanthera.NVMeFix	1.1.4
+as.acidanthera.BrightnessKeys	1.0.4
+as.vit9696.Lilu	1.7.3
+@UVCService	1
+@filesystems.autofs	3.0
+>!AGraphicsDevicePolicy	8.1.10
+@AGDCPluginDisplayMetrics	8.1.10
+>!ASMCLMU	7400.2
+>pmtelemetry	1
+@filesystems.nfs	1
+|IOUserEthernet	1.0.1
+>usb.!UUserHCI	1
+>!ARXE	1.0
+>!AHV	1
+>!AUpstreamUserClient	3.6.12
+>!AFIVRDriver	4.1.0
+>AGDCBacklightControl	8.1.10
+>!A!ISlowAdaptiveClocking	4.0.0
+>!ABacklight	180.12
+>!AMCCSControl	1.17
+>ACPI_SMC_PlatformPlugin	1.0.0
+|SCSITaskUserClient	500.120.2
+>!UMass!SInterfaceNub	556
+>!ATopCaseHIDEventDriver	8421.2
+>!AFileSystemDriver	3.0.1
+@filesystems.tmpfs	1
+@filesystems.lifs	1
+@filesystems.hfs.kext	683.120.3
+@BootCache	40
+@!AFSCompression.!AFSCompressionTypeZlib	1.0.0
+@!AFSCompression.!AFSCompressionTypeDataless	1.0.0d1
+>!ASmartBatteryManager	161.0.0
+@filesystems.apfs	2332.140.13
+@private.KextAudit	1.0
+>!AACPIButtons	6.1
+>!AACPIEC	6.1
+>!ARTC	2.0.1
+>!AHPET	1.8
+>!ASMBIOS	2.1
+>!AAPIC	1.7
+@!ASystemPolicy	2.0.0
+@nke.applicationfirewall	406
+|IOKitRegistryCompatibility	1
+|EndpointSecurity	1
+@Dont_Steal_Mac_OS_X	7.0.0
+>!ADiskImages2	385.140.4
+@kec.!AEncryptedArchive	1
+>!AHDA!C	600.2
+|IOHDA!F	600.2
+>!UAudio	760.1
+|IOAudio!F	600.2
+@vecLib.kext	1.2.0
+>!AAudioClockLibs	420.3
+>!A16X50Serial	3.2
+>!AGraphicsControl	8.1.10
+>!ASMBusPCI	1.0.14d1
+@kext.triggers	1.0
+>IOHIDPowerSource	1
+>!ACallbackPowerSource	1
+|IOAVB!F	1320.3
+@plugin.IOgPTPPlugin	1340.15
+>!AUIO	1
+|IORDMA!F	1.0
+>!ARSMChannel	1
+|IORSM!F	1
+>!AIPAppender	1.0
+|IOAccelerator!F2	485.2
+@!AGPUWrangler	8.1.10
+@!AGraphicsDeviceControl	8.1.10
+|IOSlowAdaptiveClocking!F	1.0.0
+>!ABacklightExpert	180.12
+>!ASMBus!C	1.0.18d1
+>IOPlatformPluginLegacy	1.0.0
+>X86PlatformPlugin	1.0.0
+>IOPlatformPlugin!F	6.0.0d8
+>driverkit.serial	6.0.0
+|IOSerial!F	11
+|IONDRVSupport	599
+|IOGraphics!F	599
+>usb.cdc	5.0.0
+>usb.networking	5.0.0
+>usb.!UHostCompositeDevice	1.2
+>!AHS!BDriver	8421.2
+>IO!BHIDDriver	9.0.0
+>!AActuatorDriver	8440.6.1
+>!AMultitouchDriver	8440.6.1
+>!AInputDeviceSupport	8440.2
+>!ABSDKextStarter	3
+|IOSurface	372.5.2
+@filesystems.hfs.encodings.kext	1
+>!ASyntheticGame!C	12.6.1
+>usb.!UHostPacketFilter	1.0
+|IOUSB!F	900.4.2
+>!AXsanScheme	3
+|IONVMe!F	2.1.0
+|IO80211!F	1200.13.1
+>corecapture	1.0.4
+>usb.!UXHCIPCI	1.2
+>usb.!UXHCI	1.2
+>!AEFINVRAM	2.1
+>!AEFIRuntime	2.1
+|IOSMBus!F	1.1
+|IOHID!F	2.0.0
+|IOTimeSync!F	1340.15
+|IOSkywalk!F	1.0
+>mDNSOffloadUserClient	1.0.1b8
+|IONetworking!F	3.4
+>DiskImages	493.0.0
+|IO!B!F	9.0.0
+|IOReport!F	47
+$quarantine	4
+$sandbox	300.0
+@kext.!AMatch	1.0.0d1
+>!ASSE	1.0
+>!ALockdownMode	1
+>!AKeyStore	2
+>!UTDM	556
+|IOUSBMass!SDriver	259.100.1
+|IOUSBHost!F	1.2
+>!UHostMergeProperties	1.2
+>usb.!UCommon	1.0
+>!ABusPower!C	1.0
+|IOSCSIBlockCommandsDevice	500.120.2
+|IOSCSIArchitectureModel!F	500.120.2
+>!AFDEKeyStore	28.30
+>!AEffaceable!S	1.0
+|IO!S!F	2.1
+>!ACyrus	1
+>!AMobileFileIntegrity	1.0.5
+$!AImage4	7.0.0
+@kext.CoreTrust	1
+>!ACredentialManager	1.0
+|CoreAnalytics!F	1
+>!ASEPManager	1.0.1
+>IOSlaveProcessor	1
+>!AACPIPlatform	6.1
+>!ASMC	3.1.9
+|IOPCI!F	2.9
+|IOACPI!F	1.4
+>watchdog	1
+@kec.pthread	1
+@kec.XrtHostedXnu	1
+@kec.Libm	1
+@kec.Compression	1.0
+@kec.corecrypto	14.0
+
+

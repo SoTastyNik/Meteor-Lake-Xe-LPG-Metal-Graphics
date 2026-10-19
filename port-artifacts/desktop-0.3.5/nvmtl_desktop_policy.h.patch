@@ -1,0 +1,21 @@
+--- a/plugin/nvmtl_desktop_policy.h
++++ b/plugin/nvmtl_desktop_policy.h
+@@ -19,3 +19,18 @@
+ {
+     return nvmtl_windowserver_serial_policy(vendor,device,process);
+ }
++
++/* Set before the Intel ICD is loaded: its debug parser is process-once. */
++#include <stdlib.h>
++#include <stdio.h>
++#include <errno.h>
++static inline int nvmtl_windowserver_disable_ccs(uint16_t vendor,uint16_t device,const char *process)
++{
++    if(!nvmtl_windowserver_serial_policy(vendor,device,process))return 0;
++    const char *previous=getenv("INTEL_DEBUG");
++    char flags[4096];
++    int n=snprintf(flags,sizeof flags,"%s%snoccs",previous?previous:"",previous&&*previous?",":"");
++    if(n<0||(size_t)n>=sizeof flags)return -E2BIG;
++    if(setenv("INTEL_DEBUG",flags,1))return -errno;
++    return 1;
++}

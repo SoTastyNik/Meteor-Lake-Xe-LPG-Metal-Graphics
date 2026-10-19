@@ -1,0 +1,39 @@
+--- a/plugin/nvmtl_vk.c
++++ b/plugin/nvmtl_vk.c
+@@ -685,6 +685,8 @@
+             nvlog("first-submit: 8086:7d45 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
+         else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
+     }
++    if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))
++        nvlog("desktop-policy: WindowServer 8086:7d45 serial completion, submit-ahead disabled, schedule-after-surface-publication; fresh command pools remain enforced");
+     if (!getenv("NVRM_FLUSH_TIMEOUT_MS")) {
+         char budget[32]; snprintf(budget, sizeof budget, "%ld", nvmtl_gpu_wait_budget_ms());
+         setenv("NVRM_FLUSH_TIMEOUT_MS", budget, 1);
+@@ -2479,6 +2481,12 @@
+         (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | (stage && !strcmp(stage,"1")?16u:0u);
+ }
+ static pthread_mutex_t nvmtl_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
++static pthread_mutex_t nvmtl_desktop_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
++int nvmtl_vk_windowserver_serial(void)
++{
++    return nvmtl_windowserver_serial_policy(g_vendor,g_pci_device,getprogname());
++}
++
+ /* created, destroyed, live, peak, quarantined, pending, completed, abandoned */
+ static uint64_t g_command_pool_stats[8];
+ static pthread_mutex_t g_command_pool_stats_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -5316,9 +5324,13 @@
+ }
+ int nvmtl_vk_submit_wait_at(nvk_cmdbuf *c, const char *who)
+ {
++    const int serial=nvmtl_vk_windowserver_serial();
++    if(serial)pthread_mutex_lock(&nvmtl_desktop_submit_mutex);
+     nvmtl_inflight f;
+     const int r = nvmtl_vk_submit_begin_at(c, &f, who);
+-    return r ? r : nvmtl_vk_submit_finish(&f);
++    const int result=r ? r : nvmtl_vk_submit_finish(&f);
++    if(serial)pthread_mutex_unlock(&nvmtl_desktop_submit_mutex);
++    return result;
+ }
+ int nvmtl_vk_submit_begin_at(nvk_cmdbuf *c, nvmtl_inflight *f, const char *who)
+ {

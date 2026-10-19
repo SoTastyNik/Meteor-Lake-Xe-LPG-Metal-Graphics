@@ -1,0 +1,2 @@
+PASS actual 22-case runner: both routes, mandatory fresh policy/cleanup/IOSurface checks; missing policy, pool imbalance marker, hang and incomplete history block gate
+PASS actual desktop arm: suite failure, absent/stale gate never arm; passing gate arms once; partial NVRAM failure clears both markers

@@ -1,0 +1,22 @@
+Collecting meson
+  Downloading meson-1.12.1-py3-none-any.whl.metadata (1.7 kB)
+Collecting ninja
+  Downloading ninja-1.13.2-py3-none-macosx_10_9_universal2.whl.metadata (5.4 kB)
+Collecting mako
+  Downloading mako-1.4.3-py3-none-any.whl.metadata (2.9 kB)
+Collecting pyyaml
+  Downloading pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl.metadata (2.4 kB)
+Collecting packaging
+  Downloading packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting MarkupSafe>=2.0 (from mako)
+  Downloading markupsafe-3.0.4-cp311-cp311-macosx_11_0_arm64.whl.metadata (2.7 kB)
+Downloading meson-1.12.1-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 34.0 MB/s  0:00:00
+Downloading ninja-1.13.2-py3-none-macosx_10_9_universal2.whl (306 kB)
+Downloading mako-1.4.3-py3-none-any.whl (80 kB)
+Downloading pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl (175 kB)
+Downloading packaging-26.3-py3-none-any.whl (129 kB)
+Downloading markupsafe-3.0.4-cp311-cp311-macosx_11_0_arm64.whl (12 kB)
+Installing collected packages: pyyaml, packaging, ninja, meson, MarkupSafe, mako
+
+Successfully installed MarkupSafe-3.0.4 mako-1.4.3 meson-1.12.1 ninja-1.13.2 packaging-26.3 pyyaml-6.0.3

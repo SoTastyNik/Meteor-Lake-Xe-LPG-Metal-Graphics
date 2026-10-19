@@ -1,0 +1,33 @@
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -2482,6 +2482,12 @@
+     const char *e=getenv("NVMTL_COMMAND_POOL_FRESH");
+     return e && !strcmp(e,"1");
+ }
++uint32_t nvmtl_vk_diagnostic_policy(void)
++{
++    const char *d=getenv("NVMTL_DIAGNOSTIC_STDERR"), *t=getenv("NVMTL_READBACK_TRACE"), *stage=getenv("NVMTL_READBACK_STAGE_FRESH");
++    return (d && !strcmp(d,"1") ? 1u:0u) | (nvmtl_command_pool_fresh()?2u:0u) |
++        (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | (stage && !strcmp(stage,"1")?16u:0u);
++}
+ static VkCommandPool nvmtl_keep_pool_pop(void)
+ {
+     VkCommandPool p = VK_NULL_HANDLE;
+--- a/NullMoth/plugin/NVMTLObjects.m
++++ b/NullMoth/plugin/NVMTLObjects.m
+@@ -80,12 +80,15 @@
+ static void nvmtl_res2_note_use(NVMTLTexture *t);
+ static uint64_t nvmtl_res2_evict(uint64_t want);
+ extern uint64_t (*nvmtl_res2_evict_hook)(uint64_t want);
++#include "nvmtl_probe_controls.h"
+ __attribute__((constructor)) static void nvmtl_conf_knobs(void)
+ {
+ #if NVMTL_RELEASE
+     { extern char **environ; char *names[256]; unsigned n = 0;
++      const int probe=nvmtl_probe_controls_enabled(getprogname(),getenv("NVMTL_DIAGNOSTIC_STDERR"));
+       for (char **e = environ; e && *e && n < 256; e++)
+           if (!strncmp(*e, "NVMTL_", 6) || !strncmp(*e, "NVK_", 4) || !strncmp(*e, "NAK_", 4) || !strncmp(*e, "NVRM_", 5)) {
++              if (probe && nvmtl_probe_control_entry(*e)) continue;
+               const char *eq = strchr(*e, '='); if (!eq) continue;
+               names[n] = strndup(*e, (size_t)(eq - *e)); if (names[n]) n++; }
+       for (unsigned i = 0; i < n; i++) { unsetenv(names[i]); free(names[i]); } }

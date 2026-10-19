@@ -1,0 +1,6 @@
+PASS actual release constructor: effective=13 expected=13
+PASS actual release constructor: effective=15 expected=15
+PASS actual release constructor: effective=29 expected=29
+PASS actual release constructor: effective=4 expected=4
+PASS actual release constructor: effective=4 expected=4
+PASS real native release plugin startup: test controls survive only for explicit probe; unrelated controls and other processes remain scrubbed

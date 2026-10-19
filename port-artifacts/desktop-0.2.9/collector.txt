@@ -1,0 +1,1 @@
+PASS actual read-only collector with mocked system commands: report-derived time window, saved evidence, NVRAM queries only, watchdog does not hold terminal pipe open

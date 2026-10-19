@@ -1,0 +1,1 @@
+PASS actual release logger: explicit stderr diagnostics survive per-site throttle; unset/zero stay off; routine messages excluded; syslog throttle unchanged

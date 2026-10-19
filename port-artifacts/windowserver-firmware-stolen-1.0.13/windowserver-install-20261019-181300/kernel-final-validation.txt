@@ -1,0 +1,1 @@
+Verified com.nullmoth.NMXGPU 1.0.13 UUID=121AACAE-4C53-3357-9356-38C79222A842 path=/Library/Extensions/NMXGPU.kext

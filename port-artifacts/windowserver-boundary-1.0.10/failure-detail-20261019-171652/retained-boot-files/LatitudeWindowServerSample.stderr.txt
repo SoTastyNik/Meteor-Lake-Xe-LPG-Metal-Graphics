@@ -1,0 +1,4 @@
+2026-10-19 17:15:00.084 sample[399:2611] pid_for_task(1e03) failed with error 5: (os/kern) failure
+Sampling process 0 for 3 seconds with 10 milliseconds of run time between samples
+Sampling completed, processing symbols...
+Sample reported success without a usable target stack

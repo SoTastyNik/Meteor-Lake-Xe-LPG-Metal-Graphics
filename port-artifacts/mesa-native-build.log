@@ -1,0 +1,7 @@
+ninja: Entering directory `/Users/ved/igpu-build/mesa-native'
+[1/4] Linking static target src/compiler/clc/liblibmesaclc.a
+[2/4] Linking static target src/compiler/nir/libnir.a
+[3/4] Linking target src/compiler/spirv/vtn_bindgen2
+ld: warning: ignoring duplicate libraries: '-lz'
+[4/4] Linking target src/compiler/clc/mesa_clc
+ld: warning: ignoring duplicate libraries: '-lLLVM-20', '-lz'

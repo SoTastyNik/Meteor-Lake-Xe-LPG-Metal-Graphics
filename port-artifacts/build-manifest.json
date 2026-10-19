@@ -1,0 +1,24 @@
+{
+  "myintelgpu_base": "b8b17d8eefb37ee6ca4042be4f1dcd2a57fb57eb",
+  "nullmoth_base": "d96eaca",
+  "nullmoth_patched_head": "357c0d7c26c8cc7350940fff30bc669ba118b766",
+  "nullmoth_patches": {
+    "driver": 47,
+    "xkpi": 50
+  },
+  "drm_kmod_base": "c16de0f9fa84f70b9551f69fde837a7f3a73c0e9",
+  "probe_binary_sha256": "583813adf94669a6b90573e6fb1d86ccd101338ef132f7b4fbf1d9afe7403e8d",
+  "validated": [
+    "Probe x86_64 kext builds and plist parses",
+    "10 patched NullMoth IOKit translation units compile for x86_64",
+    "7D45 exists in pinned drm-kmod Meteor Lake PCI table",
+    "EDID block checksum valid and preferred clock 147750 kHz",
+    "Active OpenCore plist parses; enabled kext paths exist"
+  ],
+  "unverified": [
+    "Target boot and diagnostic attachment",
+    "Full NMXGPU link and kernel collection validation",
+    "i915 hardware initialization, firmware, physical display",
+    "Metal shader translation, rendering and WindowServer integration"
+  ]
+}

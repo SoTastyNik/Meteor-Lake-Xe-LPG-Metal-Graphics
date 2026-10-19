@@ -1,0 +1,1 @@
+PASS diagnostic guards: desktop installer/arming entry points blocked; GPU-only boot helper clears panel marker and refuses to arm if panel marker remains (mocked NVRAM)

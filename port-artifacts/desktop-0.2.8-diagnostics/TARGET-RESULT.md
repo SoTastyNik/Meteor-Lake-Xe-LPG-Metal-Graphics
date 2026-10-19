@@ -1,0 +1,9 @@
+# Candidate 0.2.7 target result: IOKit works, long-run readback fails
+
+Report: Desktop/reports/readback-20261018-203542. Install succeeded. IOKit enumeration/open/token identity/nested-pointer ioctl probe passed. Small raw, small render and full-HD render each passed 1,000 frames through verified IOKit transport. Padded full-HD readback failed at zero-based frame 745: channel 0 of pixel (0,0) remained 165 (0xA5, the initial destination fill), expected 33. It made 2,007,898 IOKit ioctl calls, zero direct calls. The ioctl count alone does not establish a fault cause. The test stopped before pool/staging A/B or IOSurface tests. No desktop gate or panel opt-in was set by the failed suite.
+
+The untouched destination is consistent with an early readback error, but the existing public getBytes API is void. It is not proof of a stride arithmetic defect, GPU data corruption or a specific fence failure. The historical log search timed out while still reading earlier 20:18 events, before the current 20:35 boot. Its absence of a current GPU error is not useful evidence.
+
+A read-only collector now queries a narrow failure-time interval derived from the report timestamp, captures kernel/NVMTL/IOKit messages, and saves current boot/registry/dmesg without issuing GPU tests or changing boot variables. Run `sudo /bin/bash /Volumes/SEQOUIA/iGPU-Port/collect-readback-failure.sh` on the Dell before another install or reboot. Save the USB afterward for inspection.
+
+Local diagnostic build 0.2.8 is prepared but is NOT the USB runtime: explicit test-only stderr logging survives syslog throttling; readback and submit errors identify their phase; a revised runner captures kernel events live, bounds historical search to the current run and provides one-variable retained/fresh-pool/fresh-staging profiles. No GPU execution fix is claimed from this evidence. USB runtime remains 0.2.7 pending recovery of its original error.

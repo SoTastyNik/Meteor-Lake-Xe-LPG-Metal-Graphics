@@ -1,0 +1,1 @@
+PASS actual command-pool cache: fresh-pool switch bypasses pop/push without disabling the shared keep/witness policy; zero restores normal reuse

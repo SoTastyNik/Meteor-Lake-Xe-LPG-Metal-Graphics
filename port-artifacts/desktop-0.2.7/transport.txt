@@ -1,0 +1,1 @@
+PASS actual transport implementation: forced route isolation, no cross-file fallback, invalid-mode rejection, counters, normal direct success

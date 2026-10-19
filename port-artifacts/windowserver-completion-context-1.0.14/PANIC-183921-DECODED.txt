@@ -1,0 +1,202 @@
+panic(cpu 0 caller 0xffffff801e1385ba): Kernel trap at 0xffffff8021d79189, type = 14=page fault, registers:
+CR0: 0x000000008001003b, CR2: 0x0000000000000000, CR3: 0x0000000036e42000, CR4: 0x00000000003626e0
+RAX: 0x0000000000000000, RBX: 0xffffffa59513be00, RCX: 0xffffff801dea99c8, RDX: 0x0000000000000001
+RSP: 0xfffffffdff4a7c50, RBP: 0xfffffffdff4a7c80, RSI: 0xffffff801ef34ad8, RDI: 0x0000000000000000
+R8:  0x0000000000010001, R9:  0x0000000000000001, R10: 0x0000100000000000, R11: 0x0000000000000030
+R12: 0x0000000000010101, R13: 0xffffff8021d80311, R14: 0xffffffaf2d9f9858, R15: 0x000000021f50ceca
+RFL: 0x0000000000010246, RIP: 0xffffff8021d79189, CS:  0x0000000000000008, SS:  0x0000000000000010
+Fault CR2: 0x0000000000000000, Error code: 0x0000000000000000, Fault CPU: 0x0, PL: 0, VF: 1
+
+Panicked task 0xffffffa594ee6980: 251 threads: pid 0: kernel_task
+Backtrace (CPU 0), panicked thread: 0xffffffa0c8837598, Frame : Return Address
+0xfffffffdff4a74f0 : 0xffffff801dfd27b1 mach_kernel : _handle_debugger_trap + 0x4c1
+0xfffffffdff4a7540 : 0xffffff801e148e06 mach_kernel : _kdp_i386_trap + 0x126
+0xfffffffdff4a7580 : 0xffffff801e137f5c mach_kernel : _kernel_trap + 0x75c
+0xfffffffdff4a7640 : 0xffffff801df67971 mach_kernel : _return_from_trap + 0xc1
+0xfffffffdff4a7660 : 0xffffff801dfd2aa7 mach_kernel : _DebuggerTrapWithState + 0x67
+0xfffffffdff4a7760 : 0xffffff801dfd212b mach_kernel : _panic_trap_to_debugger + 0x1fb
+0xfffffffdff4a77d0 : 0xffffff801e7d07bd mach_kernel : _panic + 0x81
+0xfffffffdff4a78c0 : 0xffffff801e1385ba mach_kernel : _sync_iss_to_iks + 0x3fa
+0xfffffffdff4a7a80 : 0xffffff801e138169 mach_kernel : _kernel_trap + 0x969
+0xfffffffdff4a7b40 : 0xffffff801df67971 mach_kernel : _return_from_trap + 0xc1
+0xfffffffdff4a7b60 : 0xffffff8021d79189 com.alexandred.VoodooI2CHID : __ZN34VoodooI2CTouchscreenHIDEventDriver13forwardReportE24VoodooI2CMultitouchEventy + 0x4f
+0xfffffffdff4a7c80 : 0xffffff8021d7a45c com.alexandred.VoodooI2CHID : __ZN33VoodooI2CMultitouchHIDEventDriver21handleInterruptReportEyP18IOMemoryDescriptor15IOHIDReportTypej + 0x138
+0xfffffffdff4a7cd0 : 0xffffff802015d329 com.apple.iokit.IOHIDFamily : __ZN11IOHIDDevice20handleReportWithTimeEyP18IOMemoryDescriptor15IOHIDReportTypej + 0x2e5
+0xfffffffdff4a7d70 : 0xffffff802015c944 com.apple.iokit.IOHIDFamily : __ZN11IOHIDDevice12handleReportEP18IOMemoryDescriptor15IOHIDReportTypej + 0x68
+0xfffffffdff4a7db0 : 0xffffff8021d7dc91 com.alexandred.VoodooI2CHID : __ZN18VoodooI2CHIDDevice14getInputReportEv + 0xa9
+0xfffffffdff4a7de0 : 0xffffff8021d7e8f6 com.alexandred.VoodooI2CHID : __ZN18VoodooI2CHIDDevice17simulateInterruptEP8OSObjectP18IOTimerEventSource + 0x2e
+0xfffffffdff4a7e20 : 0xffffff801e7007b3 mach_kernel : __ZN18IOTimerEventSource15timeoutSignaledEPvS0_ + 0x83
+0xfffffffdff4a7e70 : 0xffffff801e7006d6 mach_kernel : __ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_ + 0xc6
+0xfffffffdff4a7ea0 : 0xffffff801e031b58 mach_kernel : _thread_call_delayed_timer + 0x508
+0xfffffffdff4a7ee0 : 0xffffff801e032ba8 mach_kernel : _thread_call_delayed_timer + 0x1558
+0xfffffffdff4a7fa0 : 0xffffff801df6719e mach_kernel : _call_continuation + 0x2e
+      Kernel Extensions in backtrace:
+         com.apple.iokit.IOHIDFamily(2.0)[850A8057-663C-3F78-AC63-77312849D80A]@0xffffff802014f000->0xffffff80201b3fff
+            dependency: com.apple.iokit.IOReportFamily(47)[20EEB3ED-6CA5-30ED-B214-C69C5EAFF776]@0xffffff80204cb000->0xffffff80204cdfff
+         com.alexandred.VoodooI2CHID(1.0)[92D5DDB4-D6CC-3D21-892D-DD1BDFF81676]@0xffffff8021d77000->0xffffff8021da8fff
+            dependency: com.alexandred.VoodooI2C(2.9.1)[82522B9F-18B4-3AC2-884D-2157C83E9983]@0xffffff8021d3a000->0xffffff8021d59fff
+            dependency: com.apple.iokit.IOACPIFamily(1.4)[50D529B0-A929-3533-839B-6CE41FC937F2]@0xffffff8020007000->0xffffff8020008fff
+            dependency: com.apple.iokit.IOHIDFamily(2.0.0)[850A8057-663C-3F78-AC63-77312849D80A]@0xffffff802014f000->0xffffff80201b3fff
+
+Process name corresponding to current thread (0xffffffa0c8837598): kernel_task
+Boot args: -v debug=0x100 keepsyms=1 itlwm_he=1 itlwm_mtl_internal_aux=1 amfi_get_out_of_my_way=0x1 amfi=0x80 ipc_control_port_options=0 
+
+Mac OS version:
+24H32
+
+Kernel version:
+Darwin Kernel Version 24.6.0: Sun Aug 23 20:30:56 PDT 2026; root:xnu-11417.140.69.712.69~1/RELEASE_X86_64
+Kernel UUID: B7B3E8AD-9CA6-382C-BD56-8D52139342A4
+roots installed: 0
+KernelCache slide: 0x000000001dc00000
+KernelCache base:  0xffffff801de00000
+Kernel slide:      0x000000001dce8000
+Kernel text base:  0xffffff801dee8000
+__HIB  text base: 0xffffff801dd00000
+System model name: MacBookPro16,2 (Mac-5F9802EFE386AA28)
+System shutdown begun: NO
+Panic diags file available: YES (0x0)
+Hibernation exit count: 0
+
+System uptime in nanoseconds: 9116137187
+Last Sleep:           absolute           base_tsc          base_nano
+  Uptime  : 0x000000021f5d397f
+  Sleep   : 0x0000000000000000 0x0000000000000000 0x0000000000000000
+  Wake    : 0x0000000000000000 0x000000166901bce9 0x0000000000000000
+Compressor Info: 0% of compressed pages limit (OK) and 0% of segments limit (OK) with 0 swapfiles and OK swap space
+Zone info:
+  Zone map: 0xffffff9a6061c000 - 0xffffffba6061c000
+  . PGZ   : 0xffffff9a6061c000 - 0xffffff9a6261d000
+  . VM    : 0xffffff9a6261d000 - 0xffffff9f2ee1c000
+  . RO    : 0xffffff9f2ee1c000 - 0xffffffa0c8626000
+  . GEN0  : 0xffffffa0c8626000 - 0xffffffa594e25000
+  . GEN1  : 0xffffffa594e25000 - 0xffffffaa61624000
+  . GEN2  : 0xffffffaa61624000 - 0xffffffaf2de23000
+  . GEN3  : 0xffffffaf2de23000 - 0xffffffb3fa622000
+  . DATA  : 0xffffffb3fa622000 - 0xffffffba6061c000
+  Metadata: 0xffffff805f6b8000 - 0xffffff807f6b8000
+  Bitmaps : 0xffffff807f6b8000 - 0xffffff80826b8000
+  Extra   : 0 - 0
+
+last started kext at 8646996894: >!APlatformEnabler	2.7.0d0 (addr 0xffffff7fb3431000, size 8192)
+loaded kexts:
+com.nullmoth.LatitudeMTLFB	0.2.4
+com.nullmoth.NMXAccel	0.2.4
+com.nullmoth.NMXAGDC	0.1
+com.nullmoth.NMXGPU	1.0.14
+com.nullmoth.NMXNPU	1.0.0
+as.acidanthera.voodoo.driver.PS2Mouse	2.3.8
+as.acidanthera.voodoo.driver.PS2Keyboard	2.3.8
+as.acidanthera.voodoo.driver.PS2Trackpad	2.3.8
+me.kishorprins.VoodooInput	1.1.7
+com.alexandred.VoodooI2CHID	1
+ru.joedm.SMCSuperIO	1.3.9
+com.alexandred.VoodooI2C	2.9.1
+com.zxystd.AirportItlwm	2.4.0
+com.dhinakg.USBToolBox.kext	1.2.0
+com.vedcloud.LatitudeMTLProbe	0.1.0
+com.nullmoth.LatitudePanelClaim	0.2.3
+as.acidanthera.voodoo.driver.PS2!C	2.3.8
+org.coolstar.VoodooGPIO	1.2.0
+fish.goldfish64.UEFIGraphicsFB	1.0.0
+as.vit9696.SMCProcessor	1.3.9
+com.dhinakg.AMFIPass	1.4.1
+com.alexandred.VoodooI2CServices	1
+ru.usrsse2.SMCLightSensor	1.3.9
+ru.usrsse2.SMCBatteryManager	1.3.9
+as.vit9696.VirtualSMC	1.3.9
+as.vit9696.RestrictEvents	1.1.7
+org.acidanthera.NVMeFix	1.1.4
+as.acidanthera.BrightnessKeys	1.0.4
+as.vit9696.Lilu	1.7.3
+>!APlatformEnabler	2.7.0d0
+>AGPM	137
+>X86PlatformShim	1.0.0
+@UVCService	1
+>!AGraphicsDevicePolicy	8.1.10
+@filesystems.autofs	3.0
+@AGDCPluginDisplayMetrics	8.1.10
+>pmtelemetry	1
+@filesystems.nfs	1
+|IOUserEthernet	1.0.1
+>usb.!UUserHCI	1
+>!ARXE	1.0
+>!AHV	1
+>!ASMCLMU	7400.2
+>!AUpstreamUserClient	3.6.12
+>AGDCBacklightControl	8.1.10
+>!ABacklight	180.12
+>!AMCCSControl	1.17
+>!A!ISlowAdaptiveClocking	4.0.0
+>!AFIVRDriver	4.1.0
+>ACPI_SMC_PlatformPlugin	1.0.0
+|SCSITaskUserClient	500.120.2
+>!UMass!SInterfaceNub	556
+>!ATopCaseHIDEventDriver	8421.2
+>!AFileSystemDriver	3.0.1
+@filesystems.tmpfs	1
+@filesystems.lifs	1
+@filesystems.hfs.kext	683.120.3
+@BootCache	40
+@!AFSCompression.!AFSCompressionTypeZlib	1.0.0
+@!AFSCompression.!AFSCompressionTypeDataless	1.0.0d1
+>!ASmartBatteryManager	161.0.0
+@filesystems.apfs	2332.140.13
+@private.KextAudit	1.0
+>!ARTC	2.0.1
+>!AACPIButtons	6.1
+>!AACPIEC	6.1
+>!AHPET	1.8
+>!ASMBIOS	2.1
+>!AAPIC	1.7
+@!ASystemPolicy	2.0.0
+@nke.applicationfirewall	406
+|IOKitRegistryCompatibility	1
+|EndpointSecurity	1
+@Dont_Steal_Mac_OS_X	7.0.0
+>!ADiskImages2	385.140.4
+@kec.!AEncryptedArchive	1
+>!UAudio	760.1
+>!AAudioClockLibs	420.3
+>!AHDA!C	600.2
+|IOHDA!F	600.2
+|IOAudio!F	600.2
+@vecLib.kext	1.2.0
+|IOAccelerator!F2	485.2
+>!AGraphicsControl	8.1.10
+>!A16X50Serial	3.2
+>!ASMBusPCI	1.0.14d1
+@kext.triggers	1.0
+>IOHIDPowerSource	1
+>!ACallbackPowerSource	1
+|IOAVB!F	1320.3
+>!AUIO	1
+|IORDMA!F	1.0
+>!ARSMChannel	1
+|IORSM!F	1
+>!AIPAppender	1.0
+@plugin.IOgPTPPlugin	1340.15
+>!ABacklightExpert	180.12
+>!ASMBus!C	1.0.18d1
+@!AGPUWrangler	8.1.10
+@!AGraphicsDeviceControl	8.1.10
+|IONDRVSupport	599
+|IOGraphics!F	599
+|IOSlowAdaptiveClocking!F	1.0.0
+>IOPlatformPluginLegacy	1.0.0
+>X86PlatformPlugin	1.0.0
+>IOPlatformPlugin!F	6.0.0d8
+>driverkit.serial	6.0.0
+|IOSerial!F	11
+>usb.cdc	5.0.0
+>usb.networking	5.0.0
+>usb.!UHostCompositeDevice	1.2
+>!AActuatorDriver	8440.6.1
+>!AHS!BDriver	8421.2
+>IO!BHIDDriver	9.0.0
+>!AMultitouchDriver	8440.6.1
+>!AInputDeviceSupport	8440.2
+>!ABSDKextStarter	3
+|IOSurface	372.5.2
+@filesy
+

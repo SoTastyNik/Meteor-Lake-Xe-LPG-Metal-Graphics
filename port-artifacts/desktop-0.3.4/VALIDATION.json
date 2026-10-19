@@ -1,0 +1,16 @@
+{
+  "hardware_desktop_verified": false,
+  "hardware_tests_run": false,
+  "baseline": "22cases/26000frames/80020pools retained; byte-identical kernel/accel/framebuffer/firmware/transport",
+  "local_passes": [
+    "x86_64 release compile and strict ad-hoc signature verification",
+    "Actual readback under ASan/UBSan:20000balanced mocked dedicated allocation lifetimes; padded pixels and transfer/host barriers; known pre-submit cleanup; uncertainty/backend loss retention; process/device scope and app TLS preserved",
+    "Actual release logger under ASan/UBSan:all24startup submissions survive per-format throttle;256stage cap; app/error throttling preserved; no file-write path",
+    "Actual loader with mocked OS:active/fallback/load error, empty sample output despiteexit0, task failure/process0 and refusedPID0",
+    "Actual installer mocks:baseline/loaded-kernel guards, success and3component rollback for verify/journal/partial-arm failures",
+    "Actual bounded submit wrapper under ASan/UBSan:3000desktop calls, app concurrency, recursive flush, contention deadline/quarantine/no foreign unlock",
+    "Actual native release-constructor diagnostic masks47/63/38 unchanged",
+    "80failed native command-buffer regressions"
+  ],
+  "unresolved": "GPU hang root cause and physical desktop success; dedicated staging requires Dell validation"
+}

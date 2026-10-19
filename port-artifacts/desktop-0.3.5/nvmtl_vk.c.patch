@@ -1,0 +1,21 @@
+--- a/plugin/nvmtl_vk.c
++++ b/plugin/nvmtl_vk.c
+@@ -680,13 +680,17 @@
+     if (g_state) return g_state == 1 ? 0 : -1;
+     g_state = -1;
+     const uint16_t vendor = nvmtl_vk_vendor();
++    const int compression_policy=nvmtl_windowserver_disable_ccs(vendor,g_pci_device,getprogname());
++    if(compression_policy<0){nvlog("first-submit: FAILED compression policy errno=%d",-compression_policy);return -1;}
++    if(compression_policy)nvmtl_desktop_trace("compression-policy","INTEL_DEBUG includes noccs before ICD loading",0);
++
+     if (getenv("NVMTL_DESKTOP_STALL") && nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
+         if (setenv("INTEL_DEBUG", "stall", 0) == 0)
+             nvlog("first-submit: 8086:7d45 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
+         else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
+     }
+     if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))
+-        nvmtl_desktop_trace("desktop-policy","candidate0.3.4: serial completion, no submit-ahead, schedule after publication; dedicated fresh readback staging; fresh command pools",0);
++        nvmtl_desktop_trace("desktop-policy","candidate0.3.5: noccs; serial completion, no submit-ahead, schedule after publication; dedicated fresh readback staging; fresh command pools",0);
+     if (!getenv("NVRM_FLUSH_TIMEOUT_MS")) {
+         char budget[32]; snprintf(budget, sizeof budget, "%ld", nvmtl_gpu_wait_budget_ms());
+         setenv("NVRM_FLUSH_TIMEOUT_MS", budget, 1);

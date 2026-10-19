@@ -1,0 +1,293 @@
+--- a/NullMoth/plugin/NVMTLObjects.m
++++ b/NullMoth/plugin/NVMTLObjects.m
+@@ -4685,6 +4685,7 @@
+ 
+ #pragma mark - command buffer / queue
+ #import "NVMTLEventSync.m"
++#import "NVMTLFailedEncoder.m"
+ @implementation NVMTLCommandBuffer
+ // Never a lock on the command buffer itself: apps may hold @synchronized(commandBuffer) around -waitUntilCompleted
+ // (Unity 6 does), and this runs on the execution queue that completes it. Vampire Survivors hung on its first frame
+@@ -4716,6 +4717,7 @@
+     @synchronized ([NVMTLCommandBuffer class]) { if (!_userDictionary) _userDictionary = [NSMutableDictionary new]; return _userDictionary; }
+ }
+ - (id<MTLParallelRenderCommandEncoder>)parallelRenderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d {
++    if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLParallelRenderCommandEncoder class]];
+     nvmtl_g79_flush(self);
+     NVMTLParallelRenderCommandEncoder *p = [NVMTLParallelRenderCommandEncoder new];
+     _nEnc++;
+@@ -4728,6 +4730,7 @@
+     return p;
+ }
+ - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d { NVS(NVS_RENC);
++    if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLRenderCommandEncoder class]];
+     nvmtl_g79_flush(self);
+     NVMTLRenderCommandEncoder *e = [NVMTLRenderCommandEncoder new];
+     _nEnc++;
+@@ -4763,7 +4766,7 @@
+     return e;
+ }
+ - (void)nvmtlRecordDrawable:(id<MTLDrawable>)drawable presentation:(dispatch_block_t)action {
+-    if (!drawable || _committed) return;
++    if (!drawable || _committed || _cbError) return;
+     {
+         extern void nvmtl_vk_submit_wait_stats(uint64_t *total_ns, uint64_t *waits);
+         static int off = -1;
+@@ -4822,8 +4825,8 @@
+ 
+ - (void)pushDebugGroup:(NSString *)g {}
+ - (void)popDebugGroup {}
+-- (void)encodeSignalEvent:(id<MTLEvent>)e value:(uint64_t)v { [self nvmtlRecordSignal:e value:v]; }
+-- (void)encodeWaitForEvent:(id<MTLEvent>)e value:(uint64_t)v { [self nvmtlRecordWait:e value:v]; }
++- (void)encodeSignalEvent:(id<MTLEvent>)e value:(uint64_t)v { if (!_cbError) [self nvmtlRecordSignal:e value:v]; }
++- (void)encodeWaitForEvent:(id<MTLEvent>)e value:(uint64_t)v { if (!_cbError) [self nvmtlRecordWait:e value:v]; }
+ // The display-pipe swap follows this call immediately in WindowServer. NVAccel
+ // cannot order that swap after an NVK fence, so wait for the pixels to finish
+ // before allowing the surface to become scanout. Other applications keep the
+@@ -4863,9 +4866,11 @@
+ }
+ - (void)commit { NVS(NVS_COMMIT); nvmtl_apistat_tick(); nvmtl_mark_pending(self); [self nvmtlSubmitWithEvents]; }
+ - (id<MTLComputeCommandEncoder>)computeCommandEncoder { NVS(NVS_CENC);
++    if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLComputeCommandEncoder class]];
+     NVMTLComputeCommandEncoder *e = [NVMTLComputeCommandEncoder new]; e->_cb = self; _nEnc++; return e;
+ }
+ - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)t {
++    if (_cbError) return [self computeCommandEncoder];
+     NVMTLComputeCommandEncoder *e = (NVMTLComputeCommandEncoder *)[self computeCommandEncoder];
+     e->_e78Concurrent = t == MTLDispatchTypeConcurrent; return e; }
+ - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:(MTLComputePassDescriptor *)d {
+@@ -4874,10 +4879,12 @@
+ - (id<MTLResourceStateCommandEncoder>)resourceStateCommandEncoder { return nil; }
+ - (id<MTLResourceStateCommandEncoder>)resourceStateCommandEncoderWithDescriptor:(MTLResourceStatePassDescriptor *)d { return nil; }
+ - (id<MTLBlitCommandEncoder>)blitCommandEncoder { NVS(NVS_BENC);
++    if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLBlitCommandEncoder class]];
+     nvmtl_g79_flush(self);
+     NVMTLBlitCommandEncoder *e = [NVMTLBlitCommandEncoder new]; e->_cb = self; _nEnc++; return e;
+ }
+ - (id<MTLAccelerationStructureCommandEncoder>)accelerationStructureCommandEncoder {
++    if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLAccelerationStructureCommandEncoder class]];
+     nvmtl_g79_flush(self);
+     NVMTLAccelerationStructureCommandEncoder *e = [NVMTLAccelerationStructureCommandEncoder new]; e->_cb = self; _nEnc++; return e;
+ }
+@@ -4973,7 +4980,11 @@
+     NVMTLCommandBuffer *cb = [NVMTLCommandBuffer new];
+     if (!cb) { if (cap) dispatch_semaphore_signal(cap); return nil; }
+     cb->_queue = self; cb->_capacityHeld = cap != nil;
+-    if (nvmtl_vk_cmd_begin(&_q, &cb->_c)) { nvlog("queue: command buffer begin FAILED"); return nil; }
++    if (nvmtl_vk_cmd_begin(&_q, &cb->_c)) {
++        nvlog("queue: command buffer begin FAILED; returning terminal-error command buffer");
++        [cb nvmtlRecordEncodingError:[NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal
++            userInfo:@{NSLocalizedDescriptionKey:@"GPU backend could not begin command recording"}]];
++    }
+     return cb;
+ }
+ - (id<MTLCommandBuffer>)commandBufferWithUnretainedReferences { return [self commandBuffer]; }
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -63,7 +63,8 @@
+  * accelerator), RADV for AMD and ANV for Intel (NMXAccel, the accelerator for the GPUs NMXGPU drives).
+  */
+ #include <IOKit/IOKitLib.h>
+-static uint16_t g_vendor;
++#include "nvmtl_desktop_policy.h"
++static uint16_t g_vendor, g_pci_device;
+ static uint16_t nvmtl_pci_vendor_of(io_service_t accel)
+ {
+     io_registry_entry_t pci = 0; uint16_t v = 0;
+@@ -71,6 +72,11 @@
+     CFTypeRef d = IORegistryEntryCreateCFProperty(pci, CFSTR("vendor-id"), kCFAllocatorDefault, 0);
+     if (d && CFGetTypeID(d) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)d) >= 2) {
+         const UInt8 *b = CFDataGetBytePtr((CFDataRef)d); v = (uint16_t)(b[0] | (b[1] << 8));
++    }
++    if (d) CFRelease(d);
++    d = IORegistryEntryCreateCFProperty(pci, CFSTR("device-id"), kCFAllocatorDefault, 0);
++    if (v == 0x8086 && d && CFGetTypeID(d) == CFDataGetTypeID() && CFDataGetLength((CFDataRef)d) >= 2) {
++        const UInt8 *b = CFDataGetBytePtr((CFDataRef)d); g_pci_device = (uint16_t)(b[0] | (b[1] << 8));
+     }
+     if (d) CFRelease(d);
+     IOObjectRelease(pci);
+@@ -678,6 +684,12 @@
+ {
+     if (g_state) return g_state == 1 ? 0 : -1;
+     g_state = -1;
++    const uint16_t vendor = nvmtl_vk_vendor();
++    if (nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
++        if (setenv("INTEL_DEBUG", "stall", 0) == 0)
++            nvlog("first-submit: 8086:7d45 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
++        else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
++    }
+     if (!getenv("NVRM_FLUSH_TIMEOUT_MS")) {
+         char budget[32]; snprintf(budget, sizeof budget, "%ld", nvmtl_gpu_wait_budget_ms());
+         setenv("NVRM_FLUSH_TIMEOUT_MS", budget, 1);
+@@ -4314,6 +4326,10 @@
+ }
+ int nvmtl_vk_cmd_begin(nvk_queue *q, nvk_cmdbuf *out)
+ {
++#ifdef NVMTL_TEST_RECORD_FAILURE
++    memset(out, 0, sizeof *out);
++    return -1;
++#endif
+     (void)q;
+     if (nvmtl_vk_init()) return -1;
+     const uint64_t b0 = nvmtl_perf_now();
+@@ -5218,7 +5234,8 @@
+     for (unsigned i = 0; i < p->nhold; i++) if (p->hold[i] && nvmtl_pre_release_hook) nvmtl_pre_release_hook(p->hold[i]);
+     p->nhold = 0;
+ }
+-struct nvmtl_inflight { nvk_cmdbuf *c; VkFence fence; nvmtl_prologue pre; uint64_t pt[8]; };
++static _Atomic uint64_t g_submit_diagnostic;
++struct nvmtl_inflight { nvk_cmdbuf *c; VkFence fence; nvmtl_prologue pre; uint64_t pt[8]; uint64_t diagnostic_id; };
+ nvmtl_inflight *nvmtl_vk_inflight_new(void) { return calloc(1, sizeof(nvmtl_inflight)); }
+ void nvmtl_vk_inflight_free(nvmtl_inflight *f) { free(f); }
+ void nvmtl_vk_gsub_nvk_stats(uint64_t *out, unsigned n)
+@@ -5263,6 +5280,9 @@
+ {
+     nvmtl_subwho_note(who, 0);
+     memset(f, 0, sizeof *f); f->c = c;
++    f->diagnostic_id = atomic_fetch_add(&g_submit_diagnostic, 1) + 1;
++    if (f->diagnostic_id <= 24 && g_vendor == 0x8086)
++        nvlog("first-submit: #%llu begin %s, command buffer %p", (unsigned long long)f->diagnostic_id, who ?: "?", c ? c->cb : NULL);
+     uint64_t *const pt = f->pt;
+     if (g_state != 1 || !c || !c->cb) return -2;
+     if (c->counter_error || nvmtl_counter_flush(c)) { nvmtl_cmd_retire(c); return -1; }
+@@ -5316,6 +5336,8 @@
+     if (pt[0]) { pt[1] = pt[0] + (sA - pt[0]) + (sD - sC); pt[2] = pt[1] + (sB - sA) + (sE - sD); pt[3] = pt[2] + (sC - sB); }
+     result = g_state == 1 ? pvkQueueSubmit(g_queue, 1, &si, fence) : VK_ERROR_DEVICE_LOST;
+     pthread_mutex_unlock(&nvmtl_submit_mutex);
++    if (f->diagnostic_id <= 24 && g_vendor == 0x8086)
++        nvlog("first-submit: #%llu queue result %d", (unsigned long long)f->diagnostic_id, result);
+     pt[4] = nvmtl_perf_now();
+     g_cmd_submitted++;
+     if (result != VK_SUCCESS) {
+@@ -5339,6 +5361,8 @@
+         if (wr != VK_TIMEOUT) break;
+         if (waited_ms >= budget_ms) break;
+     }
++    if ((f->diagnostic_id <= 24 || wr != VK_SUCCESS) && g_vendor == 0x8086)
++        nvlog("first-submit: #%llu fence result %d after %ld ms", (unsigned long long)f->diagnostic_id, wr, waited_ms);
+     pt[5] = nvmtl_perf_now();
+     atomic_fetch_add(&g_submit_wait_ns, clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0);
+     atomic_fetch_add(&g_submit_waits, 1);
+--- a/NullMoth/gpu-port/xkpi/xnu/nmx_kext.cpp
++++ b/NullMoth/gpu-port/xkpi/xnu/nmx_kext.cpp
+@@ -371,7 +371,7 @@
+ extern "C" {
+ kern_return_t _start(kmod_info_t *ki, void *data);
+ kern_return_t _stop(kmod_info_t *ki, void *data);
+-KMOD_EXPLICIT_DECL(com.nullmoth.NMXGPU, "1.0.6", _start, _stop)
++KMOD_EXPLICIT_DECL(com.nullmoth.NMXGPU, "1.0.7", _start, _stop)
+ __private_extern__ kmod_start_func_t *_realmain = nmx_kmod_start;
+ __private_extern__ kmod_stop_func_t *_antimain = nmx_kmod_stop;
+ }
+--- a/drm-kmod/drivers/gpu/drm/i915/i915_gpu_error.c
++++ b/drm-kmod/drivers/gpu/drm/i915/i915_gpu_error.c
+@@ -2193,6 +2193,41 @@
+ 	return dump;
+ }
+ 
++#ifdef NMXKPI
++/* Only already-captured state: bounded output, no allocations or new MMIO reads. */
++static void nmx_i915_first_error_summary(const struct i915_gpu_coredump *error)
++{
++    const struct intel_gt_coredump *gt;
++    unsigned g = 0;
++    if (INTEL_DEVID(error->i915) != 0x7d45) return;
++    pr_err("NMX-i915-first-error: resets=%u suspended=%u iommu=%d\n",
++           error->reset_count, error->suspended, error->iommu);
++    for (gt = error->gt; gt && g < 4; gt = gt->next, g++) {
++        const struct intel_engine_coredump *engine;
++        unsigned e = 0;
++        pr_err("NMX-i915-first-error: gt=%u awake=%u EIR=%08x PGTBL_ER=%08x fault=%08x:%08x\n",
++               g, gt->awake, gt->eir, gt->pgtbl_er, gt->fault_data1, gt->fault_data0);
++        if (gt->uc) {
++            unsigned c;
++            for (c = 0; c < 2; c++)
++                pr_err("NMX-i915-first-error: gt=%u GuC-CT%u head=%u tail=%u status=%08x\n",
++                       g, c, gt->uc->guc.ctb[c].head, gt->uc->guc.ctb[c].tail, gt->uc->guc.ctb[c].raw_status);
++        }
++        for (engine = gt->engine; engine && e < 16; engine = engine->next, e++) {
++            pr_err("NMX-i915-first-error: gt=%u engine=%u hung=%u pid=%d comm=%.16s reset=%u\n",
++                   g, e, engine->hung, engine->context.pid, engine->context.comm, engine->reset_count);
++            pr_err("NMX-i915-first-error: ring start=%08x head=%08x tail=%08x ctl=%08x active=%llx batch=%llx\n",
++                   engine->start, engine->head, engine->tail, engine->ctl,
++                   (unsigned long long)engine->acthd, (unsigned long long)engine->bbaddr);
++            pr_err("NMX-i915-first-error: IPEIR=%08x IPEHR=%08x INSTDONE=%08x fault=%08x addr=%llx rq=%08x:%08x:%08x\n",
++                   engine->ipeir, engine->ipehr, engine->instdone.instdone, engine->fault_reg,
++                   (unsigned long long)engine->faddr, engine->rq_head, engine->rq_post, engine->rq_tail);
++        }
++    }
++    pr_err("NMX-i915-first-error: end bounded captured-register summary\n");
++}
++#endif
++
+ void i915_error_state_store(struct i915_gpu_coredump *error)
+ {
+ 	struct drm_i915_private *i915;
+@@ -2209,6 +2244,9 @@
+ 		return;
+ 
+ 	i915_gpu_coredump_get(error);
++#ifdef NMXKPI
++	nmx_i915_first_error_summary(error);
++#endif
+ 
+ 	if (!xchg(&warned, true) &&
+ 	    ktime_get_real_seconds() - DRIVER_TIMESTAMP < DAY_AS_SECONDS(180)) {
+--- /dev/null
++++ b/NullMoth/plugin/NVMTLFailedEncoder.m
+@@ -0,0 +1,43 @@
++#import <Foundation/Foundation.h>
++#import <objc/runtime.h>
++
++// A terminal-error command buffer still accepts encoding, then completes with its error.
++// Resolve signatures from the real encoder without invoking any of its GPU methods.
++@interface NVMTLFailedEncoder : NSProxy {
++    id _failedDevice;
++    Class _encodingClass;
++    NSString *_failedLabel;
++}
+++ (id)encoderForDevice:(id)device encodingClass:(Class)encodingClass;
++@end
++@implementation NVMTLFailedEncoder
+++ (id)encoderForDevice:(id)device encodingClass:(Class)encodingClass {
++    NVMTLFailedEncoder *encoder = [self alloc];
++    encoder->_failedDevice = device;
++    encoder->_encodingClass = encodingClass;
++    return encoder;
++}
++- (id)device { return _failedDevice; }
++- (NSString *)label { return _failedLabel; }
++- (void)setLabel:(NSString *)label { _failedLabel = [label copy]; }
++- (void)endEncoding {}
++- (id)renderCommandEncoder {
++    return [NVMTLFailedEncoder encoderForDevice:_failedDevice encodingClass:NSClassFromString(@"NVMTLRenderCommandEncoder")];
++}
++- (BOOL)respondsToSelector:(SEL)selector {
++    return class_getInstanceMethod([NVMTLFailedEncoder class], selector) != NULL ||
++           class_getInstanceMethod(_encodingClass, selector) != NULL;
++}
++- (BOOL)conformsToProtocol:(Protocol *)protocol { return class_conformsToProtocol(_encodingClass, protocol); }
++- (NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
++    Method method = class_getInstanceMethod(_encodingClass, selector);
++    return method ? [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)] : nil;
++}
++- (void)forwardInvocation:(NSInvocation *)invocation {
++    NSUInteger size = invocation.methodSignature.methodReturnLength;
++    if (size) {
++        NSMutableData *zero = [NSMutableData dataWithLength:size];
++        [invocation setReturnValue:zero.mutableBytes];
++    }
++}
++@end
+--- /dev/null
++++ b/NullMoth/plugin/nvmtl_desktop_policy.h
+@@ -0,0 +1,9 @@
++#pragma once
++#include <stdint.h>
++#include <string.h>
++static inline int nvmtl_desktop_stall_policy(uint16_t vendor, uint16_t device,
++                                            const char *process, const char *existing)
++{
++    return vendor == 0x8086 && device == 0x7d45 && process &&
++           strcmp(process, "WindowServer") == 0 && existing == NULL;
++}

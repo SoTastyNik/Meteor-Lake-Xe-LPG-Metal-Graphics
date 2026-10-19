@@ -1,0 +1,1 @@
+PASS actual wake/schedule_timeout/i915 must_wait_woken: legacy pre-enrollment response reproduces false timeout; patched task state prevents it; before-check, enrolled, spurious wake and true-timeout cases retain semantics (100000 scenarios)

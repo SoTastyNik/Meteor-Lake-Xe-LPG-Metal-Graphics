@@ -1,0 +1,1 @@
+PASS actual pool allocator/retirement: 30000 completed lifetimes across 3 threads, allocation/begin-failure cleanup, balanced counters, no double destroy, pending-pool quarantine without destruction

@@ -1,0 +1,36 @@
+--- a/plugin/NVMTLEventSync.m
++++ b/plugin/NVMTLEventSync.m
+@@ -137,7 +137,8 @@
+     // Another process may read an IOSurface once its writer is scheduled, and nothing orders its queue after ours.
+     static int after = -1; if (after < 0) { const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && e[0] == '1'; }
+     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
+-    for (NVMTLTexture *s in part->surfaces) if (after && s != drawable) _scheduleAfterPublish = YES;
++    for (NVMTLTexture *s in part->surfaces)
++        if (nvmtl_vk_windowserver_serial() || (after && s != drawable)) _scheduleAfterPublish = YES;
+     part->scratch = [_scratch copy]; part->signalEvent = event; part->value = value;
+     part->encoders = _nEnc - _nEncSealed; _nEncSealed = _nEnc;
+     if (_g79Sig.count) { part->signals = [_g79Sig copy]; [_g79Sig removeAllObjects]; }
+@@ -234,7 +235,6 @@
+     }
+ }
+ - (void)nvmtlFinishExecution:(NSError *)error {
+-    if (_scheduleAfterPublish) { _scheduleAfterPublish = NO; [self nvmtlMarkScheduled]; }
+     for (NSUInteger i = _nextPart; i < _parts.count; i++) {
+         NVMTLSubmissionPart *p = _parts[i];
+         if (![p isKindOfClass:[NVMTLSubmissionPart class]] || !p->inflight) continue;
+@@ -246,6 +246,7 @@
+             [nvmtl_quarantined_parts addObject:p];
+         }
+     }
++    if (_scheduleAfterPublish) { _scheduleAfterPublish = NO; if (!error) [self nvmtlMarkScheduled]; }
+     if (!error) {
+         for (dispatch_block_t action in _presentations) action();
+     }
+@@ -343,6 +344,7 @@
+     return copies;
+ }
+ - (BOOL)nvmtlSubmitAhead {
++    if (nvmtl_vk_windowserver_serial()) return NO;
+     if (_executionDone || _cbError || !_committed) return NO;
+     if (_nextSubmit < _nextPart) _nextSubmit = _nextPart;
+     while (_nextSubmit < _parts.count) {

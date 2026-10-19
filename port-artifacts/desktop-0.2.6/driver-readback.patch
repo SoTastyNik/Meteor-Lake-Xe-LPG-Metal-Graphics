@@ -1,0 +1,293 @@
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -18,6 +18,7 @@
+ #define VK_NO_PROTOTYPES 1
+ #include <vulkan/vulkan.h>
+ #include "nvmtl_vk.h"
++#include "nvmtl_readback.h"
+ #include "nvmtl_tex_upload.h"
+ #include "nvmtl_sampler_state.h"
+ static int g_sampler_anisotropy, g_sampler_mirror_clamp;
+@@ -685,7 +686,7 @@
+     if (g_state) return g_state == 1 ? 0 : -1;
+     g_state = -1;
+     const uint16_t vendor = nvmtl_vk_vendor();
+-    if (nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
++    if (getenv("NVMTL_DESKTOP_STALL") && nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
+         if (setenv("INTEL_DEBUG", "stall", 0) == 0)
+             nvlog("first-submit: 8086:7d45 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
+         else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
+@@ -1287,7 +1288,11 @@
+             if (!host_visible) g_budget_stale = 1;
+         }
+         memset(out, 0, sizeof *out);
+-    } else *out = pending;
++    } else {
++        static _Atomic uint64_t allocation_sequence;
++        pending.trace_id=atomic_fetch_add(&allocation_sequence,1)+1;
++        *out = pending;
++    }
+     nvmtl_perf_note(r == 0 && out->pool ? NVP_BUFPOOL : NVP_BUFNEW, t0, size);
+     return r;
+ }
+@@ -1297,9 +1302,9 @@
+     memset(out, 0, sizeof *out); out->size = size;
+     if (host_visible == 2 && size <= NVMTL_POOL_MAX && vpool_on() && pool_buffer_create_in(1, size, out) == 0) return 0;
+     memset(out, 0, sizeof *out); out->size = size;
+-    if (host_visible && size <= NVMTL_POOL_MAX && pool_buffer_create(size, out) == 0) return 0;
++    if (host_visible && host_visible != 3 && size <= NVMTL_POOL_MAX && pool_buffer_create(size, out) == 0) return 0;
+     memset(out, 0, sizeof *out); out->size = size;
+-    if (bpark_take(size, host_visible, out) == 0) return 0;
++    if (host_visible != 3 && bpark_take(size, host_visible, out) == 0) return 0;
+     memset(out, 0, sizeof *out); out->size = size;
+     if (!host_visible && size >= (1u << 20) && nvmtl_vk_sparse_on() && nvmtl_vk_buffer_create_sparse(size, out) == 0) return 0;
+     memset(out, 0, sizeof *out); out->size = size;
+@@ -5802,32 +5807,73 @@
+     return r;
+ }
+ 
++static int nvmtl_vk_readback(nvk_queue *q, nvk_image *img, void *dst, size_t row_bytes,
++    uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t level, uint32_t layer)
++{
++    nvmtl_read_plan plan;
++    size_t bpp = g_copy_bpp_override ? g_copy_bpp_override : (img && img->bpp ? img->bpp : 4);
++    if (img && !g_copy_bpp_override) {
++        const VkImageAspectFlags aspect=nvmtl_copy_aspect(img);
++        if (aspect==VK_IMAGE_ASPECT_STENCIL_BIT) bpp=1;
++        else if (aspect==VK_IMAGE_ASPECT_DEPTH_BIT)
++            bpp=(img->fmt==VK_FORMAT_D16_UNORM || img->fmt==VK_FORMAT_D16_UNORM_S8_UINT) ? 2 : 4;
++    }
++    if (!q || !dst || nvmtl_read_plan_make(img, row_bytes, x,y,w,h,level,layer,
++        nvmtl_copy_aspect(img), nvmtl_barrier_aspect(img), bpp, &plan)) {
++        nvlog("readback REFUSED invalid image/copy parameters"); return -1;
++    }
++    nvmtl_vk_image_upload_barrier(img);
++    const int owned = getenv("NVMTL_READBACK_STAGE_FRESH") != NULL;
++    nvk_buffer stage = {0};
++    if (owned ? nvmtl_vk_buffer_create(plan.bytes, 3, &stage) : nvmtl_vk_stage(q, plan.bytes, &stage)) return -1;
++    /* All staging allocation paths require HOST_VISIBLE|HOST_COHERENT. Refuse
++       an unknown or incompatible memory type rather than reading stale bytes. */
++    const uint32_t mt = stage.memtype1 ? stage.memtype1-1 : UINT32_MAX;
++    if (!stage.map || mt >= g_memp.memoryTypeCount ||
++        (g_memp.memoryTypes[mt].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) !=
++        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
++        nvlog("readback REFUSED noncoherent or unknown staging memory type %u", mt);
++        if (owned) nvmtl_vk_buffer_destroy(&stage); return -1;
++    }
++    nvk_cmdbuf c;
++    if (nvmtl_vk_cmd_begin(q, &c)) { if (owned) nvmtl_vk_buffer_destroy(&stage); return -1; }
++    static _Atomic uint64_t sequence;
++    const uint64_t id = atomic_fetch_add(&sequence,1)+1;
++    static _Atomic uint64_t image_sequence;
++    uint64_t image_id=__atomic_load_n(&img->trace_id,__ATOMIC_RELAXED);
++    if (!image_id) {
++        uint64_t candidate=atomic_fetch_add(&image_sequence,1)+1, expected=0;
++        __atomic_compare_exchange_n(&img->trace_id,&expected,candidate,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED);
++        image_id=__atomic_load_n(&img->trace_id,__ATOMIC_RELAXED);
++    }
++    uint64_t tid=0; pthread_threadid_np(NULL,&tid);
++    const int trace = id<=32 || getenv("NVMTL_READBACK_TRACE") != NULL;
++    if (trace) nvlog("first-submit readback #%llu thread=%llu image-id=%llu stage-id=%llu img=%p stage=%p memory=%p offset=%zu type=%u coherent=1 layout=%u mip=%u layer=%u rect=%u,%u,%u,%u pitch=%zu bytes=%zu owned=%d cb=%p",
++        (unsigned long long)id,(unsigned long long)tid,(unsigned long long)image_id,(unsigned long long)stage.trace_id,img->img,stage.buf,stage.mem,stage.poff,mt,img->layout,level,layer,x,y,w,h,row_bytes,plan.bytes,owned,c.cb);
++    pvkCmdPipelineBarrier(c.cb,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
++        0,0,NULL,0,NULL,1,&plan.before);
++    pvkCmdCopyImageToBuffer(c.cb,(VkImage)img->img,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,(VkBuffer)stage.buf,1,&plan.copy);
++    VkBufferMemoryBarrier host=nvmtl_read_host_barrier(&stage,plan.bytes);
++    pvkCmdPipelineBarrier(c.cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,
++        0,0,NULL,1,&host,0,NULL);
++    /* Restore only the copied subresource, leaving the shared layout tracker
++       untouched and avoiding a readback-created divergence across mip levels. */
++    pvkCmdPipelineBarrier(c.cb,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++        0,0,NULL,0,NULL,1,&plan.after);
++    int rc=nvmtl_vk_submit_wait_at(&c,"image readback");
++    if (trace || rc) nvlog("first-submit readback #%llu completion=%d stage=%p disposition=%s",
++        (unsigned long long)id,rc,stage.buf,rc ? "retained-no-cpu-read" : owned ? "release-after-copy" : "tls-retained");
++    /* On an uncertain submission, retain its allocation. Backend shutdown
++       prevents further copies; freeing potentially pending memory is unsafe. */
++    if (rc) return -1;
++    for (uint32_t row=0;row<plan.rows;row++) memcpy((uint8_t *)dst+(size_t)row*row_bytes,
++        (const uint8_t *)stage.map+(size_t)row*plan.packed_row,plan.packed_row);
++    if (owned) nvmtl_vk_buffer_destroy(&stage);
++    return 0;
++}
+ int nvmtl_vk_image_read(nvk_queue *q, nvk_image *img, void *dst, size_t row_bytes)
+ {
+-    nvmtl_vk_image_upload_barrier(img);   // a readback must observe a pending async upload: finish it first
+-    const size_t bpp = img->bpp ? img->bpp : 4;
+-    const uint32_t cols = nvmtl_blocks(img->w, img->bw), rows = nvmtl_blocks(img->h, img->bh);
+-    if (row_bytes < (size_t)cols * bpp) { nvlog("image_read: bytesPerRow %zu < %u blocks * %zu B", row_bytes, cols, bpp); return -1; }
+-    nvk_buffer stage;
+-    if (nvmtl_vk_stage(q, (size_t)cols * rows * bpp, &stage)) return -1;
+-    nvk_cmdbuf c; if (nvmtl_vk_cmd_begin(q, &c)) return -1;
+-    // SurfaceOut also reads images last used as sampled/storage images or blit
+-    // destinations. A completed fence does not change their image layout or
+-    // provide the transfer-read dependency. Transition the copied subresource.
+-    VkImageSubresourceRange range = { nvmtl_barrier_aspect(img), 0, 1, 0, 1 };
+-    VkImageMemoryBarrier toSrc = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, NULL,
+-        VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+-        (VkImageLayout)img->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, (VkImage)img->img, range };
+-    pvkCmdPipelineBarrier(c.cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+-                         0, 0, NULL, 0, NULL, 1, &toSrc);
+-    img->layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+-    VkBufferImageCopy bic = { 0, 0, 0, { nvmtl_copy_aspect(img), 0, 0, 1 }, { 0, 0, 0 }, { img->w, img->h, 1 } };
+-    pvkCmdCopyImageToBuffer(c.cb, img->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stage.buf, 1, &bic);
+-    if (nvmtl_vk_submit_wait(&c)) return -1;
+-    const uint8_t *src = (const uint8_t *)stage.map;
+-    for (uint32_t y = 0; y < rows; y++) memcpy((uint8_t *)dst + y * row_bytes, src + (size_t)y * cols * bpp, (size_t)cols * bpp);
+-    return 0;
++    return nvmtl_vk_readback(q,img,dst,row_bytes,0,0,img ? img->w:0,img ? img->h:0,0,0);
+ }
+ 
+ static void img_to(nvk_cmdbuf *c, nvk_image *img, VkImageLayout to,
+@@ -5985,25 +6031,7 @@
+ int nvmtl_vk_image_read_region_level_layer(nvk_queue *q, nvk_image *img, void *dst, size_t row_bytes,
+                                      uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t level, uint32_t layer)
+ {
+-    nvmtl_vk_image_upload_barrier(img);   // a readback must observe a pending async upload: finish it first
+-    if (layer >= (img->layers ? img->layers : 1)) { nvlog("image_read_region: layer %u — this image has %u", layer, img->layers ? img->layers : 1); return -1; }
+-    { const uint32_t lw = img->w >> level ? img->w >> level : 1, lh = img->h >> level ? img->h >> level : 1;
+-      if (!w || !h || x + w > lw || y + h > lh) { nvlog("image_read_region: %ux%u at (%u,%u) is outside %ux%u (level %u)", w, h, x, y, lw, lh, level); return -1; } }
+-    const size_t bpp = img->bpp ? img->bpp : 4;
+-    const uint32_t cols = nvmtl_blocks(w, img->bw), rows = nvmtl_blocks(h, img->bh);
+-    if (img->bw > 1 && ((x % img->bw) || (y % img->bh))) { nvlog("image_read_region: origin (%u,%u) is not block-aligned", x, y); return -1; }
+-    if (row_bytes < (size_t)cols * bpp) { nvlog("image_read_region: bytesPerRow %zu < %u blocks * %zu B", row_bytes, cols, bpp); return -1; }
+-    nvk_buffer stage;
+-    if (nvmtl_vk_stage(q, (size_t)cols * rows * bpp, &stage)) return -1;
+-    nvk_cmdbuf c; if (nvmtl_vk_cmd_begin(q, &c)) return -1;
+-    img_to(&c, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+-           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+-    VkBufferImageCopy bic = { 0, 0, 0, { nvmtl_copy_aspect(img), level, img->mtl_type == 7 ? 0u : layer, 1 }, { (int32_t)x, (int32_t)y, img->mtl_type == 7 ? (int32_t)layer : 0 }, { w, h, 1 } };
+-    pvkCmdCopyImageToBuffer(c.cb, (VkImage)img->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, (VkBuffer)stage.buf, 1, &bic);
+-    if (nvmtl_vk_submit_wait(&c)) return -1;
+-    const uint8_t *src = (const uint8_t *)stage.map;
+-    for (uint32_t r = 0; r < rows; r++) memcpy((uint8_t *)dst + (size_t)r * row_bytes, src + (size_t)r * cols * bpp, (size_t)cols * bpp);
+-    return 0;
++    return nvmtl_vk_readback(q,img,dst,row_bytes,x,y,w,h,level,layer);
+ }
+ 
+ int nvmtl_vk_copy_image(nvk_queue *q, nvk_image *src, uint32_t sx, uint32_t sy,
+--- a/libdrm/xf86drm.c
++++ b/libdrm/xf86drm.c
+@@ -5562,19 +5562,39 @@
+     return 0;
+ }
+ 
++/* Test-only, process-scoped route selection. Handles stay on one DRM file. */
++static unsigned long long nmx_direct_calls, nmx_iokit_calls;
++static int nmx_test_route(void)
++{
++    const char *s = getenv("NMX_DRM_TEST_TRANSPORT");
++    if (!s) return 0;
++    if (!strcmp(s,"direct")) return 1;
++    if (!strcmp(s,"iokit")) return 2;
++    return -1;
++}
++__attribute__((destructor)) static void nmx_test_report(void)
++{
++    if (getenv("NMX_DRM_TEST_TRANSPORT"))
++        fprintf(stderr,"NMX transport counters: requested=%s direct=%llu iokit=%llu\n",
++            getenv("NMX_DRM_TEST_TRANSPORT"),
++            __atomic_load_n(&nmx_direct_calls,__ATOMIC_RELAXED),
++            __atomic_load_n(&nmx_iokit_calls,__ATOMIC_RELAXED));
++}
+ drm_public int drmNmxIoctl(int fd, unsigned long request, void *arg)
+ {
++    const int route = nmx_test_route();
++    if (route < 0) { errno=EINVAL; return -1; }
+     io_connect_t conn = nmx_uc_get(fd, 0);
++    if (route == 1 && conn) { errno=EXDEV; return -1; }
++    if (route == 2 && !conn) { errno=EXDEV; return -1; }
+     if (!conn) {
++        __atomic_fetch_add(&nmx_direct_calls,1,__ATOMIC_RELAXED);
+         int ret = ioctl(fd, request, arg);
+-        if (ret == 0 || errno != EPERM)
+-            return ret;
++        if (route == 1 || ret == 0 || errno != EPERM) return ret;
+         conn = nmx_uc_get(fd, 1);
+-        if (!conn) {
+-            errno = EPERM;
+-            return -1;
+-        }
+-    }
++        if (!conn) { errno = EPERM; return -1; }
++    }
++    __atomic_fetch_add(&nmx_iokit_calls,1,__ATOMIC_RELAXED);
+     return nmx_uc_call(conn, request, arg);
+ }
+ 
+@@ -5641,7 +5661,12 @@
+ 
+ drm_public int drmNmxOpen(const char *path, int flags)
+ {
++    const int route = nmx_test_route();
++    if (route < 0) { errno=EINVAL; return -1; }
++    if (!strcmp(path, NMX_UC_NODE) && route == 2)
++        return nmx_token_open(flags & O_CLOEXEC);
+     int fd = open(path, flags);
++    if (route == 1) return fd;
+ 
+     if (fd >= 0 || (errno != EPERM && errno != EACCES))
+         return fd;
+--- a/NullMoth/plugin/nvmtl_vk.h
++++ b/NullMoth/plugin/nvmtl_vk.h
+@@ -8,9 +8,9 @@
+ #include <stdint.h>
+ #include <stddef.h>
+ const char *nvmtl_image_ident(const void *addr, char *out, size_t n);
+-typedef struct { void *buf; void *mem; void *map; size_t size; size_t alloc; int placed; void *pool; size_t poff; int imported; int bar1; size_t moff; int sparse, sysmem; uint32_t memtype1; /* memory type + 1, 0 unknown */ } nvk_buffer;
++typedef struct { void *buf; void *mem; void *map; size_t size; size_t alloc; int placed; void *pool; size_t poff; int imported; int bar1; size_t moff; int sparse, sysmem; uint32_t memtype1; /* memory type + 1, 0 unknown */ uint64_t trace_id; } nvk_buffer;
+ #include "nvmtl_sample_positions.h"
+-typedef struct { void *img; void *mem; void *view; uint32_t w, h; size_t alloc; uint32_t layout; uint32_t mips; uint32_t fmt, bpp; uint32_t storage, mtl_type, layers; int placed; uint32_t bw, bh; uint32_t samples; uint32_t sysmem; uint32_t vkflags, usage;  uint32_t vpair;  uint64_t up_token; } nvk_image;
++typedef struct { void *img; void *mem; void *view; uint32_t w, h; size_t alloc; uint32_t layout; uint32_t mips; uint32_t fmt, bpp; uint32_t storage, mtl_type, layers; int placed; uint32_t bw, bh; uint32_t samples; uint32_t sysmem; uint32_t vkflags, usage;  uint32_t vpair;  uint64_t up_token, trace_id; } nvk_image;
+ #define NVMTL_NVAR 16
+ #define NVMTL_NVAR_MAX 4096
+ #define NVMTL_NCOL 8
+--- /dev/null
++++ b/NullMoth/plugin/nvmtl_readback.h
+@@ -0,0 +1,45 @@
++#pragma once
++#include <stdint.h>
++#include <stddef.h>
++/* The caller owns the image until completion. No persistent layout change is made. */
++typedef struct { uint32_t cols, rows; size_t packed_row, bytes; VkBufferImageCopy copy; VkImageMemoryBarrier before, after; } nvmtl_read_plan;
++static inline int nvmtl_read_plan_make(const nvk_image *i, size_t pitch,
++    uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t level, uint32_t layer,
++    VkImageAspectFlags aspect, VkImageAspectFlags barrier_aspect, size_t bpp, nvmtl_read_plan *p)
++{
++    if (!i || !i->img || !w || !h || !bpp || !i->w || !i->h || level >= 32 ||
++        level >= (i->mips ? i->mips : 1) || i->samples > 1 ||
++        !(i->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
++        i->layout == VK_IMAGE_LAYOUT_UNDEFINED || i->layout == VK_IMAGE_LAYOUT_PREINITIALIZED ||
++        !aspect || (aspect & (aspect-1)) || (aspect & barrier_aspect) != aspect) return -1;
++    uint32_t lw=i->w>>level, lh=i->h>>level;
++    if (!lw) lw=1; if (!lh) lh=1;
++    uint32_t nl=i->layers ? i->layers : 1;
++    if (i->mtl_type==7) { nl >>= level; if (!nl) nl=1; }
++    if (layer>=nl || x>=lw || y>=lh || w>lw-x || h>lh-y || x>INT32_MAX || y>INT32_MAX || layer>INT32_MAX) return -1;
++    uint32_t bw=i->bw ? i->bw : 1, bh=i->bh ? i->bh : 1;
++    if (x%bw || y%bh || (w%bw && w!=lw-x) || (h%bh && h!=lh-y)) return -1;
++    p->cols=w/bw+(w%bw!=0); p->rows=h/bh+(h%bh!=0);
++    if (p->cols>SIZE_MAX/bpp) return -1;
++    p->packed_row=p->cols*bpp;
++    if (pitch<p->packed_row || p->rows>SIZE_MAX/p->packed_row ||
++        (p->rows>1 && pitch>(SIZE_MAX-p->packed_row)/(p->rows-1))) return -1;
++    p->bytes=p->packed_row*p->rows;
++    p->copy=(VkBufferImageCopy){0,0,0,{aspect,level,i->mtl_type==7 ? 0:layer,1},
++        {(int32_t)x,(int32_t)y,i->mtl_type==7 ? (int32_t)layer:0},{w,h,1}};
++    VkImageSubresourceRange range={barrier_aspect,level,1,i->mtl_type==7 ? 0:layer,1};
++    p->before=(VkImageMemoryBarrier){VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,NULL,
++        VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,
++        (VkImageLayout)i->layout,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++        VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,(VkImage)i->img,range};
++    p->after=p->before; p->after.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
++    p->after.dstAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
++    p->after.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; p->after.newLayout=(VkImageLayout)i->layout;
++    return 0;
++}
++static inline VkBufferMemoryBarrier nvmtl_read_host_barrier(const nvk_buffer *b, size_t bytes)
++{
++    return (VkBufferMemoryBarrier){VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,NULL,
++        VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_HOST_READ_BIT,
++        VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,(VkBuffer)b->buf,0,bytes};
++}

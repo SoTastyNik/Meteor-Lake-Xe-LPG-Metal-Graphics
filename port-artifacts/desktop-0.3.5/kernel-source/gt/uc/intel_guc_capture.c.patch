@@ -1,0 +1,31 @@
+--- a/gt/uc/intel_guc_capture.c
++++ b/gt/uc/intel_guc_capture.c
+@@ -1496,6 +1496,28 @@
+ 	return 0;
+ }
+ 
++#ifdef NMXKPI
++/* The GuC path deliberately does not fill legacy ee->head/tail/etc. Emit the
++   already-parsed captured values, rather than treating zero placeholders as HW. */
++void intel_guc_capture_log_engine_node(const struct intel_engine_coredump *ee)
++{
++    const struct __guc_capture_parsed_output *node=ee->guc_capture_node;
++    unsigned i,j;
++    if(!node){pr_err("NMX-i915-guc-capture: unavailable; legacy register fields may be placeholders\n");return;}
++    pr_err("NMX-i915-guc-capture: id=%u lrca=%08x class=%u instance=%u partial=%u\n",
++        node->guc_id,node->lrca,node->eng_class,node->eng_inst,node->is_partial);
++    for(i=0;i<GUC_CAPTURE_LIST_TYPE_MAX && i<3;i++){
++        unsigned count=node->reginfo[i].num_regs;
++        const struct guc_mmio_reg *regs=node->reginfo[i].regs;
++        pr_err("NMX-i915-guc-capture: list=%u count=%u limit=64\n",i,count);
++        if(!regs)continue;
++        for(j=0;j<count && j<64;j++)
++            pr_err("NMX-i915-guc-reg: list=%u offset=%08x value=%08x flags=%08x\n",
++                i,regs[j].offset,regs[j].value,regs[j].flags);
++    }
++}
++#endif
++
+ #endif //CONFIG_DRM_I915_CAPTURE_ERROR
+ 
+ static void guc_capture_find_ecode(struct intel_engine_coredump *ee)

@@ -1,0 +1,18 @@
+{
+  "target_tests_run": false,
+  "desktop_verified": false,
+  "preserved_hardware_baseline": "22cases/26000frames;80020pools reclaimed",
+  "local_passes": [
+    "x86_64 release compile and ad-hoc signature",
+    "ASan/UBSan actual submit wrapper:3000 serialized calls, recursion/error unlock, app concurrency, forced contention deadline and quarantine",
+    "ASan/UBSan journal helper prepare/rotation/0600/flush/record fields/newline normalization/symlink-mode-cap rejection",
+    "Actual loader with mocked OS: pre-claim/pre-handoff capture, stack sample, fallback preservation, load-error status",
+    "Actual installer mocks: baseline/kernel guards; success; verification, journal and partial-arm rollback restores all3files",
+    "Actual collector: new journal/sample artifacts, full recent system/user crashes, history failure retention",
+    "Actual event publication and readback method regressions",
+    "Pool lifetime30000objects/3threads and4fence/witness completion modes",
+    "Actual native release constructor effective diagnostic masks47/63/38",
+    "80failed native command-buffer regression"
+  ],
+  "build_warnings": "335 compiler warnings; see plugin-0.3.3.log; build succeeds"
+}

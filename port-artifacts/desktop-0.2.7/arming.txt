@@ -1,0 +1,1 @@
+PASS actual desktop-arm script with mocked commands: failed suite never arms, passing suite arms once, partial arming failure clears both opt-ins

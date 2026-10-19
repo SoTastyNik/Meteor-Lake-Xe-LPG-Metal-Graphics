@@ -1,0 +1,1 @@
+PASS actual readback implementation: dependency/copy/restore/wait order, exact padded output, stable identity, timeout retains memory and leaves CPU output untouched, failure cleanup, noncoherent rejection

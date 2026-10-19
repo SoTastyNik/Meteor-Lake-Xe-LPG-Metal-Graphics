@@ -1,0 +1,1 @@
+PASS actual comparison runner with mocked hardware: identical three-case warmup, one-variable command-pool/staging options, inherited flags cleared, direct diagnostics, current-run history, same-boot retry refused, no desktop gate

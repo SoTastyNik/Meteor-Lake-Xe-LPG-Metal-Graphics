@@ -1,0 +1,1 @@
+PASS actual enumeration/node-type code: forced IOKit never opens devfs, direct never falls back, auto discovers after denied node queries, invalid flags/modes rejected, tracked token classified as render node

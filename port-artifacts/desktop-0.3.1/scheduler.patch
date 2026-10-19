@@ -1,0 +1,12 @@
+--- a/linux_schedule.c
++++ b/override/src/linux_schedule.c
+@@ -253,6 +253,9 @@
+ 
+ 	sleepq_lock(wchan);
+ 	wq->flags |= WQ_FLAG_WOKEN;
++	/* schedule_timeout checks task state under this same channel lock. */
++	if ((atomic_read(&((struct task_struct *)wq->private)->state) & state) != 0)
++		set_task_state(((struct task_struct *)wq->private), TASK_WAKING);
+ 	sleepq_signal(wchan, SLEEPQ_SLEEP, 0, 0);
+ 	sleepq_release(wchan);
+ 

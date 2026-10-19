@@ -1,0 +1,492 @@
+Date/Time:        2026-10-17 22:07:55.324 +0100
+End time:         2026-10-17 22:10:48.964 +0100
+OS Version:       macOS 15.8.1 (Build 24H32)
+Architecture:     x86_64h
+Report Version:   60
+Incident Identifier: EE67696F-0A5F-40D5-B290-F7913E4171A9
+
+Data Source:      Microstackshots
+Shared Cache:     42EC2890-BC40-317E-BB27-45142BFF7F26 slid base address 0x7ff81a5ef000, slide 0x1a5ef000
+
+Command:          WindowServer
+Path:             /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+Codesigning ID:   com.apple.WindowServer
+Resource Coalition: "com.apple.WindowServer"(143)
+Architecture:     x86_64
+Parent:           UNKNOWN [1]
+PID:              161
+
+Event:            cpu usage
+Action taken:     none
+CPU:              90 seconds cpu time over 174 seconds (52% cpu average), exceeding limit of 50% cpu over 180 seconds
+CPU limit:        90s
+Limit duration:   180s
+CPU used:         90s
+CPU duration:     174s
+Duration:         173.64s
+Duration Sampled: 115.65s (event starts 57.56s before samples, event ends 0.43s after samples)
+Steps:            66
+
+Hardware model:   MacBookPro16,2
+Active cpus:      14
+Memory size:      16 GB
+HW page size:     4096
+VM page size:     4096
+Shared cache residency: 22.70% (1078.28 MB / 4749.33 MB)
+Boot args:        -v debug=0x100 keepsyms=1 itlwm_he=1 itlwm_mtl_internal_aux=1 nmxintel=1 nmxnpu=1 
+
+Time Since Boot:  1323s
+Time Awake Since Boot: 1323s
+Time Since Wake:  n/a (machine hasn't slept)
+
+Total CPU Time:   172.207s
+Advisory levels:  Battery -> 1, User -> 2, ThermalPressure -> 0, Combined -> 1
+Free disk space:  454.71 GB/476.74 GB, low space threshold 3072 MB
+Vnodes Available: 91.04% (239581/263168, 58104 allocated)
+Models:           none
+
+Preferred User Language: en-GB
+Country Code:     GB
+Keyboards:        British-PC, British
+OS Cryptex File Extents: 1
+
+Heaviest stack for the target process:
+  24  start + 3056 (dyld + 25904) [0x7ff81c11d530]
+  24  ??? (WindowServer + 1745) [0x10eef16d1]
+  24  SLXServer + 1340 (SkyLight + 3972532) [0x7ff8224fadb4]
+  24  server_loop + 98 (SkyLight + 3972951) [0x7ff8224faf57]
+  24  CGXRunOneServicesPass + 1699 (SkyLight + 3970400) [0x7ff8224fa560]
+  24  post_port_data + 277 (SkyLight + 3971106) [0x7ff8224fa822]
+  24  non_coalesced_timer_handler + 16 (SkyLight + 3710425) [0x7ff8224badd9]
+  24  run_timer_pass + 560 (SkyLight + 3710182) [0x7ff8224bace6]
+  24  update_display_callback(void*, double) + 1937 (SkyLight + 3015996) [0x7ff82241153c]
+  24  CGXUpdateDisplay + 91 (SkyLight + 3065309) [0x7ff82241d5dd]
+  24  WS::Updater::UpdateDisplays(CGXConnection*, bool, std::__1::vector<std::__1::shared_ptr<WS::Displays::Display>, std::__1::allocator<std::__1::shared_ptr<WS::Displays::Display>>>) + 20990 (SkyLight + 3086343) [0x7ff822422807]
+  24  WS::Displays::CDDisplay::render_update(WS::Displays::Update&, Compositor*, unsigned int, WSCompositeSourceLayer*) + 1701 (SkyLight + 2272557) [0x7ff82235bd2d]
+  23  CompositorSW::CompositeLayersToDestination(WSCompositeSourceLayer*, WSCompositeDestination*, unsigned long long) + 926 (SkyLight + 1035198) [0x7ff82222dbbe]
+  18  layer_blit_entry(void*) + 1260 (SkyLight + 3771574) [0x7ff8224c9cb6]
+  18  CGLayerKitFetch + 488 (SkyLight + 1320952) [0x7ff8222737f8]
+  18  CARenderOGLRender + 45 (QuartzCore + 1915514) [0x7ff82598ca7a]
+  18  CA::OGL::render(CA::OGL::Renderer&, CA::Render::Update*, unsigned long) + 487 (QuartzCore + 1084377) [0x7ff8258c1bd9]
+  18  CA::OGL::Renderer::render(CA::Render::Update const*, unsigned long, CA::WindowServer::SharedEvent*) + 2372 (QuartzCore + 1083128) [0x7ff8258c16f8]
+  18  CA::OGL::render_prepared_layers(CA::OGL::Renderer&, CA::OGL::Layer&, CA::OGL::Layer*, CA::OGL::Gstate const&) + 511 (QuartzCore + 1285152) [0x7ff8258f2c20]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+  18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+  18  CA::OGL::FilterNode::apply(float, CA::OGL::Surface**, float*) + 772 (QuartzCore + 743198) [0x7ff82586e71e]
+  18  CA::OGL::render_vibrant_color_matrix(CA::OGL::Context&, CA::Render::Filter const*, CA::OGL::Surface*, float) + 1239 (QuartzCore + 1694405) [0x7ff825956ac5]
+  18  CA::OGL::emit_filter_quads_color(CA::OGL::Context&, CA::OGL::Surface*, float, CA::OGL::BaseColor) + 133 (QuartzCore + 2710691) [0x7ff825a4eca3]
+  18  CA::OGL::Context::ClippedArray::next_rect(CA::Bounds&) + 328 (QuartzCore + 471598) [0x7ff82582c22e]
+  18  CA::OGL::Context::array_flush() + 55 (QuartzCore + 370959) [0x7ff82581390f]
+  18  CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*) + 6262 (QuartzCore + 1936238) [0x7ff825991b6e]
+  18  CA::OGL::clip_primitives(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, int const*, CA::OGL::ClipPlane const*, CA::Transform const*, CA::OGL::Vertex*, unsigned int, std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>, bool) + 1727 (QuartzCore + 1631934) [0x7ff8259476be]
+  18  std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*, unsigned int) const + 48 (QuartzCore + 1633530) [0x7ff825947cfa]
+  18  std::__1::__function::__func<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0, std::__1::allocator<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0>, bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*&&, unsigned int&&) + 21 (QuartzCore + 1944589) [0x7ff825993c0d]
+  18  CA::OGL::SW::draw_polygon(CA::OGL::Vertex*, unsigned int, CA::OGL::SW::RenderState const*) + 1591 (QuartzCore + 1946184) [0x7ff825994248]
+  18  dispatch_apply + 45 (libdispatch.dylib + 75359) [0x7ff81c32865f]
+  18  _dispatch_apply_with_attr_f + 1520 (libdispatch.dylib + 75063) [0x7ff81c328537]
+  18  _dispatch_sync_function_invoke + 54 (libdispatch.dylib + 26903) [0x7ff81c31c917]
+  18  _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+  18  _dispatch_apply_serial + 153 (libdispatch.dylib + 77338) [0x7ff81c328e1a]
+  18  _dispatch_client_callout2 + 6 (libdispatch.dylib + 96772) [0x7ff81c32da04]
+  18  invocation function for block in CA::OGL::SW::scan_convert(CA::OGL::SW::RenderState const*, CA::OGL::SW::Poly*, unsigned int) + 2308 (QuartzCore + 1948528) [0x7ff825994b70]
+  17  CA::OGL::SW::scanline(CA::OGL::SW::ScanState const*, int, int, int, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, unsigned int) + 8763 (QuartzCore + 1957569) [0x7ff825996ec1]
+  17  CA::OGL::SW::tex_vibrant_color_matrix(unsigned int*, unsigned int*, unsigned int const*, unsigned long, float const*) + 102 (QuartzCore + 1967925) [0x7ff825999735]
+  2   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 585 (QuartzCore + 1967712) [0x7ff825999660]
+
+
+Powerstats for:   WindowServer [161]
+UUID:             1746737B-B232-3669-B691-67604E4C8338
+Path:             /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+Codesigning ID:   com.apple.WindowServer
+Resource Coalition: 25 samples "com.apple.WindowServer"(143)
+Architecture:     x86_64
+Parent:           UNKNOWN [1]
+UID:              88
+Footprint:        41.49 MB -> 44.31 MB (+2892 KB)
+Start time:       2026-10-17 22:09:06.400 +0100
+End time:         2026-10-17 22:10:45.818 +0100
+Num samples:      25 (38%)
+Num threads:      2
+Primary state:    21 samples Non-Frontmost App, Non-Suppressed, User mode, Effective Thread QoS Unspecified, Requested Thread QoS Unspecified, Override Thread QoS Unspecified
+User Activity:    25 samples Idle, 0 samples Active
+Power Source:     25 samples on Battery, 0 samples on AC
+  24  start + 3056 (dyld + 25904) [0x7ff81c11d530]
+    24  ??? (WindowServer + 1745) [0x10eef16d1]
+      24  SLXServer + 1340 (SkyLight + 3972532) [0x7ff8224fadb4]
+        24  server_loop + 98 (SkyLight + 3972951) [0x7ff8224faf57]
+          24  CGXRunOneServicesPass + 1699 (SkyLight + 3970400) [0x7ff8224fa560]
+            24  post_port_data + 277 (SkyLight + 3971106) [0x7ff8224fa822]
+              24  non_coalesced_timer_handler + 16 (SkyLight + 3710425) [0x7ff8224badd9]
+                24  run_timer_pass + 560 (SkyLight + 3710182) [0x7ff8224bace6]
+                  24  update_display_callback(void*, double) + 1937 (SkyLight + 3015996) [0x7ff82241153c]
+                    24  CGXUpdateDisplay + 91 (SkyLight + 3065309) [0x7ff82241d5dd]
+                      24  WS::Updater::UpdateDisplays(CGXConnection*, bool, std::__1::vector<std::__1::shared_ptr<WS::Displays::Display>, std::__1::allocator<std::__1::shared_ptr<WS::Displays::Display>>>) + 20990 (SkyLight + 3086343) [0x7ff822422807]
+                        24  WS::Displays::CDDisplay::render_update(WS::Displays::Update&, Compositor*, unsigned int, WSCompositeSourceLayer*) + 1701 (SkyLight + 2272557) [0x7ff82235bd2d]
+                          23  CompositorSW::CompositeLayersToDestination(WSCompositeSourceLayer*, WSCompositeDestination*, unsigned long long) + 926 (SkyLight + 1035198) [0x7ff82222dbbe]
+                            18  layer_blit_entry(void*) + 1260 (SkyLight + 3771574) [0x7ff8224c9cb6]
+                              18  CGLayerKitFetch + 488 (SkyLight + 1320952) [0x7ff8222737f8]
+                                18  CARenderOGLRender + 45 (QuartzCore + 1915514) [0x7ff82598ca7a]
+                                  18  CA::OGL::render(CA::OGL::Renderer&, CA::Render::Update*, unsigned long) + 487 (QuartzCore + 1084377) [0x7ff8258c1bd9]
+                                    18  CA::OGL::Renderer::render(CA::Render::Update const*, unsigned long, CA::WindowServer::SharedEvent*) + 2372 (QuartzCore + 1083128) [0x7ff8258c16f8]
+                                      18  CA::OGL::render_prepared_layers(CA::OGL::Renderer&, CA::OGL::Layer&, CA::OGL::Layer*, CA::OGL::Gstate const&) + 511 (QuartzCore + 1285152) [0x7ff8258f2c20]
+                                        18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                          18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                            18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                              18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                  18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                    18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                      18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                        18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                          18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                            18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                              18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                  18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                    18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                      18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                        18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                          18  CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                            18  CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                              18  CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                                18  CA::OGL::FilterNode::apply(float, CA::OGL::Surface**, float*) + 772 (QuartzCore + 743198) [0x7ff82586e71e]
+                                                                                  18  CA::OGL::render_vibrant_color_matrix(CA::OGL::Context&, CA::Render::Filter const*, CA::OGL::Surface*, float) + 1239 (QuartzCore + 1694405) [0x7ff825956ac5]
+                                                                                    18  CA::OGL::emit_filter_quads_color(CA::OGL::Context&, CA::OGL::Surface*, float, CA::OGL::BaseColor) + 133 (QuartzCore + 2710691) [0x7ff825a4eca3]
+                                                                                      18  CA::OGL::Context::ClippedArray::next_rect(CA::Bounds&) + 328 (QuartzCore + 471598) [0x7ff82582c22e]
+                                                                                        18  CA::OGL::Context::array_flush() + 55 (QuartzCore + 370959) [0x7ff82581390f]
+                                                                                          18  CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*) + 6262 (QuartzCore + 1936238) [0x7ff825991b6e]
+                                                                                            18  CA::OGL::clip_primitives(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, int const*, CA::OGL::ClipPlane const*, CA::Transform const*, CA::OGL::Vertex*, unsigned int, std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>, bool) + 1727 (QuartzCore + 1631934) [0x7ff8259476be]
+                                                                                              18  std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*, unsigned int) const + 48 (QuartzCore + 1633530) [0x7ff825947cfa]
+                                                                                                18  std::__1::__function::__func<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0, std::__1::allocator<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0>, bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*&&, unsigned int&&) + 21 (QuartzCore + 1944589) [0x7ff825993c0d]
+                                                                                                  18  CA::OGL::SW::draw_polygon(CA::OGL::Vertex*, unsigned int, CA::OGL::SW::RenderState const*) + 1591 (QuartzCore + 1946184) [0x7ff825994248]
+                                                                                                    18  dispatch_apply + 45 (libdispatch.dylib + 75359) [0x7ff81c32865f]
+                                                                                                      18  _dispatch_apply_with_attr_f + 1520 (libdispatch.dylib + 75063) [0x7ff81c328537]
+                                                                                                        18  _dispatch_sync_function_invoke + 54 (libdispatch.dylib + 26903) [0x7ff81c31c917]
+                                                                                                          18  _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+                                                                                                            18  _dispatch_apply_serial + 153 (libdispatch.dylib + 77338) [0x7ff81c328e1a]
+                                                                                                              18  _dispatch_client_callout2 + 6 (libdispatch.dylib + 96772) [0x7ff81c32da04]
+                                                                                                                18  invocation function for block in CA::OGL::SW::scan_convert(CA::OGL::SW::RenderState const*, CA::OGL::SW::Poly*, unsigned int) + 2308 (QuartzCore + 1948528) [0x7ff825994b70]
+                                                                                                                  17  CA::OGL::SW::scanline(CA::OGL::SW::ScanState const*, int, int, int, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, unsigned int) + 8763 (QuartzCore + 1957569) [0x7ff825996ec1]
+                                                                                                                    17  CA::OGL::SW::tex_vibrant_color_matrix(unsigned int*, unsigned int*, unsigned int const*, unsigned long, float const*) + 102 (QuartzCore + 1967925) [0x7ff825999735]
+                                                                                                                      2   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 585 (QuartzCore + 1967712) [0x7ff825999660]
+                                                                                                                      2   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 486 (QuartzCore + 1967613) [0x7ff8259995fd]
+                                                                                                                      2   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 416 (QuartzCore + 1967543) [0x7ff8259995b7]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 677 (QuartzCore + 1967804) [0x7ff8259996bc]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 620 (QuartzCore + 1967747) [0x7ff825999683]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 605 (QuartzCore + 1967732) [0x7ff825999674]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 590 (QuartzCore + 1967717) [0x7ff825999665]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 533 (QuartzCore + 1967660) [0x7ff82599962c]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 528 (QuartzCore + 1967655) [0x7ff825999627]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 495 (QuartzCore + 1967622) [0x7ff825999606]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 475 (QuartzCore + 1967602) [0x7ff8259995f2]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 351 (QuartzCore + 1967478) [0x7ff825999576]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 159 (QuartzCore + 1967286) [0x7ff8259994b6]
+                                                                                                                      1   CA::OGL::SW::tex_color_matrix_4x4_bias(unsigned int*, unsigned int const*, unsigned long, float const*) + 117 (QuartzCore + 1967244) [0x7ff82599948c]
+                                                                                                                  1   CA::OGL::SW::scanline(CA::OGL::SW::ScanState const*, int, int, int, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, unsigned int) + 1212 (QuartzCore + 1950018) [0x7ff825995142]
+                                                                                                                    1   CA::OGL::SW::sample_texture(CA::OGL::SWContext&, CA::OGL::SW::Texture const*, int, unsigned int, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, unsigned char, unsigned int, unsigned int*) + 1029 (QuartzCore + 1962375) [0x7ff825998187]
+                                                                                                                      1   void CA::OGL::SW::image_sampler<CA::OGL::SW::Format::ARGB8_Host, unsigned int, false, false, false, false>(CA::OGL::SW::SamplerData const*, unsigned int, unsigned int*, unsigned int) + 60 (QuartzCore + 2001640) [0x7ff8259a1ae8]
+                            5   layer_blit_entry(void*) + 1401 (SkyLight + 3771715) [0x7ff8224c9d43]
+                              3   layer_blit_byte_ANY + 8978 (SkyLight + 3246966) [0x7ff822449b76]
+                                3   <Kernel mode>
+                              1   layer_blit_byte_ANY + 8982 (SkyLight + 3246970) [0x7ff822449b7a]
+                              1   layer_blit_byte_ANY + 2417 (SkyLight + 3240405) [0x7ff8224481d5]
+                          1   CompositorSW::CompositeLayersToDestination(WSCompositeSourceLayer*, WSCompositeDestination*, unsigned long long) + 715 (SkyLight + 1034987) [0x7ff82222daeb]
+                            1   layer_blit_entry(void*) + 1260 (SkyLight + 3771574) [0x7ff8224c9cb6]
+                              1   CGLayerKitFetch + 488 (SkyLight + 1320952) [0x7ff8222737f8]
+                                1   CARenderOGLRender + 45 (QuartzCore + 1915514) [0x7ff82598ca7a]
+                                  1   CA::OGL::render(CA::OGL::Renderer&, CA::Render::Update*, unsigned long) + 487 (QuartzCore + 1084377) [0x7ff8258c1bd9]
+                                    1   CA::OGL::Renderer::render(CA::Render::Update const*, unsigned long, CA::WindowServer::SharedEvent*) + 2372 (QuartzCore + 1083128) [0x7ff8258c16f8]
+                                      1   CA::OGL::render_prepared_layers(CA::OGL::Renderer&, CA::OGL::Layer&, CA::OGL::Layer*, CA::OGL::Gstate const&) + 511 (QuartzCore + 1285152) [0x7ff8258f2c20]
+                                        1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                          1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                            1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                              1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                  1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                    1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                      1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                        1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                          1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                            1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                              1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                  1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                    1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                      1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                        1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                          1   CA::OGL::LayerNode::apply(float, CA::OGL::Surface**, float*) + 164 (QuartzCore + 682912) [0x7ff82585fba0]
+                                                                            1   CA::OGL::render_layers(CA::OGL::Renderer&, CA::OGL::Layer*) + 382 (QuartzCore + 677594) [0x7ff82585e6da]
+                                                                              1   CA::OGL::ImagingNode::render(CA::OGL::ImagingNode::RenderClosure*, unsigned int) + 975 (QuartzCore + 679111) [0x7ff82585ecc7]
+                                                                                1   CA::OGL::FilterNode::apply(float, CA::OGL::Surface**, float*) + 772 (QuartzCore + 743198) [0x7ff82586e71e]
+                                                                                  1   CA::OGL::render_vibrant_color_matrix(CA::OGL::Context&, CA::Render::Filter const*, CA::OGL::Surface*, float) + 1239 (QuartzCore + 1694405) [0x7ff825956ac5]
+                                                                                    1   CA::OGL::emit_filter_quads_color(CA::OGL::Context&, CA::OGL::Surface*, float, CA::OGL::BaseColor) + 133 (QuartzCore + 2710691) [0x7ff825a4eca3]
+                                                                                      1   CA::OGL::Context::ClippedArray::next_rect(CA::Bounds&) + 328 (QuartzCore + 471598) [0x7ff82582c22e]
+                                                                                        1   CA::OGL::Context::array_flush() + 55 (QuartzCore + 370959) [0x7ff82581390f]
+                                                                                          1   CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*) + 6262 (QuartzCore + 1936238) [0x7ff825991b6e]
+                                                                                            1   CA::OGL::clip_primitives(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, int const*, CA::OGL::ClipPlane const*, CA::Transform const*, CA::OGL::Vertex*, unsigned int, std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>, bool) + 1727 (QuartzCore + 1631934) [0x7ff8259476be]
+                                                                                              1   std::__1::function<bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*, unsigned int) const + 48 (QuartzCore + 1633530) [0x7ff825947cfa]
+                                                                                                1   std::__1::__function::__func<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0, std::__1::allocator<CA::OGL::SWContext::draw_elements(CA::OGL::PrimitiveMode, unsigned int, unsigned short const*, CA::OGL::Vertex const*, unsigned int, unsigned int, CA::OGL::ClipPlane const*)::$_0>, bool (CA::OGL::Vertex*, unsigned int)>::operator()(CA::OGL::Vertex*&&, unsigned int&&) + 21 (QuartzCore + 1944589) [0x7ff825993c0d]
+                                                                                                  1   CA::OGL::SW::draw_polygon(CA::OGL::Vertex*, unsigned int, CA::OGL::SW::RenderState const*) + 1591 (QuartzCore + 1946184) [0x7ff825994248]
+                                                                                                    1   dispatch_apply + 45 (libdispatch.dylib + 75359) [0x7ff81c32865f]
+                                                                                                      1   _dispatch_apply_with_attr_f + 1520 (libdispatch.dylib + 75063) [0x7ff81c328537]
+                                                                                                        1   _dispatch_sync_function_invoke + 54 (libdispatch.dylib + 26903) [0x7ff81c31c917]
+                                                                                                          1   _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+                                                                                                            1   _dispatch_apply_serial + 153 (libdispatch.dylib + 77338) [0x7ff81c328e1a]
+                                                                                                              1   _dispatch_client_callout2 + 6 (libdispatch.dylib + 96772) [0x7ff81c32da04]
+                                                                                                                1   invocation function for block in CA::OGL::SW::scan_convert(CA::OGL::SW::RenderState const*, CA::OGL::SW::Poly*, unsigned int) + 2308 (QuartzCore + 1948528) [0x7ff825994b70]
+                                                                                                                  1   CA::OGL::SW::scanline(CA::OGL::SW::ScanState const*, int, int, int, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex*, CA::OGL::SW::Poly::Vertex const*, unsigned int) + 1212 (QuartzCore + 1950018) [0x7ff825995142]
+                                                                                                                    1   CA::OGL::SW::sample_texture(CA::OGL::SWContext&, CA::OGL::SW::Texture const*, int, unsigned int, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, CA::OGL::SW::Poly::Vertex const*, unsigned char, unsigned int, unsigned int*) + 1029 (QuartzCore + 1962375) [0x7ff825998187]
+                                                                                                                      1   void CA::OGL::SW::image_sampler<CA::OGL::SW::Format::ARGB8_Host, unsigned int, false, false, false, false>(CA::OGL::SW::SamplerData const*, unsigned int, unsigned int*, unsigned int) + 38 (QuartzCore + 2001618) [0x7ff8259a1ad2]
+  1   start_wqthread + 15 (libsystem_pthread.dylib + 6211) [0x7ff81c4be843]
+    1   _pthread_wqthread + 233 (libsystem_pthread.dylib + 10272) [0x7ff81c4bf820]
+      1   _dispatch_worker_thread2 + 147 (libdispatch.dylib + 69397) [0x7ff81c326f15]
+        1   _dispatch_root_queue_drain.cold.3 + 1 (libdispatch.dylib + 205416) [0x7ff81c348268]
+          1   <Effective Thread QoS Default, Requested Thread QoS Default>
+
+  Binary Images:
+           0x10eef1000 -        0x10eef5fff  WindowServer (891.10.2.1)               <1746737B-B232-3669-B691-67604E4C8338>  /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+        0x7ff81c117000 -     0x7ff81c1b16c7  dyld (1286.10)                          <22E15325-4DF0-3BA4-882C-314A2A7A3239>  /usr/lib/dyld
+        0x7ff81c316000 -     0x7ff81c35d339  libdispatch.dylib (1521.140.2)          <9BC18302-2A6A-38A7-8A59-F571D6721BDC>  /usr/lib/system/libdispatch.dylib
+        0x7ff81c4bd000 -     0x7ff81c4c8fd7  libsystem_pthread.dylib (536.0.0.702.1) <2410DCD3-4D92-30B2-96EC-4BD6F78139D4>  /usr/lib/system/libsystem_pthread.dylib
+        0x7ff822131000 -     0x7ff8225fff2f  com.apple.SkyLight 1.600.0 (891.10.2.1) <14C81C57-7629-32F2-9E8C-AF32EF962700>  /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight
+        0x7ff8257b9000 -     0x7ff825b6611d  com.apple.QuartzCore 1.11 (1156.18.3)   <3287B1DC-EFED-3202-8C23-1BF41AE6EA6A>  /System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore
+
+
+Powerstats for:   VTDecoderXPCService
+UUID:             707AA9F8-D76A-3985-8DA9-E4984A1A17E6
+Path:             /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService
+Identifier:       com.apple.coremedia.videodecoder
+Version:          1.0 (1)
+Build Version:    1
+Project Name:     CoreMedia_VideoToolbox
+Source Version:   3235014105008000
+Resource Coalition: 37 samples "com.apple.wallpaper.extension.video"(981)
+On Behalf Of:     37 samples UNKNOWN [898] (37 samples originated by UNKNOWN [898])
+Architecture:     x86_64
+Start time:       2026-10-17 22:09:06.945 +0100
+End time:         2026-10-17 22:10:48.535 +0100
+Num samples:      37 (56%)
+Primary state:    33 samples Non-Frontmost App, Non-Suppressed, User mode, Effective Thread QoS Default, Requested Thread QoS Default, Override Thread QoS Unspecified
+User Activity:    37 samples Idle, 0 samples Active
+Power Source:     37 samples on Battery, 0 samples on AC
+  37  start_wqthread + 15 (libsystem_pthread.dylib + 6211) [0x7ff81c4be843]
+    37  _pthread_wqthread + 233 (libsystem_pthread.dylib + 10272) [0x7ff81c4bf820]
+      37  _dispatch_worker_thread2 + 147 (libdispatch.dylib + 69397) [0x7ff81c326f15]
+        37  _dispatch_root_queue_drain + 98 (libdispatch.dylib + 68246) [0x7ff81c326a96]
+          35  _dispatch_root_queue_drain.cold.3 + 931 (libdispatch.dylib + 206346) [0x7ff81c34860a]
+            35  _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+              35  ??? (VCPHEVC + 972023) [0x1040264f7]
+                32  ??? (VCPHEVC + 160028) [0x103f6011c]
+                  24  ??? (VCPHEVC + 642726) [0x103fd5ea6]
+                    5   ??? (VCPHEVC + 644993) [0x103fd6781]
+                      2   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                        2   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629498) [0x103fd2afa]
+                            1   ??? (VCPHEVC + 810237) [0x103ffecfd]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                          1   ??? (VCPHEVC + 629038) [0x103fd292e]
+                            1   ??? (VCPHEVC + 579863) [0x103fc6917]
+                              1   ??? (VCPHEVC + 1535098) [0x1040afc7a]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      2   ??? (VCPHEVC + 644993) [0x103fd6781]
+                        1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                          1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                            1   ??? (VCPHEVC + 629038) [0x103fd292e]
+                              1   ??? (VCPHEVC + 579923) [0x103fc6953]
+                                1   ??? (VCPHEVC + 79327) [0x103f4c5df]
+                                  1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                        1   ??? (VCPHEVC + 645206) [0x103fd6856]
+                          1   ??? (VCPHEVC + 652891) [0x103fd865b]
+                            1   ??? (VCPHEVC + 609985) [0x103fcdec1]
+                              1   ??? (VCPHEVC + 1629885) [0x1040c6ebd]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                        1   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                          1   ??? (VCPHEVC + 650685) [0x103fd7dbd]
+                            1   ??? (VCPHEVC + 611231) [0x103fce39f]
+                              1   ??? (VCPHEVC + 604453) [0x103fcc925]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    5   ??? (VCPHEVC + 645286) [0x103fd68a6]
+                      2   ??? (VCPHEVC + 644993) [0x103fd6781]
+                        1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                          1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                            1   ??? (VCPHEVC + 629409) [0x103fd2aa1]
+                              1   ??? (VCPHEVC + 1529404) [0x1040ae63c]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                        1   ??? (VCPHEVC + 645286) [0x103fd68a6]
+                          1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                            1   ??? (VCPHEVC + 656884) [0x103fd95f4]
+                              1   ??? (VCPHEVC + 215395) [0x103f6d963]
+                                1   ??? (VCPHEVC + 216780) [0x103f6decc]
+                                  1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 652891) [0x103fd865b]
+                        1   ??? (VCPHEVC + 611231) [0x103fce39f]
+                          1   ??? (VCPHEVC + 604243) [0x103fcc853]
+                            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 651109) [0x103fd7f65]
+                        1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629038) [0x103fd292e]
+                            1   ??? (VCPHEVC + 579923) [0x103fc6953]
+                              1   ??? (VCPHEVC + 1535350) [0x1040afd76]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                        1   ??? (VCPHEVC + 645286) [0x103fd68a6]
+                          1   ??? (VCPHEVC + 652891) [0x103fd865b]
+                            1   ??? (VCPHEVC + 611200) [0x103fce380]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    5   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                      2   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                        1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                          1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                            1   ??? (VCPHEVC + 629038) [0x103fd292e]
+                              1   ??? (VCPHEVC + 579863) [0x103fc6917]
+                                1   ??? (VCPHEVC + 1535421) [0x1040afdbd]
+                                  1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                        1   ??? (VCPHEVC + 644356) [0x103fd6504]
+                          1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 651109) [0x103fd7f65]
+                        1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629038) [0x103fd292e]
+                            1   ??? (VCPHEVC + 579962) [0x103fc697a]
+                              1   ??? (VCPHEVC + 1537296) [0x1040b0510]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                        1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629409) [0x103fd2aa1]
+                            1   ??? (VCPHEVC + 1529239) [0x1040ae597]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 645206) [0x103fd6856]
+                        1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                          1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                            1   ??? (VCPHEVC + 629118) [0x103fd297e]
+                              1   ??? (VCPHEVC + 580123) [0x103fc6a1b]
+                                1   ??? (VCPHEVC + 1583281) [0x1040bb8b1]
+                                  1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    4   ??? (VCPHEVC + 645206) [0x103fd6856]
+                      1   ??? (VCPHEVC + 651109) [0x103fd7f65]
+                        1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629409) [0x103fd2aa1]
+                            1   ??? (VCPHEVC + 1529617) [0x1040ae711]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                        1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                          1   ??? (VCPHEVC + 629118) [0x103fd297e]
+                            1   ??? (VCPHEVC + 580123) [0x103fc6a1b]
+                              1   ??? (VCPHEVC + 1583255) [0x1040bb897]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 645286) [0x103fd68a6]
+                        1   ??? (VCPHEVC + 645088) [0x103fd67e0]
+                          1   ??? (VCPHEVC + 650432) [0x103fd7cc0]
+                            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 644993) [0x103fd6781]
+                        1   ??? (VCPHEVC + 645206) [0x103fd6856]
+                          1   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                            1   ??? (VCPHEVC + 656940) [0x103fd962c]
+                              1   ??? (VCPHEVC + 628896) [0x103fd28a0]
+                                1   ??? (VCPHEVC + 636457) [0x103fd4629]
+                                  1   ??? (VCPHEVC + 138993) [0x103f5aef1]
+                                    1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    3   ??? (VCPHEVC + 646576) [0x103fd6db0]
+                      3   ??? (VCPHEVC + 656940) [0x103fd962c]
+                        2   ??? (VCPHEVC + 629038) [0x103fd292e]
+                          1   ??? (VCPHEVC + 579923) [0x103fc6953]
+                            1   ??? (VCPHEVC + 1531538) [0x1040aee92]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                          1   ??? (VCPHEVC + 579863) [0x103fc6917]
+                            1   ??? (VCPHEVC + 1531578) [0x1040aeeba]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                        1   ??? (VCPHEVC + 629498) [0x103fd2afa]
+                          1   ??? (VCPHEVC + 1579798) [0x1040bab16]
+                            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    2   ??? (VCPHEVC + 652481) [0x103fd84c1]
+                      2   ??? (VCPHEVC + 656940) [0x103fd962c]
+                        1   ??? (VCPHEVC + 629324) [0x103fd2a4c]
+                          1   ??? (VCPHEVC + 138697) [0x103f5adc9]
+                            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                        1   ??? (VCPHEVC + 629118) [0x103fd297e]
+                          1   ??? (VCPHEVC + 580123) [0x103fc6a1b]
+                            1   ??? (VCPHEVC + 1583327) [0x1040bb8df]
+                              1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                  6   ??? (VCPHEVC + 643213) [0x103fd608d]
+                    3   ??? (VCPHEVC + 783844) [0x103ff85e4]
+                      1   ??? (VCPHEVC + 1372226) [0x104088042]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 1371873) [0x104087ee1]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 1370414) [0x10408792e]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    2   ??? (VCPHEVC + 783943) [0x103ff8647]
+                      1   ??? (VCPHEVC + 1356358) [0x104084246]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                      1   ??? (VCPHEVC + 1355833) [0x104084039]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                    1   ??? (VCPHEVC + 784051) [0x103ff86b3]
+                      1   ??? (VCPHEVC + 1354456) [0x104083ad8]
+                        1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                  1   ??? (VCPHEVC + 643471) [0x103fd618f]
+                    1   ??? (VCPHEVC + 1250146) [0x10406a362]
+                      1   ??? (VCPHEVC + 1250391) [0x10406a457]
+                        1   ??? (VCPHEVC + 423551) [0x103fa067f]
+                          1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+                  1   ??? (VCPHEVC + 640217) [0x103fd54d9]
+                    1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898]), Kernel mode>
+                1   ??? (VCPHEVC + 160233) [0x103f601e9]
+                  1   ??? (VCPHEVC + 1455371) [0x10409c50b]
+                    1   ??? (VCPHEVC + 676313) [0x103fde1d9]
+                      1   ??? (VCPHEVC + 661998) [0x103fda9ee]
+                        1   ??? (VCPHEVC + 68720) [0x103f49c70]
+                          1   CVPixelBufferBacking::unlockBaseAddress(unsigned long long) + 86 (CoreVideo + 45520) [0x7ff825fe31d0]
+                            1   IOSurfaceClientUnlock + 82 (IOSurface + 9333) [0x7ff827914475]
+                              1   iokit_user_client_trap + 10 (IOKit + 141146) [0x7ff81fec375a]
+                                1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898]), Kernel mode>
+                1   ??? (VCPHEVC + 160052) [0x103f60134]
+                  1   std::__1::condition_variable::notify_all() + 9 (libc++.1.dylib + 112755) [0x7ff81c405873]
+                    1   __psynch_cvbroad + 10 (libsystem_kernel.dylib + 14094) [0x7ff81c48370e]
+                      1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898]), Kernel mode>
+                1   ??? (VCPHEVC + 159948) [0x103f600cc]
+                  1   std::__1::condition_variable::wait(std::__1::unique_lock<std::__1::mutex>&) + 18 (libc++.1.dylib + 112784) [0x7ff81c405890]
+                    1   __psynch_cvwait + 10 (libsystem_kernel.dylib + 14070) [0x7ff81c4836f6]
+                      1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898]), Kernel mode>
+          1   _dispatch_root_queue_drain.cold.3 + 788 (libdispatch.dylib + 206203) [0x7ff81c34857b]
+            1   _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+              1   _dispatch_apply_invoke + 184 (libdispatch.dylib + 73304) [0x7ff81c327e58]
+                1   _dispatch_once_callout + 20 (libdispatch.dylib + 14573) [0x7ff81c3198ed]
+                  1   _dispatch_client_callout + 6 (libdispatch.dylib + 96764) [0x7ff81c32d9fc]
+                    1   _dispatch_apply_invoke3 + 440 (libdispatch.dylib + 77036) [0x7ff81c328cec]
+                      1   _dispatch_client_callout2 + 6 (libdispatch.dylib + 96772) [0x7ff81c32da04]
+                        1   ??? (VideoToolbox + 5035650) [0x7ff82d279682]
+                          1   __truncsfhf2 + 92 (libcompiler_rt.dylib + 21712) [0x7ff82a9e64d0]
+                            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+          1   _dispatch_last_resort_autorelease_pool_pop + 7 (libdispatch.dylib + 195546) [0x7ff81c345bda]
+            1   <on behalf of UNKNOWN [898] (originated by UNKNOWN [898])>
+
+  Binary Images:
+           0x1017b9000 -                ???  com.apple.coremedia.videodecoder 1.0 (1)             <707AA9F8-D76A-3985-8DA9-E4984A1A17E6>  /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService
+           0x103f39000 -        0x10411ffff  com.apple.VCPHEVC 0.9.1 (0.9.1)                      <5F383FB8-C066-3371-9C38-D8316CCCA3E1>  /System/Library/Video/Plug-Ins/VCPHEVC.bundle/Contents/MacOS/VCPHEVC
+        0x7ff81c316000 -     0x7ff81c35d339  libdispatch.dylib (1521.140.2)                       <9BC18302-2A6A-38A7-8A59-F571D6721BDC>  /usr/lib/system/libdispatch.dylib
+        0x7ff81c3ea000 -     0x7ff81c468fff  libc++.1.dylib (1900.181)                            <8B12A903-6375-38A8-88C7-1DB258194767>  /usr/lib/libc++.1.dylib
+        0x7ff81c480000 -     0x7ff81c4bcb1f  libsystem_kernel.dylib (11417.140.69.712.69)         <96CC590B-A75E-3BED-A0F3-DF6C2454D6DD>  /usr/lib/system/libsystem_kernel.dylib
+        0x7ff81c4bd000 -     0x7ff81c4c8fd7  libsystem_pthread.dylib (536.0.0.702.1)              <2410DCD3-4D92-30B2-96EC-4BD6F78139D4>  /usr/lib/system/libsystem_pthread.dylib
+        0x7ff81fea1000 -     0x7ff81ff6614e  com.apple.framework.IOKit 2.0.2 (100150.120.2.701.1) <C1981AE3-07A7-3982-AC88-F192A4ECF545>  /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit
+        0x7ff825fd8000 -     0x7ff82602bc73  com.apple.CoreVideo 1.8 (0.0)                        <C9F42E34-65A0-3E32-AB97-DCAB72812FB8>  /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo
+        0x7ff827912000 -     0x7ff827929036  com.apple.IOSurface 372.5.2 (372.5.2)                <E2D932FB-95A0-35FF-AAF4-7E2CC3959B7E>  /System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface
+        0x7ff82a9e1000 -     0x7ff82a9e89cf  libcompiler_rt.dylib (103.3)                         <14F604FA-8B07-3846-857B-B79A07B6176E>  /usr/lib/system/libcompiler_rt.dylib
+        0x7ff82cdac000 -     0x7ff82d3ac7ef  com.apple.VideoToolbox 1.0 (3235.14.105.8)           <B59FEC94-81BB-3589-8CFA-3EDAF7EFC696>  /System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox

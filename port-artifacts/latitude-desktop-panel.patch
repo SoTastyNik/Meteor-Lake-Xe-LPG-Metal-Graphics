@@ -1,0 +1,197 @@
+diff --git a/kexts/NMXVGAFB/nmxvgafb.cpp b/kexts/NMXVGAFB/nmxvgafb.cpp
+index 199e634..9523d6e 100644
+--- a/kexts/NMXVGAFB/nmxvgafb.cpp
++++ b/kexts/NMXVGAFB/nmxvgafb.cpp
+@@ -29,13 +29,21 @@
+ 
+ #include <mach/kmod.h>
+ extern "C" kern_return_t _start(kmod_info_t *ki, void *d); extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
++#ifdef LATITUDE_MTL_PANEL
++extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.LatitudeMTLFB, "0.2.0", _start, _stop) }
++#else
+ extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.NMXVGAFB, "0.1", _start, _stop) }
++#endif
+ extern "C" kern_return_t _start(kmod_info_t *ki, void *d) { return KERN_SUCCESS; }
+ extern "C" kern_return_t _stop(kmod_info_t *ki, void *d)  { return KERN_SUCCESS; }
+ 
+ 
+ class NMXVGAFB : public IOFramebuffer {
+     OSDeclareDefaultStructors(NMXVGAFB)
++#ifdef LATITUDE_MTL_PANEL
++    bool fPanelTiming = false;
++    bool adoptLatitudePanel(IOPCIDevice *pci);
++#endif
+     IOMemoryMap *fSurfMap = nullptr;   // write-combined CPU view of the scan-out (NMXAccel's frames land here)
+     struct Irq { IOFBInterruptProc proc = nullptr; OSObject *target = nullptr; void *ref = nullptr; };
+     Irq fVbl, fConnect;
+@@ -170,7 +178,7 @@ private:
+     thread_call_t fHoldCap = nullptr;
+     IOService *fAccel = nullptr;          // the accelerator that armed this head (retained)
+     volatile UInt32 fOpenedOnce = 0;
+-    static constexpr uint32_t kHoldCapSec = 20;
++    static constexpr uint32_t kHoldCapSec = 45;
+     void releaseHold(const char *why) {
+         if (!OSCompareAndSwap(1, 0, &fHolding)) return;
+         adjustBusy(-1);
+@@ -561,14 +569,16 @@ static bool opted_in_once()
+ {
+     int v = 0;
+     if (PE_parse_boot_argn("-nmxvgafboff", &v, sizeof(v))) return false;
++#ifndef LATITUDE_MTL_PANEL
+     if (PE_parse_boot_argn("nmxvgafb", &v, sizeof(v)) && v != 0) return true;
++#endif
+     bool once = false;
+     if (IORegistryEntry *e = IORegistryEntry::fromPath("/options", gIODTPlane)) {
+         if (IODTNVRAM *n = OSDynamicCast(IODTNVRAM, e)) {
+-            if (OSObject *o = n->copyProperty("nullmoth-vgafb-once")) {
++            if (OSObject *o = n->copyProperty("nullmoth-panel-once")) {
+                 o->release();
+                 once = true;
+-                if (const OSSymbol *k = OSSymbol::withCString("nullmoth-vgafb-once")) { n->removeProperty(k); k->release(); }
++                if (const OSSymbol *k = OSSymbol::withCString("nullmoth-panel-once")) { n->removeProperty(k); k->release(); }
+                 n->sync();
+             }
+         }
+@@ -579,7 +589,20 @@ static bool opted_in_once()
+ 
+ IOService *NMXVGAFB::probe(IOService *provider, SInt32 *score)
+ {
+-    if (!OSDynamicCast(IOPCIDevice, provider)) return nullptr;
++#ifdef LATITUDE_MTL_PANEL
++    if (provider->getProperty("LatitudePanelOptedIn") != kOSBooleanTrue) return nullptr;
++    IOPCIDevice *matchedPCI = OSDynamicCast(IOPCIDevice, provider->getProvider());
++    g_opted = 1;
++#else
++    IOPCIDevice *matchedPCI = OSDynamicCast(IOPCIDevice, provider);
++#endif
++    if (!matchedPCI) return nullptr;
++#ifdef LATITUDE_MTL_PANEL
++    if (matchedPCI->configRead16(kIOPCIConfigVendorID) != 0x8086 ||
++        matchedPCI->configRead16(kIOPCIConfigDeviceID) != 0x7d45 ||
++        matchedPCI->configRead16(kIOPCIConfigSubSystemVendorID) != 0x1028 ||
++        matchedPCI->configRead16(kIOPCIConfigSubSystemID) != 0x0cb6) return nullptr;
++#endif
+     if (!opted_in()) { VFBLOG("not opted in (nmxvgafb=1 or NVRAM nullmoth-vgafb-once) - the firmware framebuffer keeps the display"); return nullptr; }
+     VFBLOG("probe: opted in");
+     return IOFramebuffer::probe(provider, score);
+@@ -587,6 +610,58 @@ IOService *NMXVGAFB::probe(IOService *provider, SInt32 *score)
+ 
+ static void nmxVramReserve(unsigned long long slotBytes);
+ 
++#ifdef LATITUDE_MTL_PANEL
++bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
++{
++    IOMemoryMap *mmio = pci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
++    IODeviceMemory *ap = pci->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress2);
++    if (!mmio || !ap || mmio->getLength() < 0x74000) {
++        OSSafeReleaseNULL(mmio); VFBLOG("Latitude: BAR0/BAR2 unavailable; declining"); return false;
++    }
++    const volatile uint8_t *regs = (const volatile uint8_t *)mmio->getVirtualAddress();
++    auto rd = [regs](uint32_t off) { return *(const volatile uint32_t *)(regs + off); };
++    bool found = false;
++    for (unsigned pipe = 0; pipe < 4; pipe++) {
++        uint32_t step = pipe * 0x1000, ctl = rd(0x70180 + step), conf = rd(0x70008 + step);
++        VFBLOG("Latitude pipe %c: conf=0x%x ctl=0x%x size=0x%x stride=0x%x surf=0x%x", 'A'+pipe,
++               conf, ctl, rd(0x70190+step), rd(0x70188+step), rd(0x7019c+step));
++        if (!(ctl & (1u<<31)) || !(conf & (1u<<31))) continue;
++        uint32_t size = rd(0x70190+step), pitch = (rd(0x70188+step)&0x7ff)*64;
++        uint64_t surf = rd(0x7019c+step)&~0xfffull;
++        if (((ctl>>23)&31) != 8 || ((ctl>>10)&7) != 0 ||
++            (size&0xffff)+1 != fWidth || (size>>16)+1 != fHeight || pitch != fRowBytes ||
++            ap->getPhysicalAddress()+surf != fBase ||
++            surf+(uint64_t)pitch*fHeight > ap->getLength()) continue;
++        uint32_t ht = rd(0x60000+step), vt = rd(0x6000c+step);
++        uint32_t hs = rd(0x60008+step), vs = rd(0x60014+step);
++        uint32_t htotal=(ht>>16)+1, vtotal=(vt>>16)+1;
++        uint32_t hstart=(hs&0xffff)+1, hend=(hs>>16)+1;
++        uint32_t vstart=(vs&0xffff)+1, vend=(vs>>16)+1;
++        if ((ht&0xffff)+1 != fWidth || (vt&0xffff)+1 != fHeight ||
++            htotal<=fWidth || vtotal<=fHeight || hstart<fWidth || hend<=hstart || hend>htotal ||
++            vstart<fHeight || vend<=vstart || vend>vtotal) continue;
++        uint32_t frame0=rd(0x70040+step); uint64_t t0=mach_absolute_time(); IOSleep(250);
++        uint32_t frames=rd(0x70040+step)-frame0; uint64_t ns=0;
++        absolutetime_to_nanoseconds(mach_absolute_time()-t0,&ns);
++        if (!ns || frames<5 || frames>100) { VFBLOG("Latitude: panel frame counter did not advance plausibly"); continue; }
++        uint64_t mhz=(uint64_t)frames*1000000000000ull/ns;
++        if (mhz<30000 || mhz>240000) continue;
++        fHT=htotal; fVT=vtotal; fHSO=hstart-fWidth; fHSW=hend-hstart;
++        fVSO=vstart-fHeight; fVSW=vend-vstart; fRefreshMHz=(uint32_t)mhz;
++        fHz=(uint32_t)((mhz+500)/1000); fFrameNs=ns/frames;
++        fPclk=(uint64_t)htotal*vtotal*mhz/1000; fPanelTiming=true;
++        setProperty("LatitudePanelPipe",pipe,32); setProperty("LatitudePanelValidated",kOSBooleanTrue);
++        setProperty("LatitudePanelScanout",fBase,64); setProperty("LatitudePanelRefreshMilliHz",mhz,64);
++        VFBLOG("Latitude: validated firmware panel %ux%u pitch %u pipe %c at %u.%03u Hz",fWidth,fHeight,fRowBytes,
++               'A'+pipe,fRefreshMHz/1000,fRefreshMHz%1000);
++        found=true; break;
++    }
++    mmio->release();
++    if (!found) VFBLOG("Latitude: no linear firmware plane matches GOP; declining");
++    return found;
++}
++#endif
++
+ bool NMXVGAFB::start(IOService *provider)
+ {
+     // the mode the firmware lit (GOP): base, size and pitch of the linear framebuffer
+@@ -608,7 +683,15 @@ bool NMXVGAFB::start(IOService *provider)
+         if (PE_parse_boot_argn("nmxvgafb_hz", &hz, sizeof hz) && hz >= 30 && hz <= 240) { fHz = hz; fHzForced = true; }
+     }
+     // the framebuffer must lie in one of the device's memory BARs, or it is not this device's
++#ifdef LATITUDE_MTL_PANEL
++    IOPCIDevice *pci = OSDynamicCast(IOPCIDevice,provider->getProvider());
++    if (!pci) return false;
++#else
+     IOPCIDevice *pci = (IOPCIDevice *)provider;
++#endif
++#ifdef LATITUDE_MTL_PANEL
++    if (!adoptLatitudePanel(pci)) return false;
++#endif
+     bool inBar = false;
+     for (UInt32 i = 0; i < pci->getDeviceMemoryCount() && !inBar; i++) {
+         IODeviceMemory *m = pci->getDeviceMemoryWithIndex(i);
+@@ -629,6 +712,10 @@ bool NMXVGAFB::start(IOService *provider)
+         it->release();
+     }
+     if (ndrv) {
++#ifdef LATITUDE_MTL_PANEL
++        VFBLOG("Latitude: existing framebuffer %s is active; declining takeover", ndrv->getName());
++        ndrv->release(); return false;
++#endif
+         VFBLOG("start: terminating %s (%s) on this device", ndrv->getName(), ndrv->getMetaClass()->getClassName());
+         bool ok = ndrv->terminate(kIOServiceRequired | kIOServiceSynchronous);
+         VFBLOG("start: terminate %s", ok ? "done" : "FAILED - declining");
+@@ -638,7 +725,10 @@ bool NMXVGAFB::start(IOService *provider)
+     pci->setMemoryEnable(true);
+     {
+         int off = 0;
+-        if (PE_parse_boot_argn("-nmxvgafbnovirtio", &off, sizeof(off))) VFBLOG("start: virtio-gpu off (-nmxvgafbnovirtio)");
++#ifdef LATITUDE_MTL_PANEL
++        off = 1;
++#endif
++        if (off || PE_parse_boot_argn("-nmxvgafbnovirtio", &off, sizeof(off))) VFBLOG("start: virtio-gpu off (-nmxvgafbnovirtio)");
+         else if (!startVirtio(pci, fBase)) VFBLOG("start: no virtio-gpu scan-out - the VGA BAR stays the scan-out");
+     }
+     setTiming();
+@@ -701,6 +791,11 @@ bool NMXVGAFB::start(IOService *provider)
+         // can come before the hold above (measured: 13 ms earlier), and the hold then lasted the whole cap
+         if (fAccel) releaseHold("the accelerator armed this head before the hold");
+     }
++#ifdef LATITUDE_MTL_PANEL
++    if (const OSSymbol *fn=OSSymbol::withCStringNoCopy("latitudePanelFramebufferReady")) {
++        provider->callPlatformFunction(fn,false,this,nullptr,nullptr,nullptr);fn->release();
++    }
++#endif
+     return true;
+ }
+ 
+@@ -1116,6 +1211,10 @@ IOReturn NMXVGAFB::setCursorState(SInt32 x, SInt32 y, bool visible)
+ 
+ NMXVGAFB::Timing NMXVGAFB::timingFor(uint32_t w, uint32_t h) const
+ {
++#ifdef LATITUDE_MTL_PANEL
++    if (fPanelTiming && w==fWidth && h==fHeight)
++        return { fHT,fVT,fHSO,fHSW,fVSO,fVSW,fRefreshMHz,fPclk,fFrameNs };
++#endif
+     Timing t;
+     auto d = [this](unsigned i) -> uint32_t { return fEdid[54 + i]; };     // the first detailed timing descriptor
+     const uint64_t pclk = (uint64_t)(d(0) | d(1) << 8) * 10000;

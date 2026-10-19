@@ -1,0 +1,3 @@
+495ed4cce9ece3fda3fd038e82031ab11ca1b8167c56f7bf7f66d13b8f2ed3b7  /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB
+80c3fe8bfa639a1f6cd52a29ab485695d4f18ae289f70e39bbc4b021fb0ab0f6  /Library/Extensions/NMXGPU.kext/Contents/MacOS/NMXGPU
+931ae4c128b25c32827e40e288f82f6e6bce11491f4b980e3c86fd041344971a  /Library/KernelCollections/AuxiliaryKernelExtensions.kc

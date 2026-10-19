@@ -1,0 +1,1 @@
+PASS actual submit_wait wrapper: target/process scope, 3000 serialized desktop submissions across3threads, app concurrency preserved, begin/finish-error unlock, recursive managed flush without deadlock

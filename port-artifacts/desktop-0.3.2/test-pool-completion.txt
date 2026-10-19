@@ -1,0 +1,4 @@
+PASS actual submit_finish mode=0: main, prologue and counter-reset pools obey fence/witness lifetime
+PASS actual submit_finish mode=1: main, prologue and counter-reset pools obey fence/witness lifetime
+PASS actual submit_finish mode=2: main, prologue and counter-reset pools obey fence/witness lifetime
+PASS actual submit_finish mode=3: main, prologue and counter-reset pools obey fence/witness lifetime

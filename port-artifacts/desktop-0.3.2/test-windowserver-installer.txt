@@ -1,0 +1,1 @@
+PASS actual desktop-only installer: baseline/kernel guards before mutation, plugin-only replacement/backup, one-shot arming, rollback and opt-in cleanup on verification/partial-arm failures; no GPU suite

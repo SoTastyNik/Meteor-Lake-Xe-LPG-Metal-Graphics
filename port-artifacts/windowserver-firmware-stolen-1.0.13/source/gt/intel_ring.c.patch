@@ -1,0 +1,16 @@
+--- a/gt/intel_ring.c
++++ b/gt/intel_ring.c
+@@ -73,6 +73,13 @@
+ 	intel_ring_reset(ring, ring->emit);
+ 
+ 	ring->vaddr = addr;
++#ifdef NMXKPI
++	if (INTEL_DEVID(vma->vm->i915) == 0x7d45)
++		drm_info(&vma->vm->i915->drm,
++			 "Latitude MTL ring pinned: stolen=%u size=%u ggtt=0x%llx\n",
++			 i915_gem_object_is_stolen(vma->obj), ring->size,
++			 (unsigned long long)i915_ggtt_offset(vma));
++#endif
+ 	return 0;
+ 
+ err_ring:

@@ -1,0 +1,57 @@
+--- a/plugin/nvmtl_vk.c
++++ b/plugin/nvmtl_vk.c
+@@ -686,7 +686,7 @@
+         else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
+     }
+     if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))
+-        nvlog("desktop-policy: WindowServer 8086:7d45 serial completion, submit-ahead disabled, schedule-after-surface-publication; fresh command pools remain enforced");
++        nvmtl_desktop_trace("desktop-policy","candidate0.3.4: serial completion, no submit-ahead, schedule after publication; dedicated fresh readback staging; fresh command pools",0);
+     if (!getenv("NVRM_FLUSH_TIMEOUT_MS")) {
+         char budget[32]; snprintf(budget, sizeof budget, "%ld", nvmtl_gpu_wait_budget_ms());
+         setenv("NVRM_FLUSH_TIMEOUT_MS", budget, 1);
+@@ -1058,9 +1058,11 @@
+ static pthread_once_t g_vk_once = PTHREAD_ONCE_INIT;
+ static void nvmtl_vk_initialize_once(void) { nvmtl_desktop_trace("vk-init-begin","",0); int r=nvmtl_vk_initialize(); nvmtl_desktop_trace("vk-init-end","",r); }
+ int nvmtl_vk_init(void) {
+-    nvmtl_desktop_trace("vk-once-enter","",0);
++    static _Atomic unsigned init_calls;
++    const int trace=atomic_fetch_add(&init_calls,1)<4;
++    if(trace)nvmtl_desktop_trace("vk-once-enter","",0);
+     pthread_once(&g_vk_once, nvmtl_vk_initialize_once);
+-    nvmtl_desktop_trace("vk-once-exit","",g_state);
++    if(trace)nvmtl_desktop_trace("vk-once-exit","",g_state);
+     return g_state == 1 ? 0 : -1;
+ }
+ const char *nvmtl_vk_device_name(void) { return g_state == 1 ? g_name : "(vulkan down)"; }
+@@ -2480,7 +2482,7 @@
+ {
+     const char *d=getenv("NVMTL_DIAGNOSTIC_STDERR"), *t=getenv("NVMTL_READBACK_TRACE"), *stage=getenv("NVMTL_READBACK_STAGE_FRESH");
+     return (d && !strcmp(d,"1") ? 1u:0u) | 2u | 32u |
+-        (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | (stage && !strcmp(stage,"1")?16u:0u);
++        (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | ((stage && !strcmp(stage,"1")) || nvmtl_windowserver_fresh_readback(g_vendor,g_pci_device,getprogname())?16u:0u);
+ }
+ static pthread_mutex_t nvmtl_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+ #include "nvmtl_desktop_wait.h"
+@@ -5906,7 +5908,8 @@
+         nvlog("readback REFUSED invalid image/copy parameters"); return -1;
+     }
+     nvmtl_vk_image_upload_barrier(img);
+-    const int owned = getenv("NVMTL_READBACK_STAGE_FRESH") != NULL;
++    const int desktop_fresh=nvmtl_windowserver_fresh_readback(g_vendor,g_pci_device,getprogname());
++    const int owned = desktop_fresh || getenv("NVMTL_READBACK_STAGE_FRESH") != NULL;
+     nvk_buffer stage = {0};
+     if (owned ? nvmtl_vk_buffer_create(plan.bytes, 3, &stage) : nvmtl_vk_stage(q, plan.bytes, &stage)) {
+         nvlog("readback FAILED phase=staging-allocation image=%p bytes=%zu owned=%d",img->img,plan.bytes,owned); return -1;
+@@ -5950,10 +5953,11 @@
+         0,0,NULL,0,NULL,1,&plan.after);
+     int rc=nvmtl_vk_submit_wait_at(&c,"image readback");
+     if (trace || rc) nvlog("first-submit: readback #%llu completion=%d stage=%p disposition=%s",
+-        (unsigned long long)id,rc,stage.buf,rc ? "retained-no-cpu-read" : owned ? "release-after-copy" : "tls-retained");
++        (unsigned long long)id,rc,stage.buf,rc ? (owned && rc==-1 && g_state==1 ? "release-unsubmitted" : "retained-no-cpu-read") : owned ? "release-after-copy" : "tls-retained");
+     /* On an uncertain submission, retain its allocation. Backend shutdown
+        prevents further copies; freeing potentially pending memory is unsafe. */
+     if (rc) {
++        if(owned && rc==-1 && g_state==1)nvmtl_vk_buffer_destroy(&stage);
+         nvlog("readback FAILED phase=submit-or-completion result=%d image-id=%llu stage-id=%llu; CPU destination untouched",rc,(unsigned long long)image_id,(unsigned long long)stage.trace_id);
+         return rc;
+     }

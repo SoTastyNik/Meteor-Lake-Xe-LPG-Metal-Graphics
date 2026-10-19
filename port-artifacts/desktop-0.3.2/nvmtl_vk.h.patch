@@ -1,0 +1,10 @@
+--- a/plugin/nvmtl_vk.h
++++ b/plugin/nvmtl_vk.h
+@@ -342,6 +342,7 @@
+ int nvmtl_vk_surface_dirty(uint32_t surfaceID, uint32_t plane);
+ 
+ uint32_t nvmtl_vk_diagnostic_policy(void);
++int nvmtl_vk_windowserver_serial(void);
+ 
+ enum { NVK_POOL_RECORDING, NVK_POOL_SUBMITTED, NVK_POOL_COMPLETE, NVK_POOL_QUARANTINED };
+ void nvmtl_vk_command_pool_stats(uint64_t out[8]);

@@ -1,0 +1,10 @@
+No variant specified, falling back to release
+boot kernel collection at /System/Library/KernelCollections/BootKernelExtensions.kc (C371B331-1685-74EA-DDA6-2449EA42BF30):
+Extension Information:
+
+system kext collection at /System/Library/KernelCollections/SystemKernelExtensions.kc (32F6A74A-0627-D0F9-6048-58AF2F562E12):
+Extension Information:
+
+auxiliary kext collection at /Library/GPUBundles/.latitude-windowserver.3DRjfp/installed-aux.kc (93DD1A6B-19C0-A1A8-43CB-738B4E88912A):
+Extension Information:
+

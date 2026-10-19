@@ -1,0 +1,1 @@
+PASS actual desktop collector: full system/user WindowServer crash files with spaces, old/unrelated reports excluded, distinct sources preserved, absent report reported, crashes retained when historical search fails; no GPU tests

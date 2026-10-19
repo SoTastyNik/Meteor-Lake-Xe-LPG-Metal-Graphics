@@ -1,0 +1,13 @@
+--- a/plugin/nvmtl_desktop_policy.h
++++ b/plugin/nvmtl_desktop_policy.h
+@@ -12,3 +12,10 @@
+ {
+     return vendor == 0x8086 && device == 0x7d45 && process && !strcmp(process,"WindowServer");
+ }
++
++/* Dedicated readback allocation: avoid TLS retention and suballocation/park reuse
++   only for the physical Meteor Lake WindowServer candidate. */
++static inline int nvmtl_windowserver_fresh_readback(uint16_t vendor,uint16_t device,const char *process)
++{
++    return nvmtl_windowserver_serial_policy(vendor,device,process);
++}

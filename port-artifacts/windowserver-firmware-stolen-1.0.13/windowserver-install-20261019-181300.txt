@@ -1,0 +1,7 @@
+Verified the saved22case/26000frame baseline. No GPU tests will run.
+WindowServer firmware-stolen-1.0.13 installed. Backup: /Library/NullMoth/latitude5350-backups/windowserver-20261019-181304
+Includes NMXGPU1.0.13: i915 stolen memory withheld while firmware panel retains DSM; LatitudeMTLFB0.2.4 retained. Hardware desktop success remains unverified; reboot required.
+ONE desktop boot armed. Reboot through this USB once when ready.
+No hardware suite was rerun. The installer has not rebooted the laptop.
+If the panel fails, power off and boot this USB again for fallback; run collect-desktop-failure.sh.
+WINDOWSERVER INSTALL exit=0

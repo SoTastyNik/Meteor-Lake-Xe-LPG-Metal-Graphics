@@ -1,0 +1,144 @@
+--- a/gt/intel_breadcrumbs.c
++++ b/gt/intel_breadcrumbs.c
+@@ -16,6 +16,40 @@
+ #include "intel_gt_pm.h"
+ #include "intel_gt_requests.h"
+ 
++/* Completion work can outlive timeline retirement. A request reference alone
++ * does not keep rq->context alive after intel_context_unpin(). The GuC
++ * retirement callback still locks that context (or its parallel parent).
++ * Pair these references with every breadcrumb-owned request reference.
++ */
++static void breadcrumb_request_get(struct i915_request *rq)
++{
++#ifdef NMXKPI
++	struct intel_context *ce = rq->context;
++
++	intel_context_get(ce);
++	if (ce->parallel.parent)
++		intel_context_get(ce->parallel.parent);
++#endif
++	i915_request_get(rq);
++}
++
++static void breadcrumb_request_put(struct i915_request *rq)
++{
++#ifdef NMXKPI
++	struct intel_context *ce = rq->context;
++	struct intel_context *parent = ce->parallel.parent;
++#endif
++	i915_request_put(rq);
++#ifdef NMXKPI
++	/* Save both pointers before the request may be freed/recycled. The
++	 * parent can release its creation reference to the child on destroy.
++	 */
++	if (parent)
++		intel_context_put(parent);
++	intel_context_put(ce);
++#endif
++}
++
+ static bool irq_enable(struct intel_breadcrumbs *b)
+ {
+ 	return intel_engine_irq_enable(b->irq_engine);
+@@ -172,7 +206,7 @@
+ 	struct intel_breadcrumbs *b = container_of(work, typeof(*b), irq_work);
+ 	const ktime_t timestamp = ktime_get();
+ 	struct llist_node *signal, *sn;
+-	struct intel_context *ce;
++	struct intel_context *ce, *cn;
+ 
+ 	signal = NULL;
+ 	if (unlikely(!llist_empty(&b->signaled_requests)))
+@@ -208,11 +242,23 @@
+ 
+ 	rcu_read_lock();
+ 	atomic_inc(&b->signaler_active);
+-	list_for_each_entry_rcu(ce, &b->signalers, signal_link) {
+-		struct i915_request *rq;
+-
+-		list_for_each_entry_rcu(rq, &ce->signals, signal_link) {
++	/* As in the upstream signaler UAF fix, fetch the next entry before
++	 * dropping the current context's final reference in the body.
++	 */
++	for (ce = list_entry_rcu(b->signalers.next, typeof(*ce), signal_link);
++	     &ce->signal_link != &b->signalers; ce = cn) {
++		struct i915_request *rq, *rn;
++
++		cn = list_entry_rcu(ce->signal_link.next, typeof(*ce), signal_link);
++
++		/* A losing signal path can drop the last request reference.
++		 * Snapshot its successor before that release too.
++		 */
++		for (rq = list_entry_rcu(ce->signals.next, typeof(*rq), signal_link);
++		     &rq->signal_link != &ce->signals; rq = rn) {
+ 			bool release;
++
++			rn = list_entry_rcu(rq->signal_link.next, typeof(*rq), signal_link);
+ 
+ 			if (!__i915_request_is_complete(rq))
+ 				break;
+@@ -240,7 +286,7 @@
+ 				/* We own signal_node now, xfer to local list */
+ 				signal = slist_add(&rq->signal_node, signal);
+ 			else
+-				i915_request_put(rq);
++				breadcrumb_request_put(rq);
+ 		}
+ 	}
+ 	atomic_dec(&b->signaler_active);
+@@ -260,7 +306,7 @@
+ 		__dma_fence_signal__notify(&rq->fence, &cb_list);
+ 		spin_unlock(&rq->lock);
+ 
+-		i915_request_put(rq);
++		breadcrumb_request_put(rq);
+ 	}
+ 
+ 	/* Lazy irq enabling after HW submission */
+@@ -337,10 +383,14 @@
+ static void irq_signal_request(struct i915_request *rq,
+ 			       struct intel_breadcrumbs *b)
+ {
+-	if (!__dma_fence_signal(&rq->fence))
+-		return;
+-
+-	i915_request_get(rq);
++	/* Acquire context ownership before publishing SIGNALED: retirement
++	 * can unpin the context as soon as that bit becomes visible.
++	 */
++	breadcrumb_request_get(rq);
++	if (!__dma_fence_signal(&rq->fence)) {
++		breadcrumb_request_put(rq);
++		return;
++	}
+ 	if (llist_add(&rq->signal_node, &b->signaled_requests))
+ 		irq_work_queue(&b->irq_work);
+ }
+@@ -392,7 +442,7 @@
+ 		}
+ 	}
+ 
+-	i915_request_get(rq);
++	breadcrumb_request_get(rq);
+ 	list_add_rcu(&rq->signal_link, pos);
+ 	GEM_BUG_ON(!check_signal_order(ce, rq));
+ 	GEM_BUG_ON(test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &rq->fence.flags));
+@@ -453,7 +503,7 @@
+ 	if (__i915_request_is_complete(rq))
+ 		irq_signal_request(rq, b);
+ 
+-	i915_request_put(rq);
++	breadcrumb_request_put(rq);
+ }
+ 
+ void intel_context_remove_breadcrumbs(struct intel_context *ce,
+@@ -476,7 +526,7 @@
+ 
+ 		list_del_rcu(&rq->signal_link);
+ 		irq_signal_request(rq, b);
+-		i915_request_put(rq);
++		breadcrumb_request_put(rq);
+ 	}
+ 	release = remove_signaling_context(b, ce);
+ 

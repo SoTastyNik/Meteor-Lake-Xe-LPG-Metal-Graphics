@@ -1,0 +1,10 @@
+--- a/plugin/nvmtl_vk.h
++++ b/plugin/nvmtl_vk.h
+@@ -343,6 +343,7 @@
+ 
+ uint32_t nvmtl_vk_diagnostic_policy(void);
+ int nvmtl_vk_windowserver_serial(void);
++void nvmtl_desktop_trace(const char *phase,const char *detail,int result);
+ 
+ enum { NVK_POOL_RECORDING, NVK_POOL_SUBMITTED, NVK_POOL_COMPLETE, NVK_POOL_QUARANTINED };
+ void nvmtl_vk_command_pool_stats(uint64_t out[8]);

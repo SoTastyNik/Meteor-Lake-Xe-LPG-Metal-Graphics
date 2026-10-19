@@ -1,0 +1,1 @@
+PASS actual event scheduling/advance/finish methods: no scheduled callback before all surface parts copy out; GPU/copy failures do not advertise publication; outstanding work drained before scheduling

@@ -1,0 +1,758 @@
+Mon Oct 19 18:28:57 BST 2026
++-o NMXIntelVGAFB  <class NMXIntelVGAFB, id 0x100000509, !registered, !matched, active, busy 0, retain 5>
+    {
+      "IOProbeScore" = 60000
+      "CFBundleIdentifier" = "com.nullmoth.LatitudeMTLFB"
+      "IOMatchCategory" = "IOFramebuffer"
+      "IOClass" = "NMXIntelVGAFB"
+      "IOPersonalityPublisher" = "com.nullmoth.LatitudeMTLFB"
+      "IOProviderClass" = "LatitudePanelClaim"
+      "CFBundleIdentifierKernel" = "com.nullmoth.LatitudeMTLFB"
+    }
+    
+
++-o IONDRVFramebuffer  <class IONDRVFramebuffer, id 0x1000004cc, registered, matched, active, busy 0 (156 ms), retain 10>
+  | {
+  |   "IOClass" = "IONDRVFramebuffer"
+  |   "CFBundleIdentifier" = "com.apple.iokit.IONDRVSupport"
+  |   "IOProviderClass" = "IOPlatformDevice"
+  |   "IOPMStrictTreeOrder" = Yes
+  |   "IONDRVFramebufferGeneration" = <0100000000000000>
+  |   "IOPowerManagement" = {"CapabilityFlags"=0,"ChildProxyPowerState"=18446744073709551615,"CurrentPowerState"=0}
+  |   "IOProbeScore" = 20000
+  |   "IONameMatch" = "display"
+  |   "IOMatchCategory" = "IOFramebuffer"
+  |   "IONameMatched" = "display"
+  |   "IOPersonalityPublisher" = "com.apple.iokit.IONDRVSupport"
+  |   "CFBundleIdentifierKernel" = "com.apple.iokit.IONDRVSupport"
+  |   "IOBusyInterest" = "IOCommand is not serializable"
+  | }
+  | 
+  +-o AppleMCCSControlModule  <class AppleMCCSControlModule, id 0x1000004d4, registered, matched, active, busy 0 (113 ms), retain 7>
+  | | {
+  | |   "IOProbeScore" = 0
+  | |   "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOMatchCategory" = "AppleMCCSControlFamily"
+  | |   "IOClass" = "AppleMCCSControlModule"
+  | |   "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOKitDebug" = 0
+  | |   "IOProviderClass" = "IOFramebuffer"
+  | |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOUserClientClass" = "AppleMCCSUserClient"
+  | |   "IOResourceMatch" = "IOKit"
+  | | }
+  | | 
+  | +-o AppleMCCSParameterHandler  <class AppleMCCSParameterHandler, id 0x1000004d9, registered, matched, active, busy 0 (7 ms), retain 5>
+  |     {
+  |       "IOProbeScore" = 0
+  |       "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  |       "IOMatchCategory" = "IODisplayParameters"
+  |       "IOClass" = "AppleMCCSParameterHandler"
+  |       "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  |       "IOKitDebug" = 0
+  |       "AppleMCCSFeatures" = 1
+  |       "IOProviderClass" = "AppleMCCSControlFamily"
+  |       "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  |       "IOResourceMatch" = "IOKit"
+  |     }
+  |     
+  +-o AppleUpstreamUserClientDriver  <class AppleUpstreamUserClientDriver, id 0x1000004d5, registered, matched, active, busy 0 (11 ms), retain 5>
+      {
+        "IOProbeScore" = 0
+        "CFBundleIdentifier" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOMatchCategory" = "AppleUpstreamUserClientDriver"
+        "IOClass" = "AppleUpstreamUserClientDriver"
+        "IOPersonalityPublisher" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOProviderClass" = "IOFramebuffer"
+        "CFBundleIdentifierKernel" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOUserClientClass" = "AppleUpstreamUserClient"
+        "IOResourceMatch" = "IOKit"
+      }
+      
+
++-o LatitudePanelClaim  <class LatitudePanelClaim, id 0x1000004f6, registered, !matched, active, busy 1 (3128 ms), retain 7>
+  | {
+  |   "IOProbeScore" = 60000
+  |   "CFBundleIdentifier" = "com.nullmoth.LatitudePanelClaim"
+  |   "IOMatchCategory" = "IOFramebuffer"
+  |   "IOClass" = "LatitudePanelClaim"
+  |   "IOProviderClass" = "IOPCIDevice"
+  |   "IOPCIMatch" = "0x7d458086"
+  |   "CFBundleIdentifierKernel" = "com.nullmoth.LatitudePanelClaim"
+  |   "IOMatchedAtBoot" = Yes
+  |   "LatitudePanelOptedIn" = Yes
+  | }
+  | 
+  +-o NMXIntelVGAFB  <class NMXIntelVGAFB, id 0x100000509, !registered, !matched, active, busy 0, retain 5>
+      {
+        "IOProbeScore" = 60000
+        "CFBundleIdentifier" = "com.nullmoth.LatitudeMTLFB"
+        "IOMatchCategory" = "IOFramebuffer"
+        "IOClass" = "NMXIntelVGAFB"
+        "IOPersonalityPublisher" = "com.nullmoth.LatitudeMTLFB"
+        "IOProviderClass" = "LatitudePanelClaim"
+        "CFBundleIdentifierKernel" = "com.nullmoth.LatitudeMTLFB"
+      }
+      
+
+  PID   UID  %CPU COMM
+    1     0   0.2 /sbin/launchd
+   93     0   0.2 /usr/libexec/logd
+   94     0   0.0 /usr/libexec/smd
+   95     0   0.0 /usr/libexec/UserEventAgent
+   97     0   0.0 /usr/libexec/wifiFirmwareLoader
+   98     0   0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+   99     0   0.0 /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+  102     0   0.0 /usr/sbin/systemstats
+  104   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/Support/accessoryupdaterd
+  105     0   0.0 /usr/libexec/configd
+  106     0   0.0 endpointsecurityd
+  107     0   0.0 /System/Library/CoreServices/powerd.bundle/powerd
+  110     0   0.0 /usr/libexec/amfid
+  114     0   0.0 /usr/libexec/keybagd
+  115   200   0.0 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated
+  116   306   0.0 /System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system
+  118     0   0.0 /usr/libexec/watchdogd
+  119     0   0.0 firmwaresyncd
+  121     0   0.0 /usr/libexec/warmd
+  122     0   0.0 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+  123   240   0.0 /System/Library/CoreServices/iconservicesd
+  124     0   0.0 /usr/libexec/kernelmanagerd
+  125     0   0.3 /usr/libexec/diskarbitrationd
+  126     0   0.0 /System/Library/CoreServices/Installer Progress.app/Contents/MacOS/Installer Progress
+  128     0   0.0 /usr/libexec/coreduetd
+  129     0   0.0 /usr/sbin/syslogd
+  131     0   0.0 /System/Library/CoreServices/ionodecache
+  132     0   0.0 /usr/libexec/thermalmonitord
+  133     0   0.0 /usr/libexec/opendirectoryd
+  135     0   0.0 /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+  136     0   0.0 /System/Library/CoreServices/launchservicesd
+  137   266   0.0 /usr/libexec/timed
+  138   213   0.0 /System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd
+  139     0   0.1 /usr/sbin/securityd
+  141   205   0.0 /usr/libexec/locationd
+  142     0   0.0 /usr/libexec/nesessionmanager
+  143     0   0.0 autofsd
+  144   244   0.0 /usr/libexec/displaypolicyd
+  145     0   0.0 /usr/libexec/dasd
+  147   241   0.0 /usr/sbin/distnoted
+  148     0   0.0 /System/Library/PrivateFrameworks/AppleCredentialManager.framework/AppleCredentialManagerDaemon
+  149     0   0.0 /usr/libexec/PerfPowerServices
+  150     0   0.0 /usr/libexec/dirhelper
+  151     0   0.0 /System/Library/CoreServices/logind
+  152     0   0.0 /System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond
+  153     0   0.0 /usr/sbin/KernelEventAgent
+  154     0   0.0 /usr/libexec/usermanagerd
+  156     0   0.0 /usr/sbin/bluetoothd
+  157     0   0.0 /usr/sbin/notifyd
+  158     0   0.0 /usr/libexec/sandboxd
+  159     0   0.0 /usr/libexec/corebrightnessd
+  160     0   0.0 /usr/libexec/AirPlayXPCHelper
+  161     0   0.7 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice
+  162     0   0.0 aslmanager
+  163    88   0.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  164     0   0.3 /usr/sbin/cfprefsd
+  165     0   0.0 /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+  167   263   0.0 /System/Library/PrivateFrameworks/CoreAnalytics.framework/Support/analyticsd
+  168     0   0.0 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+  169     0   0.0 /usr/libexec/fskitd
+  170     0   0.0 /usr/libexec/containermanagerd_system
+  171     0   0.0 /usr/libexec/runningboardd
+  172     0   0.0 /System/Library/CoreServices/coreservicesd
+  173     0   0.0 /usr/libexec/lsd
+  174     0   0.0 /usr/libexec/powerexperienced
+  175     0   0.0 /System/Library/PrivateFrameworks/CoreDuetContext.framework/Resources/contextstored
+  176     0   0.0 /System/Library/CoreServices/TimeMachine/backupd-helper
+  177     0   0.0 /usr/libexec/PowerUIAgent
+  179     0   0.0 /usr/libexec/airportd
+  180     0   0.0 /System/Library/PrivateFrameworks/Heimdal.framework/Helpers/digest-service
+  181     0   0.0 /usr/sbin/systemkeychain
+  182     0   0.0 /usr/libexec/findmydeviced
+  183     0   0.0 /usr/libexec/nehelper
+  185    24   0.0 /usr/libexec/symptomsd
+  186   282   0.1 /usr/libexec/trustd
+  188     0   0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/XPCServices/csnameddatad.xpc/Contents/MacOS/csnameddatad
+  189     0   0.0 /System/Library/Frameworks/InputMethodKit.framework/Resources/imklaunchagent
+  190    65   0.0 /usr/sbin/mDNSResponder
+  191   202   0.0 /usr/sbin/coreaudiod
+  192   289   0.0 /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed
+  193     0   0.0 /usr/libexec/UserEventAgent
+  195     0   0.0 /usr/sbin/universalaccessd
+  196   242   0.0 /usr/libexec/nsurlsessiond
+  197     0   0.0 /System/Library/CryptoTokenKit/com.apple.ifdreader.slotd/Contents/MacOS/com.apple.ifdreader
+  198     0   0.0 /usr/libexec/trustdFileHelper
+  199     0   0.0 /usr/libexec/ApplicationFirewall/socketfilterfw
+  200     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/authd.xpc/Contents/MacOS/authd
+  201     0   0.0 /usr/libexec/apfsd
+  202     0   0.0 /System/Library/PrivateFrameworks/FindMyMac.framework/Resources/FindMyMacd
+  204     0   0.0 /usr/libexec/usbd
+  206     0   0.0 /usr/sbin/distnoted
+  207     0   0.0 /usr/libexec/cryptexd
+  208     0   0.3 /usr/sbin/mDNSResponderHelper
+  209     0   0.0 /System/Library/Frameworks/SystemExtensions.framework/Versions/A/Helpers/sysextd
+  210   202   0.0 /usr/sbin/distnoted
+  211     0   0.0 /usr/libexec/mobileassetd
+  212   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Resources/VDC.plugin/Contents/Resources/VDCAssistant
+  213     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/com.apple.CodeSigningHelper.xpc/Contents/MacOS/com.apple.CodeSigningHelper
+  214     0   0.0 /System/Library/PrivateFrameworks/SystemStatusServer.framework/Support/systemstatusd
+  215     0   0.0 /usr/libexec/pkd
+  216     0   2.4 /usr/libexec/storagekitd
+  219     0   0.0 /usr/libexec/mdmclient
+  220     0   0.0 /System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/XPCServices/extensionkitservice.xpc/Contents/MacOS/extensionkitservice
+  222     0   0.0 /System/Library/PrivateFrameworks/WiFiPolicy.framework/XPCServices/WiFiCloudAssetsXPCService.xpc/Contents/MacOS/WiFiCloudAssetsXPCService
+  223     0   0.0 /System/Library/ExtensionKit/Extensions/com.apple.fskit.msdos.appex/Contents/MacOS/com.apple.fskit.msdos
+  224   262   0.0 /usr/sbin/distnoted
+  225   202   0.0 /System/Library/Frameworks/CoreAudio.framework/Versions/A/XPCServices/com.apple.audio.DriverHelper.xpc/Contents/MacOS/com.apple.audio.DriverHelper
+  226     0   0.0 /System/Library/CoreServices/ManagedClient.app/Contents/MacOS/ManagedClient
+  227     0   0.0 /usr/libexec/secinitd
+  228     0   0.0 /usr/libexec/fskit_helper
+  229     0   0.0 /usr/libexec/wifip2pd
+  230     0   0.8 /Library/Apple/System/Library/CoreServices/XProtect.app/Contents/XPCServices/XProtectPluginService.xpc/Contents/MacOS/XProtectPluginService
+  231   205   0.0 /System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc/Contents/MacOS/com.apple.geod
+  232     0   0.0 /System/Library/Frameworks/AudioToolbox.framework/AudioComponentRegistrar
+  233   205   0.0 /usr/sbin/distnoted
+  236     0   0.0 /System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Resources/backgroundtaskmanagementd
+  239   205   0.0 /usr/libexec/secinitd
+  240   202   0.0 /System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc/Contents/MacOS/com.apple.audio.SandboxHelper
+  244   262   0.9 /usr/libexec/cameracaptured
+  245   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/UVCAssistant.systemextension/Contents/MacOS/UVCAssistant
+  246   205   0.0 /usr/sbin/cfprefsd
+  249     0   0.0 /System/Library/CoreServices/WiFiAgent.app/Contents/MacOS/WiFiAgent
+  254   205   0.0 /usr/libexec/trustd
+  255     0   0.0 /System/Library/PrivateFrameworks/PowerLog.framework/Versions/A/XPCServices/PerfPowerTelemetryClientRegistrationService.xpc/Contents/MacOS/PerfPowerTelemetryClientRegistrationService
+  256     0   0.0 /System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc/Contents/MacOS/PlugInLibraryService
+  261     0   0.0 /usr/libexec/audioclocksyncd
+  266   200   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated
+  267     0   0.0 /usr/libexec/securityd_system
+  270     0   0.1 /usr/libexec/syspolicyd
+  273   205   0.0 /usr/libexec/containermanagerd
+  278     0   0.0 /System/Library/CoreServices/TimeMachine/backupd
+  281     0   0.0 /usr/libexec/wifianalyticsd
+  282     0   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/suhelperd
+  283   200   0.0 /usr/sbin/distnoted
+  285     0   0.0 /bin/bash
+  286     0   0.0 /usr/libexec/searchpartyd
+  287     0   0.0 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+  288     0   0.0 /usr/libexec/rpcsvchost
+  289    89   0.0 /usr/sbin/distnoted
+  295     0   0.0 /Library/NullMoth/latitude-desktop-journal
+  309     0   0.8 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Versions/A/XPCServices/com.apple.MobileSoftwareUpdate.CleanupPreparePathService.xpc/Contents/MacOS/com.apple.MobileSoftwareUpdate.CleanupPreparePathService
+  313   270   0.0 /System/Library/DriverExtensions/com.apple.DriverKit-IOUserDockChannelSerial.dext/com.apple.DriverKit-IOUserDockChannelSerial
+  315   270   0.0 /System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+  316     0   0.2 /usr/libexec/kernelmanager_helper
+  318   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceUSBPD.xpc/Contents/MacOS/UARPUpdaterServiceUSBPD
+  319   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDFU.xpc/Contents/MacOS/UARPUpdaterServiceDFU
+  320   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceAFU.xpc/Contents/MacOS/UARPUpdaterServiceAFU
+  321   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDisplay.xpc/Contents/MacOS/UARPUpdaterServiceDisplay
+  322   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceLegacyAudio.xpc/Contents/MacOS/UARPUpdaterServiceLegacyAudio
+  323   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceHID.xpc/Contents/MacOS/UARPUpdaterServiceHID
+  324   278   0.0 /usr/sbin/distnoted
+  328     0   0.0 sleep
+  341     0   0.7 /usr/bin/log
+  342     0   4.8 /bin/bash
+  343     0   0.0 /bin/bash
+  345     0   0.0 sleep
+  351     0   0.0 sleep
+  352     0   0.4 /usr/libexec/diagnosticd
+  363     0   1.5 sleep
+  368     0   2.6 sleep
+  373     0   2.6 sleep
+  375     0   0.0 /bin/ps
+  376     0   0.0 /bin/bash
+  377     0   0.0 sleep
+  112     0   0.0 /usr/libexec/remoted
+Mon Oct 19 18:29:05 BST 2026
++-o IONDRVFramebuffer  <class IONDRVFramebuffer, id 0x1000004cc, registered, matched, active, busy 0 (156 ms), retain 10>
+  | {
+  |   "IOClass" = "IONDRVFramebuffer"
+  |   "CFBundleIdentifier" = "com.apple.iokit.IONDRVSupport"
+  |   "IOProviderClass" = "IOPlatformDevice"
+  |   "IOPMStrictTreeOrder" = Yes
+  |   "IONDRVFramebufferGeneration" = <0100000000000000>
+  |   "IOPowerManagement" = {"CapabilityFlags"=0,"ChildProxyPowerState"=18446744073709551615,"CurrentPowerState"=0}
+  |   "IOProbeScore" = 20000
+  |   "IONameMatch" = "display"
+  |   "IOMatchCategory" = "IOFramebuffer"
+  |   "IONameMatched" = "display"
+  |   "IOPersonalityPublisher" = "com.apple.iokit.IONDRVSupport"
+  |   "CFBundleIdentifierKernel" = "com.apple.iokit.IONDRVSupport"
+  |   "IOBusyInterest" = "IOCommand is not serializable"
+  | }
+  | 
+  +-o AppleMCCSControlModule  <class AppleMCCSControlModule, id 0x1000004d4, registered, matched, active, busy 0 (113 ms), retain 7>
+  | | {
+  | |   "IOProbeScore" = 0
+  | |   "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOMatchCategory" = "AppleMCCSControlFamily"
+  | |   "IOClass" = "AppleMCCSControlModule"
+  | |   "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOKitDebug" = 0
+  | |   "IOProviderClass" = "IOFramebuffer"
+  | |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOUserClientClass" = "AppleMCCSUserClient"
+  | |   "IOResourceMatch" = "IOKit"
+  | | }
+  | | 
+  | +-o AppleMCCSParameterHandler  <class AppleMCCSParameterHandler, id 0x1000004d9, registered, matched, active, busy 0 (7 ms), retain 5>
+  |     {
+  |       "IOProbeScore" = 0
+  |       "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  |       "IOMatchCategory" = "IODisplayParameters"
+  |       "IOClass" = "AppleMCCSParameterHandler"
+  |       "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  |       "IOKitDebug" = 0
+  |       "AppleMCCSFeatures" = 1
+  |       "IOProviderClass" = "AppleMCCSControlFamily"
+  |       "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  |       "IOResourceMatch" = "IOKit"
+  |     }
+  |     
+  +-o AppleUpstreamUserClientDriver  <class AppleUpstreamUserClientDriver, id 0x1000004d5, registered, matched, active, busy 0 (11 ms), retain 5>
+      {
+        "IOProbeScore" = 0
+        "CFBundleIdentifier" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOMatchCategory" = "AppleUpstreamUserClientDriver"
+        "IOClass" = "AppleUpstreamUserClientDriver"
+        "IOPersonalityPublisher" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOProviderClass" = "IOFramebuffer"
+        "CFBundleIdentifierKernel" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOUserClientClass" = "AppleUpstreamUserClient"
+        "IOResourceMatch" = "IOKit"
+      }
+      
+
++-o LatitudePanelClaim  <class LatitudePanelClaim, id 0x1000004f6, registered, matched, active, busy 0 (5286 ms), retain 5>
+    {
+      "IOProbeScore" = 60000
+      "CFBundleIdentifier" = "com.nullmoth.LatitudePanelClaim"
+      "IOMatchCategory" = "IOFramebuffer"
+      "IOClass" = "LatitudePanelClaim"
+      "IOProviderClass" = "IOPCIDevice"
+      "IOPCIMatch" = "0x7d458086"
+      "CFBundleIdentifierKernel" = "com.nullmoth.LatitudePanelClaim"
+      "IOMatchedAtBoot" = Yes
+      "LatitudePanelOptedIn" = Yes
+    }
+    
+
+  PID   UID  %CPU COMM
+    1     0   3.0 /sbin/launchd
+   93     0   3.6 /usr/libexec/logd
+   94     0   0.0 /usr/libexec/smd
+   95     0   0.8 /usr/libexec/UserEventAgent
+   97     0   0.0 /usr/libexec/wifiFirmwareLoader
+   98     0   0.1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+   99     0   0.0 /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+  102     0   0.0 /usr/sbin/systemstats
+  104   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/Support/accessoryupdaterd
+  105     0  12.1 /usr/libexec/configd
+  106     0   0.0 endpointsecurityd
+  107     0   0.0 /System/Library/CoreServices/powerd.bundle/powerd
+  110     0   0.0 /usr/libexec/amfid
+  114     0   0.0 /usr/libexec/keybagd
+  115   200   0.0 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated
+  116   306   0.0 /System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system
+  118     0   0.0 /usr/libexec/watchdogd
+  119     0   0.0 firmwaresyncd
+  121     0   0.0 /usr/libexec/warmd
+  122     0   0.1 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+  123   240   0.0 /System/Library/CoreServices/iconservicesd
+  124     0   0.0 /usr/libexec/kernelmanagerd
+  125     0   0.0 /usr/libexec/diskarbitrationd
+  126     0   0.0 /System/Library/CoreServices/Installer Progress.app/Contents/MacOS/Installer Progress
+  128     0   0.0 /usr/libexec/coreduetd
+  129     0   0.1 /usr/sbin/syslogd
+  131     0   0.0 /System/Library/CoreServices/ionodecache
+  132     0   0.0 /usr/libexec/thermalmonitord
+  133     0   0.5 /usr/libexec/opendirectoryd
+  135     0   0.0 /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+  136     0   0.0 /System/Library/CoreServices/launchservicesd
+  137   266   0.0 /usr/libexec/timed
+  138   213   0.0 /System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd
+  139     0   0.0 /usr/sbin/securityd
+  141   205   1.1 /usr/libexec/locationd
+  142     0   0.8 /usr/libexec/nesessionmanager
+  143     0   0.0 autofsd
+  144   244   0.0 /usr/libexec/displaypolicyd
+  145     0   0.0 /usr/libexec/dasd
+  147   241   0.0 /usr/sbin/distnoted
+  148     0   0.0 /System/Library/PrivateFrameworks/AppleCredentialManager.framework/AppleCredentialManagerDaemon
+  149     0   0.0 /usr/libexec/PerfPowerServices
+  150     0   0.0 /usr/libexec/dirhelper
+  151     0   0.0 /System/Library/CoreServices/logind
+  152     0   0.0 /System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond
+  153     0   0.0 /usr/sbin/KernelEventAgent
+  154     0   0.0 /usr/libexec/usermanagerd
+  156     0   0.0 /usr/sbin/bluetoothd
+  157     0   0.7 /usr/sbin/notifyd
+  158     0   0.0 /usr/libexec/sandboxd
+  159     0   2.8 /usr/libexec/corebrightnessd
+  160     0   1.7 /usr/libexec/AirPlayXPCHelper
+  161     0   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice
+  162     0   0.0 aslmanager
+  163    88   8.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  164     0   0.5 /usr/sbin/cfprefsd
+  165     0   0.0 /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+  167   263   0.2 /System/Library/PrivateFrameworks/CoreAnalytics.framework/Support/analyticsd
+  168     0   0.0 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+  169     0   0.0 /usr/libexec/fskitd
+  170     0   0.0 /usr/libexec/containermanagerd_system
+  171     0   0.0 /usr/libexec/runningboardd
+  172     0   0.0 /System/Library/CoreServices/coreservicesd
+  173     0   0.0 /usr/libexec/lsd
+  174     0   0.0 /usr/libexec/powerexperienced
+  175     0   0.0 /System/Library/PrivateFrameworks/CoreDuetContext.framework/Resources/contextstored
+  176     0   0.0 /System/Library/CoreServices/TimeMachine/backupd-helper
+  177     0   0.0 /usr/libexec/PowerUIAgent
+  179     0   9.9 /usr/libexec/airportd
+  180     0   0.0 /System/Library/PrivateFrameworks/Heimdal.framework/Helpers/digest-service
+  181     0   0.0 /usr/sbin/systemkeychain
+  182     0   0.0 /usr/libexec/findmydeviced
+  183     0   0.0 /usr/libexec/nehelper
+  185    24   0.1 /usr/libexec/symptomsd
+  186   282   0.6 /usr/libexec/trustd
+  188     0   0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/XPCServices/csnameddatad.xpc/Contents/MacOS/csnameddatad
+  189     0   0.0 /System/Library/Frameworks/InputMethodKit.framework/Resources/imklaunchagent
+  190    65   4.5 /usr/sbin/mDNSResponder
+  191   202   0.0 /usr/sbin/coreaudiod
+  192   289   0.0 /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed
+  193     0   0.0 /usr/libexec/UserEventAgent
+  195     0   0.0 /usr/sbin/universalaccessd
+  196   242   0.0 /usr/libexec/nsurlsessiond
+  197     0   0.0 /System/Library/CryptoTokenKit/com.apple.ifdreader.slotd/Contents/MacOS/com.apple.ifdreader
+  198     0   0.0 /usr/libexec/trustdFileHelper
+  199     0   0.0 /usr/libexec/ApplicationFirewall/socketfilterfw
+  200     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/authd.xpc/Contents/MacOS/authd
+  201     0   0.0 /usr/libexec/apfsd
+  202     0   0.0 /System/Library/PrivateFrameworks/FindMyMac.framework/Resources/FindMyMacd
+  204     0   0.0 /usr/libexec/usbd
+  206     0   0.0 /usr/sbin/distnoted
+  207     0   0.0 /usr/libexec/cryptexd
+  208     0   0.0 /usr/sbin/mDNSResponderHelper
+  209     0   0.0 /System/Library/Frameworks/SystemExtensions.framework/Versions/A/Helpers/sysextd
+  210   202   0.0 /usr/sbin/distnoted
+  211     0   0.0 /usr/libexec/mobileassetd
+  212   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Resources/VDC.plugin/Contents/Resources/VDCAssistant
+  213     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/com.apple.CodeSigningHelper.xpc/Contents/MacOS/com.apple.CodeSigningHelper
+  214     0   0.0 /System/Library/PrivateFrameworks/SystemStatusServer.framework/Support/systemstatusd
+  215     0   0.0 /usr/libexec/pkd
+  216     0   0.0 /usr/libexec/storagekitd
+  219     0   0.0 /usr/libexec/mdmclient
+  220     0   0.0 /System/Library/Frameworks/ExtensionFoundation.framework/Versions/A/XPCServices/extensionkitservice.xpc/Contents/MacOS/extensionkitservice
+  222     0   0.0 /System/Library/PrivateFrameworks/WiFiPolicy.framework/XPCServices/WiFiCloudAssetsXPCService.xpc/Contents/MacOS/WiFiCloudAssetsXPCService
+  223     0   0.0 /System/Library/ExtensionKit/Extensions/com.apple.fskit.msdos.appex/Contents/MacOS/com.apple.fskit.msdos
+  224   262   0.0 /usr/sbin/distnoted
+  225   202   0.0 /System/Library/Frameworks/CoreAudio.framework/Versions/A/XPCServices/com.apple.audio.DriverHelper.xpc/Contents/MacOS/com.apple.audio.DriverHelper
+  226     0   0.0 /System/Library/CoreServices/ManagedClient.app/Contents/MacOS/ManagedClient
+  227     0   0.0 /usr/libexec/secinitd
+  228     0   0.0 /usr/libexec/fskit_helper
+  229     0   0.6 /usr/libexec/wifip2pd
+  230     0   0.0 /Library/Apple/System/Library/CoreServices/XProtect.app/Contents/XPCServices/XProtectPluginService.xpc/Contents/MacOS/XProtectPluginService
+  231   205   0.0 /System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc/Contents/MacOS/com.apple.geod
+  232     0   0.0 /System/Library/Frameworks/AudioToolbox.framework/AudioComponentRegistrar
+  233   205   0.0 /usr/sbin/distnoted
+  236     0   0.0 /System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Resources/backgroundtaskmanagementd
+  239   205   0.0 /usr/libexec/secinitd
+  240   202   0.0 /System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc/Contents/MacOS/com.apple.audio.SandboxHelper
+  244   262   0.0 /usr/libexec/cameracaptured
+  245   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/UVCAssistant.systemextension/Contents/MacOS/UVCAssistant
+  246   205   0.0 /usr/sbin/cfprefsd
+  249     0   0.0 /System/Library/CoreServices/WiFiAgent.app/Contents/MacOS/WiFiAgent
+  254   205   0.0 /usr/libexec/trustd
+  255     0   0.0 /System/Library/PrivateFrameworks/PowerLog.framework/Versions/A/XPCServices/PerfPowerTelemetryClientRegistrationService.xpc/Contents/MacOS/PerfPowerTelemetryClientRegistrationService
+  256     0   0.0 /System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc/Contents/MacOS/PlugInLibraryService
+  261     0   0.0 /usr/libexec/audioclocksyncd
+  266   200   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated
+  267     0   0.0 /usr/libexec/securityd_system
+  270     0   0.0 /usr/libexec/syspolicyd
+  273   205   0.0 /usr/libexec/containermanagerd
+  278     0   0.0 /System/Library/CoreServices/TimeMachine/backupd
+  281     0   0.0 /usr/libexec/wifianalyticsd
+  282     0   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/suhelperd
+  283   200   0.0 /usr/sbin/distnoted
+  285     0   0.0 /bin/bash
+  286     0   0.0 /usr/libexec/searchpartyd
+  287     0   0.0 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+  288     0   0.0 /usr/libexec/rpcsvchost
+  289    89   0.0 /usr/sbin/distnoted
+  295     0   0.0 /Library/NullMoth/latitude-desktop-journal
+  309     0   0.0 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Versions/A/XPCServices/com.apple.MobileSoftwareUpdate.CleanupPreparePathService.xpc/Contents/MacOS/com.apple.MobileSoftwareUpdate.CleanupPreparePathService
+  313   270   0.0 /System/Library/DriverExtensions/com.apple.DriverKit-IOUserDockChannelSerial.dext/com.apple.DriverKit-IOUserDockChannelSerial
+  315   270   0.0 /System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+  316     0   0.0 /usr/libexec/kernelmanager_helper
+  318   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceUSBPD.xpc/Contents/MacOS/UARPUpdaterServiceUSBPD
+  319   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDFU.xpc/Contents/MacOS/UARPUpdaterServiceDFU
+  320   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceAFU.xpc/Contents/MacOS/UARPUpdaterServiceAFU
+  321   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDisplay.xpc/Contents/MacOS/UARPUpdaterServiceDisplay
+  322   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceLegacyAudio.xpc/Contents/MacOS/UARPUpdaterServiceLegacyAudio
+  323   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceHID.xpc/Contents/MacOS/UARPUpdaterServiceHID
+  324   278   0.0 /usr/sbin/distnoted
+  341     0  18.1 /usr/bin/log
+  342     0   1.9 /bin/bash
+  343     0   0.0 /bin/bash
+  351     0   0.0 sleep
+  352     0  11.6 /usr/libexec/diagnosticd
+  383     0   0.0 /usr/sbin/WirelessRadioManagerd
+  384     0   0.0 /usr/sbin/BlueTool
+  385     0   0.0 /usr/libexec/findmybeaconingd
+  386     0   0.6 /usr/libexec/eligibilityd
+  387   261   0.0 /usr/libexec/hidd
+  389    88   0.0 /usr/sbin/distnoted
+  390     0   0.4 /usr/libexec/countryd
+  391     0   0.0 /usr/libexec/sysmond
+  392     0   0.0 /usr/sbin/systemstats
+  397     0   0.4 /usr/bin/sample
+  398     0   0.0 /bin/bash
+  399     0   0.0 sleep
+  400   258  25.3 /usr/libexec/captiveagent
+  405     0   1.4 sleep
+  410     0   1.5 sleep
+  415     0   0.0 sleep
+  416   222   0.0 /usr/sbin/netbiosd
+  418     0   0.0 /bin/ps
+  419     0   0.0 /bin/bash
+  420     0   0.0 sleep
+  112     0   0.0 /usr/libexec/remoted
+Mon Oct 19 18:29:27 BST 2026
++-o IONDRVFramebuffer  <class IONDRVFramebuffer, id 0x1000004cc, registered, matched, active, busy 0 (156 ms), retain 10>
+  | {
+  |   "IOClass" = "IONDRVFramebuffer"
+  |   "CFBundleIdentifier" = "com.apple.iokit.IONDRVSupport"
+  |   "IOProviderClass" = "IOPlatformDevice"
+  |   "IOPMStrictTreeOrder" = Yes
+  |   "IONDRVFramebufferGeneration" = <0100000000000000>
+  |   "IOPowerManagement" = {"CapabilityFlags"=0,"ChildProxyPowerState"=18446744073709551615,"CurrentPowerState"=0}
+  |   "IOProbeScore" = 20000
+  |   "IONameMatch" = "display"
+  |   "IOMatchCategory" = "IOFramebuffer"
+  |   "IONameMatched" = "display"
+  |   "IOPersonalityPublisher" = "com.apple.iokit.IONDRVSupport"
+  |   "CFBundleIdentifierKernel" = "com.apple.iokit.IONDRVSupport"
+  |   "IOBusyInterest" = "IOCommand is not serializable"
+  | }
+  | 
+  +-o AppleMCCSControlModule  <class AppleMCCSControlModule, id 0x1000004d4, registered, matched, active, busy 0 (113 ms), retain 7>
+  | | {
+  | |   "IOProbeScore" = 0
+  | |   "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOMatchCategory" = "AppleMCCSControlFamily"
+  | |   "IOClass" = "AppleMCCSControlModule"
+  | |   "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOKitDebug" = 0
+  | |   "IOProviderClass" = "IOFramebuffer"
+  | |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  | |   "IOUserClientClass" = "AppleMCCSUserClient"
+  | |   "IOResourceMatch" = "IOKit"
+  | | }
+  | | 
+  | +-o AppleMCCSParameterHandler  <class AppleMCCSParameterHandler, id 0x1000004d9, registered, matched, active, busy 0 (7 ms), retain 5>
+  |     {
+  |       "IOProbeScore" = 0
+  |       "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+  |       "IOMatchCategory" = "IODisplayParameters"
+  |       "IOClass" = "AppleMCCSParameterHandler"
+  |       "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+  |       "IOKitDebug" = 0
+  |       "AppleMCCSFeatures" = 1
+  |       "IOProviderClass" = "AppleMCCSControlFamily"
+  |       "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+  |       "IOResourceMatch" = "IOKit"
+  |     }
+  |     
+  +-o AppleUpstreamUserClientDriver  <class AppleUpstreamUserClientDriver, id 0x1000004d5, registered, matched, active, busy 0 (11 ms), retain 5>
+      {
+        "IOProbeScore" = 0
+        "CFBundleIdentifier" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOMatchCategory" = "AppleUpstreamUserClientDriver"
+        "IOClass" = "AppleUpstreamUserClientDriver"
+        "IOPersonalityPublisher" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOProviderClass" = "IOFramebuffer"
+        "CFBundleIdentifierKernel" = "com.apple.driver.AppleUpstreamUserClient"
+        "IOUserClientClass" = "AppleUpstreamUserClient"
+        "IOResourceMatch" = "IOKit"
+      }
+      
+
++-o LatitudePanelClaim  <class LatitudePanelClaim, id 0x1000004f6, registered, matched, active, busy 0 (5286 ms), retain 5>
+    {
+      "IOProbeScore" = 60000
+      "CFBundleIdentifier" = "com.nullmoth.LatitudePanelClaim"
+      "IOMatchCategory" = "IOFramebuffer"
+      "IOClass" = "LatitudePanelClaim"
+      "IOProviderClass" = "IOPCIDevice"
+      "IOPCIMatch" = "0x7d458086"
+      "CFBundleIdentifierKernel" = "com.nullmoth.LatitudePanelClaim"
+      "IOMatchedAtBoot" = Yes
+      "LatitudePanelOptedIn" = Yes
+    }
+    
+
+  PID   UID  %CPU COMM
+    1     0   0.5 /sbin/launchd
+   93     0   0.3 /usr/libexec/logd
+   94     0   0.0 /usr/libexec/smd
+   95     0   0.0 /usr/libexec/UserEventAgent
+   97     0   0.0 /usr/libexec/wifiFirmwareLoader
+   98     0   0.1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+   99     0   0.0 /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+  102     0   0.0 /usr/sbin/systemstats
+  104   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/Support/accessoryupdaterd
+  105     0   0.0 /usr/libexec/configd
+  106     0   0.0 endpointsecurityd
+  107     0   0.0 /System/Library/CoreServices/powerd.bundle/powerd
+  110     0   0.0 /usr/libexec/amfid
+  114     0   0.0 /usr/libexec/keybagd
+  115   200   0.0 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated
+  116   306   0.0 /System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system
+  118     0   0.0 /usr/libexec/watchdogd
+  119     0   0.0 firmwaresyncd
+  121     0   0.0 /usr/libexec/warmd
+  122     0   0.2 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+  123   240   0.0 /System/Library/CoreServices/iconservicesd
+  124     0   0.0 /usr/libexec/kernelmanagerd
+  125     0   0.0 /usr/libexec/diskarbitrationd
+  126     0   0.0 /System/Library/CoreServices/Installer Progress.app/Contents/MacOS/Installer Progress
+  128     0   0.0 /usr/libexec/coreduetd
+  129     0   0.0 /usr/sbin/syslogd
+  132     0   0.0 /usr/libexec/thermalmonitord
+  133     0   0.0 /usr/libexec/opendirectoryd
+  135     0   0.0 /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+  136     0   0.0 /System/Library/CoreServices/launchservicesd
+  137   266   0.0 /usr/libexec/timed
+  138   213   0.0 /System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd
+  139     0   0.0 /usr/sbin/securityd
+  141   205   0.0 /usr/libexec/locationd
+  142     0   0.0 /usr/libexec/nesessionmanager
+  143     0   0.0 autofsd
+  144   244   0.0 /usr/libexec/displaypolicyd
+  145     0   0.0 /usr/libexec/dasd
+  147   241   0.0 /usr/sbin/distnoted
+  148     0   0.0 /System/Library/PrivateFrameworks/AppleCredentialManager.framework/AppleCredentialManagerDaemon
+  149     0   0.0 /usr/libexec/PerfPowerServices
+  150     0   0.0 /usr/libexec/dirhelper
+  151     0   0.0 /System/Library/CoreServices/logind
+  152     0   0.0 /System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond
+  153     0   0.0 /usr/sbin/KernelEventAgent
+  154     0   0.0 /usr/libexec/usermanagerd
+  156     0   0.0 /usr/sbin/bluetoothd
+  157     0   0.0 /usr/sbin/notifyd
+  158     0   0.0 /usr/libexec/sandboxd
+  159     0   3.6 /usr/libexec/corebrightnessd
+  160     0   0.4 /usr/libexec/AirPlayXPCHelper
+  161     0   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice
+  162     0   0.0 aslmanager
+  163    88  16.3 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  164     0   0.0 /usr/sbin/cfprefsd
+  165     0   0.0 /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+  167   263   0.0 /System/Library/PrivateFrameworks/CoreAnalytics.framework/Support/analyticsd
+  168     0   0.0 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+  170     0   0.0 /usr/libexec/containermanagerd_system
+  171     0   0.0 /usr/libexec/runningboardd
+  172     0   0.0 /System/Library/CoreServices/coreservicesd
+  173     0   0.0 /usr/libexec/lsd
+  174     0   0.0 /usr/libexec/powerexperienced
+  175     0   0.0 /System/Library/PrivateFrameworks/CoreDuetContext.framework/Resources/contextstored
+  176     0   0.0 /System/Library/CoreServices/TimeMachine/backupd-helper
+  177     0   0.0 /usr/libexec/PowerUIAgent
+  179     0   0.1 /usr/libexec/airportd
+  180     0   0.0 /System/Library/PrivateFrameworks/Heimdal.framework/Helpers/digest-service
+  181     0   0.0 /usr/sbin/systemkeychain
+  182     0   0.0 /usr/libexec/findmydeviced
+  183     0   0.0 /usr/libexec/nehelper
+  185    24   0.0 /usr/libexec/symptomsd
+  186   282   0.0 /usr/libexec/trustd
+  188     0   0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/XPCServices/csnameddatad.xpc/Contents/MacOS/csnameddatad
+  189     0   0.0 /System/Library/Frameworks/InputMethodKit.framework/Resources/imklaunchagent
+  190    65   0.0 /usr/sbin/mDNSResponder
+  191   202   0.0 /usr/sbin/coreaudiod
+  192   289   0.0 /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed
+  193     0   0.0 /usr/libexec/UserEventAgent
+  195     0   0.0 /usr/sbin/universalaccessd
+  196   242   0.0 /usr/libexec/nsurlsessiond
+  197     0   0.0 /System/Library/CryptoTokenKit/com.apple.ifdreader.slotd/Contents/MacOS/com.apple.ifdreader
+  198     0   0.0 /usr/libexec/trustdFileHelper
+  199     0   0.0 /usr/libexec/ApplicationFirewall/socketfilterfw
+  200     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/authd.xpc/Contents/MacOS/authd
+  201     0   0.0 /usr/libexec/apfsd
+  202     0   0.0 /System/Library/PrivateFrameworks/FindMyMac.framework/Resources/FindMyMacd
+  204     0   0.0 /usr/libexec/usbd
+  206     0   0.0 /usr/sbin/distnoted
+  207     0   0.0 /usr/libexec/cryptexd
+  208     0   0.0 /usr/sbin/mDNSResponderHelper
+  209     0   0.0 /System/Library/Frameworks/SystemExtensions.framework/Versions/A/Helpers/sysextd
+  210   202   0.0 /usr/sbin/distnoted
+  211     0   0.0 /usr/libexec/mobileassetd
+  212   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Resources/VDC.plugin/Contents/Resources/VDCAssistant
+  213     0   0.0 /System/Library/Frameworks/Security.framework/Versions/A/XPCServices/com.apple.CodeSigningHelper.xpc/Contents/MacOS/com.apple.CodeSigningHelper
+  214     0   0.0 /System/Library/PrivateFrameworks/SystemStatusServer.framework/Support/systemstatusd
+  215     0   0.0 /usr/libexec/pkd
+  216     0   0.0 /usr/libexec/storagekitd
+  222     0   0.0 /System/Library/PrivateFrameworks/WiFiPolicy.framework/XPCServices/WiFiCloudAssetsXPCService.xpc/Contents/MacOS/WiFiCloudAssetsXPCService
+  224   262   0.0 /usr/sbin/distnoted
+  225   202   0.0 /System/Library/Frameworks/CoreAudio.framework/Versions/A/XPCServices/com.apple.audio.DriverHelper.xpc/Contents/MacOS/com.apple.audio.DriverHelper
+  227     0   0.0 /usr/libexec/secinitd
+  228     0   0.0 /usr/libexec/fskit_helper
+  229     0   0.0 /usr/libexec/wifip2pd
+  230     0   0.0 /Library/Apple/System/Library/CoreServices/XProtect.app/Contents/XPCServices/XProtectPluginService.xpc/Contents/MacOS/XProtectPluginService
+  231   205   0.0 /System/Library/PrivateFrameworks/GeoServices.framework/Versions/A/XPCServices/com.apple.geod.xpc/Contents/MacOS/com.apple.geod
+  232     0   0.0 /System/Library/Frameworks/AudioToolbox.framework/AudioComponentRegistrar
+  233   205   0.0 /usr/sbin/distnoted
+  236     0   0.0 /System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Resources/backgroundtaskmanagementd
+  239   205   0.0 /usr/libexec/secinitd
+  240   202   0.0 /System/Library/Frameworks/AudioToolbox.framework/XPCServices/com.apple.audio.SandboxHelper.xpc/Contents/MacOS/com.apple.audio.SandboxHelper
+  244   262   0.0 /usr/libexec/cameracaptured
+  245   262   0.0 /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/UVCAssistant.systemextension/Contents/MacOS/UVCAssistant
+  246   205   0.0 /usr/sbin/cfprefsd
+  249     0   0.0 /System/Library/CoreServices/WiFiAgent.app/Contents/MacOS/WiFiAgent
+  254   205   0.0 /usr/libexec/trustd
+  255     0   0.0 /System/Library/PrivateFrameworks/PowerLog.framework/Versions/A/XPCServices/PerfPowerTelemetryClientRegistrationService.xpc/Contents/MacOS/PerfPowerTelemetryClientRegistrationService
+  256     0   0.0 /System/Library/Frameworks/NetFS.framework/Versions/A/XPCServices/PlugInLibraryService.xpc/Contents/MacOS/PlugInLibraryService
+  261     0   0.0 /usr/libexec/audioclocksyncd
+  266   200   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated
+  267     0   0.0 /usr/libexec/securityd_system
+  270     0   0.0 /usr/libexec/syspolicyd
+  273   205   0.0 /usr/libexec/containermanagerd
+  278     0   0.0 /System/Library/CoreServices/TimeMachine/backupd
+  281     0   0.0 /usr/libexec/wifianalyticsd
+  282     0   0.0 /System/Library/CoreServices/Software Update.app/Contents/Resources/suhelperd
+  283   200   0.0 /usr/sbin/distnoted
+  285     0   0.0 /bin/bash
+  286     0   0.0 /usr/libexec/searchpartyd
+  287     0   0.0 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+  288     0   0.0 /usr/libexec/rpcsvchost
+  289    89   0.0 /usr/sbin/distnoted
+  295     0   0.0 /Library/NullMoth/latitude-desktop-journal
+  309     0   0.0 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Versions/A/XPCServices/com.apple.MobileSoftwareUpdate.CleanupPreparePathService.xpc/Contents/MacOS/com.apple.MobileSoftwareUpdate.CleanupPreparePathService
+  313   270   0.0 /System/Library/DriverExtensions/com.apple.DriverKit-IOUserDockChannelSerial.dext/com.apple.DriverKit-IOUserDockChannelSerial
+  315   270   0.0 /System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers
+  316     0   0.0 /usr/libexec/kernelmanager_helper
+  318   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceUSBPD.xpc/Contents/MacOS/UARPUpdaterServiceUSBPD
+  319   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDFU.xpc/Contents/MacOS/UARPUpdaterServiceDFU
+  320   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceAFU.xpc/Contents/MacOS/UARPUpdaterServiceAFU
+  321   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceDisplay.xpc/Contents/MacOS/UARPUpdaterServiceDisplay
+  322   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceLegacyAudio.xpc/Contents/MacOS/UARPUpdaterServiceLegacyAudio
+  323   278   0.0 /System/Library/PrivateFrameworks/MobileAccessoryUpdater.framework/XPCServices/UARPUpdaterServiceHID.xpc/Contents/MacOS/UARPUpdaterServiceHID
+  324   278   0.0 /usr/sbin/distnoted
+  341     0  30.5 /usr/bin/log
+  342     0   5.2 /bin/bash
+  351     0   0.0 sleep
+  352     0  24.3 /usr/libexec/diagnosticd
+  383     0   0.0 /usr/sbin/WirelessRadioManagerd
+  384     0   0.0 /usr/sbin/BlueTool
+  385     0   0.0 /usr/libexec/findmybeaconingd
+  386     0   0.0 /usr/libexec/eligibilityd
+  387   261   0.0 /usr/libexec/hidd
+  389    88   0.0 /usr/sbin/distnoted
+  390     0   0.0 /usr/libexec/countryd
+  391     0   0.0 /usr/libexec/sysmond
+  392     0   0.0 /usr/sbin/systemstats
+  400   258   0.0 /usr/libexec/captiveagent
+  416   222   0.0 /usr/sbin/netbiosd
+  423     0   0.0 /System/Library/PrivateFrameworks/CoreSymbolication.framework/coresymbolicationd
+  432     0   1.6 sleep
+  437     0   2.7 sleep
+  442     0   1.5 sleep
+  444     0   0.0 /bin/ps
+  445     0   0.0 /bin/bash
+  446     0   0.0 sleep
+  112     0   0.0 /usr/libexec/remoted

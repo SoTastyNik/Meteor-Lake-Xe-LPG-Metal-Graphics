@@ -1,0 +1,7 @@
+# 1.0.13 target panic: report181804
+
+Panic report Kernel-2026-10-19-181731.panic confirms loaded NMXGPU1.0.13 UUID121AACAE-4C53-3357-9356-38C79222A842, LatitudeMTLFB0.2.4, and LatitudePanelClaim0.2.3. Uptime8.036765554 seconds. Collector is on the subsequent fallback boot18:17:28. Collection18:18:04 completed with log search exit0 and seven panic files copied (includes historical reports and .contents.panic, not seven new crashes).
+
+Panic: NullMoth xkpi mutex used before mtx_init. Actual detection is m->mtx_lk==NULL; wording does not establish why. Stack: nmx_mtx_lock -> guc_retire_inflight_request_prio -> signal_irq_work -> linux_irq_work_fn -> taskqueue_run_locked. In source the GuC callback obtains request_to_scheduling_context(rq) and locks ce->guc_state.lock. intel_context_init already calls spin_lock_init on that lock. Therefore adding lazy initialization, skipping the lock or suppressing the panic would not be a justified fix. Possible stale/incorrect context, destruction or data corruption must be distinguished from an initialization path defect.
+
+No before-panic stolen-exclusion/ring-pin messages were recovered in this collection. No successful accelerated desktop or cured ring-corruption claim follows from the changed failure. Older16:58panic is WindowServer watchdog, not the new same stack. New panic source preserved locally with decoded text; no new candidate or boot-marker changes made during this review. Do not re-arm1.0.13.

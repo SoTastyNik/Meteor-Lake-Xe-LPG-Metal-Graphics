@@ -1,0 +1,360 @@
+--- a/NullMoth/plugin/nvmtl_vk.c
++++ b/NullMoth/plugin/nvmtl_vk.c
+@@ -399,13 +399,7 @@
+     return result;
+ }
+ _Static_assert(sizeof(VkCommandPool) == sizeof(void *) && _Alignof(VkCommandPool) == _Alignof(void *), "VkCommandPool bridge ABI");
+-static VkResult nvmtl_opaque_CreateCommandPool(VkDevice dev, const VkCommandPoolCreateInfo *info, const VkAllocationCallbacks *allocator, void **out)
+-{
+-    VkCommandPool handle = VK_NULL_HANDLE;
+-    VkResult result = pvkCreateCommandPool(dev, info, allocator, &handle);
+-    if (result == VK_SUCCESS) *out = handle;
+-    return result;
+-}
++
+ static VkResult nvmtl_opaque_CreateGraphicsPipelines(VkDevice dev, VkPipelineCache cache, uint32_t count, const VkGraphicsPipelineCreateInfo *info, const VkAllocationCallbacks *allocator, void **out)
+ {
+     if (count != 1) return VK_ERROR_INITIALIZATION_FAILED;
+@@ -2464,7 +2458,6 @@
+ typedef struct nvmtl_address_page { nvk_buffer buffer; struct nvmtl_address_page *next; } nvmtl_address_page;
+ #define NVMTL_KEEP 256
+ static pthread_mutex_t g_keep_lock = PTHREAD_MUTEX_INITIALIZER;
+-static VkCommandPool g_keep_pool[NVMTL_KEEP]; static unsigned g_keep_npool;
+ static nvmtl_address_page *g_keep_page[NVMTL_KEEP]; static unsigned g_keep_npage;
+ static int nvmtl_keep_on(void)
+ {
+@@ -2472,35 +2465,79 @@
+     if (on < 0) {
+         const char *e = getenv("NVMTL_POOL_REUSE");
+         on = (!e || e[0] == '1') && getenv("NVMTL_NO_POOL_REUSE") == NULL;
+-        if (on) nvlog("vk: pool reuse ON (witness-guarded default) - empty command pools and address pages kept (<= %d), reused only on THE WITNESS", NVMTL_KEEP);
++        if (on) nvlog("vk: address-page reuse ON (witness-guarded, <= %d); command pools are always fresh", NVMTL_KEEP);
+         else nvlog("vk: pool reuse OFF by environment - command pools and address pages are created and destroyed per commit");
+     }
+     return on;
+ }
+-static int nvmtl_command_pool_fresh(void)
+-{
+-    const char *e=getenv("NVMTL_COMMAND_POOL_FRESH");
+-    return e && !strcmp(e,"1");
+-}
++/* Permanent policy: no command-pool cache or environment opt-out exists. */
++static int nvmtl_command_pool_fresh(void) { return 1; }
+ uint32_t nvmtl_vk_diagnostic_policy(void)
+ {
+     const char *d=getenv("NVMTL_DIAGNOSTIC_STDERR"), *t=getenv("NVMTL_READBACK_TRACE"), *stage=getenv("NVMTL_READBACK_STAGE_FRESH");
+-    return (d && !strcmp(d,"1") ? 1u:0u) | (nvmtl_command_pool_fresh()?2u:0u) |
++    return (d && !strcmp(d,"1") ? 1u:0u) | 2u | 32u |
+         (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | (stage && !strcmp(stage,"1")?16u:0u);
+ }
+-static VkCommandPool nvmtl_keep_pool_pop(void)
+-{
+-    VkCommandPool p = VK_NULL_HANDLE;
+-    if (!nvmtl_keep_on() || nvmtl_command_pool_fresh()) return p;
+-    pthread_mutex_lock(&g_keep_lock); if (g_keep_npool) p = g_keep_pool[--g_keep_npool]; pthread_mutex_unlock(&g_keep_lock);
+-    return p;
+-}
+-static int nvmtl_keep_pool_push(VkCommandPool p)
+-{
+-    int kept = 0;
+-    if (!nvmtl_keep_on() || nvmtl_command_pool_fresh()) return 0;
+-    pthread_mutex_lock(&g_keep_lock); if (g_keep_npool < NVMTL_KEEP) { g_keep_pool[g_keep_npool++] = p; kept = 1; } pthread_mutex_unlock(&g_keep_lock);
+-    return kept;
++static pthread_mutex_t nvmtl_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
++/* created, destroyed, live, peak, quarantined, pending, completed, abandoned */
++static uint64_t g_command_pool_stats[8];
++static pthread_mutex_t g_command_pool_stats_lock = PTHREAD_MUTEX_INITIALIZER;
++void nvmtl_vk_command_pool_stats(uint64_t out[8])
++{
++    pthread_mutex_lock(&g_command_pool_stats_lock);
++    memcpy(out,g_command_pool_stats,sizeof g_command_pool_stats);
++    pthread_mutex_unlock(&g_command_pool_stats_lock);
++}
++static void nvmtl_pool_created(nvk_cmdbuf *c, VkCommandPool pool)
++{
++    c->pool=(void *)pool; c->pool_state=NVK_POOL_RECORDING;
++    pthread_mutex_lock(&g_command_pool_stats_lock);
++    g_command_pool_stats[0]++;g_command_pool_stats[2]++;
++    if(g_command_pool_stats[2]>g_command_pool_stats[3])g_command_pool_stats[3]=g_command_pool_stats[2];
++    pthread_mutex_unlock(&g_command_pool_stats_lock);
++}
++static void nvmtl_pool_state(nvk_cmdbuf *c,uint32_t state)
++{
++    if(!c || !c->pool || c->pool_state==state)return;
++    pthread_mutex_lock(&g_command_pool_stats_lock);
++    if(c->pool_state==NVK_POOL_SUBMITTED)g_command_pool_stats[5]--;
++    if(state==NVK_POOL_SUBMITTED)g_command_pool_stats[5]++;
++    if(state==NVK_POOL_QUARANTINED && c->pool_state!=NVK_POOL_QUARANTINED)g_command_pool_stats[4]++;
++    c->pool_state=state;
++    pthread_mutex_unlock(&g_command_pool_stats_lock);
++}
++static int nvmtl_pool_destroy(nvk_cmdbuf *c)
++{
++    if(!c || !c->pool)return 1;
++    if(c->pool_state!=NVK_POOL_RECORDING && c->pool_state!=NVK_POOL_COMPLETE){
++        nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
++        nvlog("command pool retirement REFUSED: completion uncertain; retaining pool %p",c->pool);return 0;
++    }
++    const uint32_t state=c->pool_state;
++    /* Destruction also frees every command buffer allocated from this pool. */
++    pvkDestroyCommandPool(g_dev,(VkCommandPool)c->pool,NULL);
++    c->pool=NULL;c->cb=NULL;
++    pthread_mutex_lock(&g_command_pool_stats_lock);
++    g_command_pool_stats[1]++;g_command_pool_stats[2]--;
++    g_command_pool_stats[state==NVK_POOL_COMPLETE?6:7]++;
++    pthread_mutex_unlock(&g_command_pool_stats_lock);
++    return 1;
++}
++static int nvmtl_pool_begin_raw(nvk_cmdbuf *c)
++{
++    memset(c,0,sizeof *c);
++    VkCommandPool pool=VK_NULL_HANDLE;
++    VkCommandPoolCreateInfo pi={VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,NULL,VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,g_qfam};
++    VkResult result=pvkCreateCommandPool(g_dev,&pi,NULL,&pool);
++    if(result!=VK_SUCCESS){nvlog("vk: fresh command pool creation FAILED -> %d",result);return -1;}
++    nvmtl_pool_created(c,pool);
++    VkCommandBufferAllocateInfo ai={VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,NULL,pool,VK_COMMAND_BUFFER_LEVEL_PRIMARY,1};
++    result=nvmtl_opaque_AllocateCommandBuffers(g_dev,&ai,&c->cb);
++    if(result!=VK_SUCCESS){nvlog("vk: vkAllocateCommandBuffers FAILED -> %d",result);nvmtl_pool_destroy(c);return -1;}
++    VkCommandBufferBeginInfo bi={VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,NULL,VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,NULL};
++    result=pvkBeginCommandBuffer(c->cb,&bi);
++    if(result!=VK_SUCCESS){nvlog("vk: vkBeginCommandBuffer FAILED -> %d",result);nvmtl_pool_destroy(c);return -1;}
++    return 0;
+ }
+ static nvmtl_address_page *nvmtl_keep_page_pop(void)
+ {
+@@ -4237,11 +4274,8 @@
+ 
+ int nvmtl_vk_queue_create(nvk_queue *out)
+ {
+-    if (nvmtl_vk_init()) return -1;
+-    memset(out, 0, sizeof *out);
+-    VkCommandPoolCreateInfo cpci = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL,
+-        VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, g_qfam };
+-    VKCK(nvmtl_opaque_CreateCommandPool(g_dev, &cpci, NULL, &out->pool), "vkCreateCommandPool");
++    if(nvmtl_vk_init())return -1;
++    memset(out,0,sizeof *out);
+     return 0;
+ }
+ 
+@@ -4349,21 +4383,7 @@
+     (void)q;
+     if (nvmtl_vk_init()) { nvlog("vk: recording FAILED phase=backend-init state=%d",g_state); return -1; }
+     const uint64_t b0 = nvmtl_perf_now();
+-    memset(out, 0, sizeof *out);
+-    VkCommandPool pool = nvmtl_keep_pool_pop();
+-    VkCommandPoolCreateInfo cpci = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL,
+-        VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, g_qfam };
+-    VkResult result = pool != VK_NULL_HANDLE ? VK_SUCCESS : pvkCreateCommandPool(g_dev, &cpci, NULL, &pool);
+-    if (result != VK_SUCCESS) { nvlog("vk: recording pool creation -> %d", result); return -1; }
+-    out->pool = pool;
+-    VkCommandBufferAllocateInfo ai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, NULL, pool,
+-        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1 };
+-    result = nvmtl_opaque_AllocateCommandBuffers(g_dev, &ai, &out->cb);
+-    if (result != VK_SUCCESS) { nvlog("vk: vkAllocateCommandBuffers FAILED -> %d", result); pvkDestroyCommandPool(g_dev, pool, NULL); memset(out, 0, sizeof *out); return -1; }
+-    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
+-        VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL };
+-    result = pvkBeginCommandBuffer(out->cb, &bi);
+-    if (result != VK_SUCCESS) { nvlog("vk: vkBeginCommandBuffer FAILED -> %d", result); pvkDestroyCommandPool(g_dev, pool, NULL); memset(out, 0, sizeof *out); return -1; }
++    if(nvmtl_pool_begin_raw(out))return -1;
+     if (pvkGetCalibratedTimestampsEXT && g_timestamp_bits) {
+         VkQueryPoolCreateInfo qi = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, NULL, 0, VK_QUERY_TYPE_TIMESTAMP, 2, 0 };
+         VkQueryPool timing = nvmtl_tspool_pop();
+@@ -4952,13 +4972,9 @@
+     if (done) return;
+     done = 1;
+     nvk_image *imgs[2] = { &g_dummyImg, g_dummyStex.view ? &g_dummyStex : NULL };
+-    VkCommandPool pool = VK_NULL_HANDLE; VkCommandBuffer cb = VK_NULL_HANDLE; VkFence fence = VK_NULL_HANDLE;
+-    VkCommandPoolCreateInfo cpci = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, NULL, 0, g_qfam };
+-    if (pvkCreateCommandPool(g_dev, &cpci, NULL, &pool) != VK_SUCCESS) { nvlog("vk: dummy zero-fill SKIPPED — vkCreateCommandPool failed; an unbound texture still samples uninitialised memory"); return; }
+-    VkCommandBufferAllocateInfo cbai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, NULL, pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1 };
+-    if (pvkAllocateCommandBuffers(g_dev, &cbai, &cb) != VK_SUCCESS) { nvlog("vk: dummy zero-fill SKIPPED — vkAllocateCommandBuffers failed; an unbound texture still samples uninitialised memory"); return; }
+-    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, NULL };
+-    if (pvkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) { nvlog("vk: dummy zero-fill SKIPPED — vkBeginCommandBuffer failed; an unbound texture still samples uninitialised memory"); return; }
++    nvk_cmdbuf owner;
++    if(nvmtl_pool_begin_raw(&owner)){nvlog("vk: dummy zero-fill FAILED to begin");return;}
++    VkCommandBuffer cb=(VkCommandBuffer)owner.cb;VkFence fence=VK_NULL_HANDLE;
+     VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+     VkClearColorValue zero; memset(&zero, 0, sizeof zero);
+     for (int k = 0; k < 2; k++) {
+@@ -4975,15 +4991,21 @@
+         pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, NULL, 0, NULL, 1, &toFin);
+         imgs[k]->layout = (uint32_t)fin;
+     }
+-    if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { nvlog("vk: dummy zero-fill SKIPPED — vkEndCommandBuffer failed; an unbound texture still samples uninitialised memory"); return; }
+-    VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, NULL, 0 };
+-    if (pvkCreateFence(g_dev, &fci, NULL, &fence) != VK_SUCCESS) { nvlog("vk: dummy zero-fill SKIPPED — vkCreateFence failed; an unbound texture still samples uninitialised memory"); return; }
+-    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL, 0, NULL, NULL, 1, &cb, 0, NULL };
+-    VkResult sr = pvkQueueSubmit(g_queue, 1, &si, fence);
+-    if (sr != VK_SUCCESS) { nvlog("vk: dummy zero-fill FAILED — vkQueueSubmit -> %d; an unbound texture still samples uninitialised memory", sr); pvkDestroyFence(g_dev, fence, NULL); return; }
+-    VkResult wr = pvkWaitForFences(g_dev, 1, &fence, VK_TRUE, 2000000000ull);
+-    pvkDestroyFence(g_dev, fence, NULL);
+-    if (wr != VK_SUCCESS) { nvlog("vk: dummy zero-fill did not complete — vkWaitForFences -> %d; an unbound texture may still sample uninitialised memory", wr); return; }
++    if(pvkEndCommandBuffer(cb)!=VK_SUCCESS){nvlog("vk: dummy zero-fill FAILED to end");nvmtl_pool_destroy(&owner);return;}
++    VkFenceCreateInfo fci={VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,NULL,0};
++    if(pvkCreateFence(g_dev,&fci,NULL,&fence)!=VK_SUCCESS){nvlog("vk: dummy zero-fill FAILED to create fence");nvmtl_pool_destroy(&owner);return;}
++    VkSubmitInfo si={VK_STRUCTURE_TYPE_SUBMIT_INFO,NULL,0,NULL,NULL,1,&cb,0,NULL};
++    nvmtl_pool_state(&owner,NVK_POOL_SUBMITTED);
++    pthread_mutex_lock(&nvmtl_submit_mutex);
++    VkResult sr=pvkQueueSubmit(g_queue,1,&si,fence);
++    pthread_mutex_unlock(&nvmtl_submit_mutex);
++    VkResult wr=sr==VK_SUCCESS?pvkWaitForFences(g_dev,1,&fence,VK_TRUE,2000000000ull):sr;
++    if(wr!=VK_SUCCESS){
++        nvmtl_pool_state(&owner,NVK_POOL_QUARANTINED);g_state=-1;
++        nvlog("vk: dummy zero-fill FAILED -> %d; retaining uncertain pool and fence",wr);return;
++    }
++    nvmtl_pool_state(&owner,NVK_POOL_COMPLETE);
++    pvkDestroyFence(g_dev,fence,NULL);nvmtl_pool_destroy(&owner);
+     nvlog("vk: dummy images ZEROED and transitioned (sampled -> SHADER_READ_ONLY_OPTIMAL%s) — a declared-but-unbound texture now reads opaque black, not uninitialised VRAM",
+           g_dummyStex.view ? ", storage -> GENERAL" : "; no storage dummy");
+ }
+@@ -5109,6 +5131,7 @@
+     if (nvmtl_vk_cmd_fill_buffer(&c, b, offset, size, value)) { nvmtl_vk_cmd_abandon(&c); return -1; }
+     return nvmtl_vk_submit_wait(&c);
+ }
++static void nvmtl_counter_pool_state(nvk_cmdbuf *c,uint32_t state);
+ static int nvmtl_counter_flush(nvk_cmdbuf *c);
+ static void nvmtl_counter_retire(nvk_cmdbuf *c);
+ static int nvmtl_counter_reset_finish(nvk_cmdbuf *c, VkCommandBuffer *reset);
+@@ -5132,6 +5155,11 @@
+ 
+ static void nvmtl_cmd_retire(nvk_cmdbuf *c)
+ {
++    if(!c)return;
++    if(c->pool && c->pool_state!=NVK_POOL_RECORDING && c->pool_state!=NVK_POOL_COMPLETE){
++        nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
++        nvlog("command pool retirement REFUSED while pending; resources retained");return;
++    }
+     nvmtl_counter_retire(c);
+     nvmtl_vk_cmd_retire_occlusion(c);
+     if (c->timing_pool) {
+@@ -5166,17 +5194,12 @@
+     free(c->sets); c->sets = NULL; c->nsets = c->capsets = 0; c->nobind = 0; c->skipped = 0;
+     free(c->table); c->table = NULL;
+     nvmtl_address_page *page = c->address_pages;
+-    const int keep = nvmtl_keep_verdict(c->wseq);
++    const int keep = c->pool_state==NVK_POOL_RECORDING ? (nvmtl_keep_on()?1:0) : nvmtl_keep_verdict(c->wseq);
+     while (page) { nvmtl_address_page *next = page->next;
+         if (keep >= 0 && !(keep > 0 && nvmtl_keep_page_push(page))) { nvmtl_vk_buffer_destroy(&page->buffer); free(page); }
+         page = next; }
+     c->address_pages = NULL; c->address_count = 0;
+-    if (c->cb && c->pool) {
+-        VkCommandBuffer cb = (VkCommandBuffer)c->cb;
+-        pvkFreeCommandBuffers(g_dev, (VkCommandPool)c->pool, 1, &cb);
+-        if (keep >= 0 && !(keep > 0 && nvmtl_keep_pool_push((VkCommandPool)c->pool))) pvkDestroyCommandPool(g_dev, (VkCommandPool)c->pool, NULL);
+-        c->cb = NULL; c->pool = NULL;
+-    }
++    nvmtl_pool_destroy(c);
+ }
+ 
+ int nvmtl_vk_cmd_abandon(nvk_cmdbuf *c)
+@@ -5187,7 +5210,7 @@
+     return 0;
+ }
+ 
+-static pthread_mutex_t nvmtl_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
++
+ void (*nvmtl_pre_submit_hook)(void);
+ void (*nvmtl_pre_release_hook)(void *);
+ typedef struct { nvk_cmdbuf cb; unsigned begun, n, fills, copies, nhold; unsigned long long bytes; void *hold[4]; } nvmtl_prologue;
+@@ -5355,6 +5378,9 @@
+     nvmtl_wit_control(wseq);
+     const uint64_t sE = nvmtl_perf_now();
+     if (pt[0]) { pt[1] = pt[0] + (sA - pt[0]) + (sD - sC); pt[2] = pt[1] + (sB - sA) + (sE - sD); pt[3] = pt[2] + (sC - sB); }
++    nvmtl_pool_state(c,NVK_POOL_SUBMITTED);
++    if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_SUBMITTED);
++    nvmtl_counter_pool_state(c,NVK_POOL_SUBMITTED);
+     result = g_state == 1 ? pvkQueueSubmit(g_queue, 1, &si, fence) : VK_ERROR_DEVICE_LOST;
+     pthread_mutex_unlock(&nvmtl_submit_mutex);
+     if (nvmtl_submit_trace(f->diagnostic_id))
+@@ -5363,6 +5389,9 @@
+     g_cmd_submitted++;
+     if (result != VK_SUCCESS) {
+         g_state = -1;
++        nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
++        if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
++        nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
+         nvlog("vk: queue submit -> %d; disabling backend and retaining uncertain in-flight resources", result);
+         return -2;
+     }
+@@ -5371,6 +5400,7 @@
+ }
+ int nvmtl_vk_submit_finish(nvmtl_inflight *f)
+ {
++    if(!f || !f->c || !f->fence)return -1;
+     nvk_cmdbuf *const c = f->c; const VkFence fence = f->fence; uint64_t *const pt = f->pt;
+     nvmtl_prologue *const pre = &f->pre;
+     const long budget_ms = nvmtl_gpu_wait_budget_ms();
+@@ -5394,17 +5424,26 @@
+     }
+     if (wr != VK_SUCCESS || g_state != 1) {
+         g_state = -1;
++        nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
++        if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
++        nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
+         nvlog("vk: fence wait -> %d after %ld ms (budget %ld ms); disabling backend without retiring in-flight resources", wr, waited_ms, budget_ms);
+         return -2;
+     }
+     if (c->wseq && c->wseq != NVMTL_WSEQ_BLIND) {
+         if (nvmtl_keep_verdict(c->wseq) < 0) {
+             g_state = -1;
++            nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
++            if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
++            nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
+             nvlog("vk: completion witness missing; disabling backend and retaining all in-flight resources");
+             return -2;
+         }
+         c->wseq = 0;
+     }
++    nvmtl_pool_state(c,NVK_POOL_COMPLETE);
++    if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_COMPLETE);
++    nvmtl_counter_pool_state(c,NVK_POOL_COMPLETE);
+     c->timing.host_after_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+     if (c->timing_pool && c->timing.clock.valid) {
+         uint64_t pair[4] = {0};
+@@ -5448,6 +5487,7 @@
+     nvmtl_cmd_retire(c);
+     pt[7] = nvmtl_perf_now();
+     nvmtl_perf_submit(perf_sets, pt);
++    f->fence=VK_NULL_HANDLE;f->c=NULL;
+     return 0;
+ }
+ 
+@@ -5702,7 +5742,6 @@
+ {
+     if (g_state != 1 || !q) return;
+     nvmtl_vk_buffer_destroy(&q->stage);
+-    if (q->pool) pvkDestroyCommandPool(g_dev, (VkCommandPool)q->pool, NULL);
+     memset(q, 0, sizeof *q);
+ }
+ 
+@@ -6567,6 +6606,11 @@
+     unsigned reset_ended;
+ } nvmtl_counter_recording;
+ 
++static void nvmtl_counter_pool_state(nvk_cmdbuf *c,uint32_t state)
++{
++    nvmtl_counter_recording *r=c ? c->counter_recording:NULL;
++    if(r)nvmtl_pool_state(&r->reset,state);
++}
+ static int nvmtl_counter_fail(nvk_cmdbuf *c) { if (c) c->counter_error = 1; return -1; }
+ static void nvmtl_counter_memory_barrier(nvk_cmdbuf *c)
+ {
+--- a/NullMoth/plugin/nvmtl_vk.h
++++ b/NullMoth/plugin/nvmtl_vk.h
+@@ -61,7 +61,7 @@
+                  void *address_pages; unsigned address_count;
+                  unsigned nobind, skipped;
+                  void *dcache[32]; void *dcachepool; unsigned ndcache;
+-                 unsigned in_rp, occlusion_reset; uint32_t wseq;
++                 unsigned in_rp, occlusion_reset; uint32_t wseq; uint32_t pool_state;
+                  unsigned direct_sass;   /* recorded a dispatch of compiled machine code: never reuse this pool */
+                  void *occlusion_pages; uint32_t occlusion_count;
+                  void *timing_pool; nvmtl_gpu_interval timing;
+@@ -342,3 +342,6 @@
+ int nvmtl_vk_surface_dirty(uint32_t surfaceID, uint32_t plane);
+ 
+ uint32_t nvmtl_vk_diagnostic_policy(void);
++
++enum { NVK_POOL_RECORDING, NVK_POOL_SUBMITTED, NVK_POOL_COMPLETE, NVK_POOL_QUARANTINED };
++void nvmtl_vk_command_pool_stats(uint64_t out[8]);

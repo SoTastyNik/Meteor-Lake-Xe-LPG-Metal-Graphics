@@ -1,0 +1,209 @@
+diff --git a/drivers/gpu/drm/drm_file.c b/drivers/gpu/drm/drm_file.c
+index 6d25949758..3410296692 100644
+--- a/drivers/gpu/drm/drm_file.c
++++ b/drivers/gpu/drm/drm_file.c
+@@ -498,7 +498,14 @@ void drm_file_update_pid(struct drm_file *filp)
+ #endif
+ 	mutex_unlock(&dev->filelist_mutex);
+ 
++	/*
++	 * FreeBSD: the pid is a plain integer (and task_pid() is the thread id,
++	 * so this runs for every new calling thread): no reader can hold the old
++	 * one, so there is no grace period to wait for.
++	 */
++#ifdef __linux__
+ 	synchronize_rcu();
++#endif
+ 	put_pid(old);
+ }
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_display_device.c b/drivers/gpu/drm/i915/display/intel_display_device.c
+index 68cb7f9b9e..b3777a456a 100644
+--- a/drivers/gpu/drm/i915/display/intel_display_device.c
++++ b/drivers/gpu/drm/i915/display/intel_display_device.c
+@@ -1618,6 +1618,14 @@ struct intel_display *intel_display_device_probe(struct pci_dev *pdev)
+ 
+ 	intel_display_params_copy(&display->params);
+ 
++#ifdef NMXKPI
++	/* Render-only Latitude bring-up: leave the firmware-owned panel alone. */
++	if (pdev->vendor == 0x8086 && pdev->device == 0x7d45) {
++		drm_info(display->drm, "Latitude MTL render-only: skipping display discovery\n");
++		goto no_display;
++	}
++#endif
++
+ 	if (has_no_display(pdev)) {
+ 		drm_dbg_kms(display->drm, "Device doesn't have display\n");
+ 		goto no_display;
+diff --git a/drivers/gpu/drm/i915/gt/uc/intel_uc.c b/drivers/gpu/drm/i915/gt/uc/intel_uc.c
+index f1748a85d2..35dcaca36e 100644
+--- a/drivers/gpu/drm/i915/gt/uc/intel_uc.c
++++ b/drivers/gpu/drm/i915/gt/uc/intel_uc.c
+@@ -88,7 +88,11 @@ static void __confirm_options(struct intel_uc *uc)
+ 	struct intel_gt *gt = uc_to_gt(uc);
+ 	struct drm_i915_private *i915 = gt->i915;
+ 
++#ifdef NMXKPI
++	gt_info(gt, "enable_guc=%d (guc:%s submission:%s huc:%s slpc:%s)\n",
++#else
+ 	gt_dbg(gt, "enable_guc=%d (guc:%s submission:%s huc:%s slpc:%s)\n",
++#endif
+ 	       i915->params.enable_guc,
+ 	       str_yes_no(intel_uc_wants_guc(uc)),
+ 	       str_yes_no(intel_uc_wants_guc_submission(uc)),
+@@ -428,8 +432,12 @@ static bool uc_is_wopcm_locked(struct intel_uc *uc)
+ 
+ static int __uc_check_hw(struct intel_uc *uc)
+ {
+-	if (uc->fw_table_invalid)
++	if (uc->fw_table_invalid) {
++#ifdef NMXKPI
++		gt_err(uc_to_gt(uc), "Latitude MTL: uC firmware table invalid\n");
++#endif
+ 		return -EIO;
++	}
+ 
+ 	if (!intel_uc_supports_guc(uc))
+ 		return 0;
+@@ -439,8 +447,12 @@ static int __uc_check_hw(struct intel_uc *uc)
+ 	 * before on this system after reboot, otherwise we risk GPU hangs.
+ 	 * To check if GuC was loaded before we look at WOPCM registers.
+ 	 */
+-	if (uc_is_wopcm_locked(uc))
++	if (uc_is_wopcm_locked(uc)) {
++#ifdef NMXKPI
++		gt_err(uc_to_gt(uc), "Latitude MTL: GuC disabled but WOPCM already locked\n");
++#endif
+ 		return -EIO;
++	}
+ 
+ 	return 0;
+ }
+diff --git a/drivers/gpu/drm/i915/i915_driver.c b/drivers/gpu/drm/i915/i915_driver.c
+index f794341b4c..4dc641c274 100644
+--- a/drivers/gpu/drm/i915/i915_driver.c
++++ b/drivers/gpu/drm/i915/i915_driver.c
+@@ -757,6 +757,14 @@ i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	/* Device parameters start as a copy of module parameters. */
+ 	i915_params_copy(&i915->params, &i915_modparams);
++#ifdef NMXKPI
++	if (pdev->vendor == 0x8086 && pdev->device == 0x7d45) {
++		i915->params.enable_guc = ENABLE_GUC_SUBMISSION | ENABLE_GUC_LOAD_HUC;
++		drm_info(&i915->drm, "Latitude MTL: enable_guc=%d (Linux report profile)\n",
++			 i915->params.enable_guc);
++	}
++#endif
++
+ 
+ 	/* Set up device info and initial runtime info. */
+ 	intel_device_info_driver_create(i915, pdev->device, match_info);
+@@ -782,6 +790,9 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	struct drm_i915_private *i915;
+ 	struct intel_display *display;
+ 	int ret;
++#ifdef NMXKPI
++	const char *latitude_phase = "pci_enable_device";
++#endif
+ 
+ 	ret = pci_enable_device(pdev);
+ 	if (ret) {
+@@ -797,6 +808,10 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	display = &i915->display;
+ 
++#ifdef NMXKPI
++	latitude_phase = "i915_driver_early_probe";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = i915_driver_early_probe(i915);
+ 	if (ret < 0)
+ 		goto out_pci_disable;
+@@ -805,38 +820,74 @@ int i915_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 
+ 	intel_vgpu_detect(i915);
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_gt_probe_all";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_gt_probe_all(i915);
+ 	if (ret < 0)
+ 		goto out_runtime_pm_put;
+ 
++#ifdef NMXKPI
++	latitude_phase = "i915_driver_mmio_probe";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = i915_driver_mmio_probe(i915);
+ 	if (ret < 0)
+ 		goto out_runtime_pm_put;
+ 
++#ifdef NMXKPI
++	latitude_phase = "i915_driver_hw_probe";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = i915_driver_hw_probe(i915);
+ 	if (ret < 0)
+ 		goto out_cleanup_mmio;
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_display_driver_probe_noirq";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_display_driver_probe_noirq(display);
+ 	if (ret < 0)
+ 		goto out_cleanup_hw;
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_irq_install";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_irq_install(i915);
+ 	if (ret)
+ 		goto out_cleanup_modeset;
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_display_driver_probe_nogem";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_display_driver_probe_nogem(display);
+ 	if (ret)
+ 		goto out_cleanup_irq;
+ 
++#ifdef NMXKPI
++	latitude_phase = "i915_gem_init";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = i915_gem_init(i915);
+ 	if (ret)
+ 		goto out_cleanup_modeset2;
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_pxp_init";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_pxp_init(i915);
+ 	if (ret && ret != -ENODEV)
+ 		drm_dbg(&i915->drm, "pxp init failed with %d\n", ret);
+ 
++#ifdef NMXKPI
++	latitude_phase = "intel_display_driver_probe";
++	drm_info(&i915->drm, "Latitude MTL init: %s\n", latitude_phase);
++#endif
+ 	ret = intel_display_driver_probe(display);
+ 	if (ret)
+ 		goto out_cleanup_gem;
+@@ -878,7 +929,11 @@ out_runtime_pm_put:
+ 	i915_driver_late_release(i915);
+ out_pci_disable:
+ 	pci_disable_device(pdev);
++#ifdef NMXKPI
++	i915_probe_error(i915, "Latitude MTL initialization failed at %s (%d)\n", latitude_phase, ret);
++#else
+ 	i915_probe_error(i915, "Device initialization failed (%d)\n", ret);
++#endif
+ 	return ret;
+ }
+ 

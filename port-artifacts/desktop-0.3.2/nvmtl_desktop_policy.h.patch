@@ -1,0 +1,11 @@
+--- a/plugin/nvmtl_desktop_policy.h
++++ b/plugin/nvmtl_desktop_policy.h
+@@ -7,3 +7,8 @@
+     return vendor == 0x8086 && device == 0x7d45 && process &&
+            strcmp(process, "WindowServer") == 0 && existing == NULL;
+ }
++
++static inline int nvmtl_windowserver_serial_policy(uint16_t vendor, uint16_t device, const char *process)
++{
++    return vendor == 0x8086 && device == 0x7d45 && process && !strcmp(process,"WindowServer");
++}

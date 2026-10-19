@@ -1,0 +1,6 @@
+Verified the saved22case/26000frame baseline. No GPU tests will run.
+Known1.0.9 is installed but not loaded; repairing its kernel collection from permanent paths.
+Final kernel collection GPU UUID mismatch.
+Previous GPU kernel and auxiliary collection restored.
+Desktop preparation failed; previous plugin and capture tools restored and both opt-ins cleared.
+WINDOWSERVER INSTALL exit=2

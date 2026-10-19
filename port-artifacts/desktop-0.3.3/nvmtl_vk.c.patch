@@ -1,0 +1,91 @@
+--- a/plugin/nvmtl_vk.c
++++ b/plugin/nvmtl_vk.c
+@@ -1056,9 +1056,11 @@
+     return 0;
+ }
+ static pthread_once_t g_vk_once = PTHREAD_ONCE_INIT;
+-static void nvmtl_vk_initialize_once(void) { (void)nvmtl_vk_initialize(); }
++static void nvmtl_vk_initialize_once(void) { nvmtl_desktop_trace("vk-init-begin","",0); int r=nvmtl_vk_initialize(); nvmtl_desktop_trace("vk-init-end","",r); }
+ int nvmtl_vk_init(void) {
++    nvmtl_desktop_trace("vk-once-enter","",0);
+     pthread_once(&g_vk_once, nvmtl_vk_initialize_once);
++    nvmtl_desktop_trace("vk-once-exit","",g_state);
+     return g_state == 1 ? 0 : -1;
+ }
+ const char *nvmtl_vk_device_name(void) { return g_state == 1 ? g_name : "(vulkan down)"; }
+@@ -2481,6 +2483,7 @@
+         (nvmtl_keep_on()?4u:0u) | (t && !strcmp(t,"1")?8u:0u) | (stage && !strcmp(stage,"1")?16u:0u);
+ }
+ static pthread_mutex_t nvmtl_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
++#include "nvmtl_desktop_wait.h"
+ static pthread_mutex_t nvmtl_desktop_submit_mutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+ int nvmtl_vk_windowserver_serial(void)
+ {
+@@ -5325,11 +5328,22 @@
+ int nvmtl_vk_submit_wait_at(nvk_cmdbuf *c, const char *who)
+ {
+     const int serial=nvmtl_vk_windowserver_serial();
+-    if(serial)pthread_mutex_lock(&nvmtl_desktop_submit_mutex);
++    if(serial){
++        nvmtl_desktop_trace("desktop-lock-wait",who,0);
++        int error=nvmtl_desktop_mutex_enter(&nvmtl_desktop_submit_mutex,nvmtl_gpu_wait_budget_ms());
++        if(error){
++            nvmtl_desktop_trace("desktop-lock-failed",who,error);
++            g_state=-1;
++            if(c){nvmtl_pool_state(c,NVK_POOL_QUARANTINED);nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);}
++            nvlog("vk: desktop submission lock failed %d; backend disabled, resources quarantined",error);
++            return -2;
++        }
++        nvmtl_desktop_trace("desktop-lock-acquired",who,0);
++    }
+     nvmtl_inflight f;
+     const int r = nvmtl_vk_submit_begin_at(c, &f, who);
+     const int result=r ? r : nvmtl_vk_submit_finish(&f);
+-    if(serial)pthread_mutex_unlock(&nvmtl_desktop_submit_mutex);
++    if(serial){pthread_mutex_unlock(&nvmtl_desktop_submit_mutex);nvmtl_desktop_trace("desktop-lock-released",who,result);}
+     return result;
+ }
+ int nvmtl_vk_submit_begin_at(nvk_cmdbuf *c, nvmtl_inflight *f, const char *who)
+@@ -5351,7 +5365,7 @@
+     else c->timing.clock.valid = 0;
+     pt[0] = nvmtl_perf_now();
+     const int pro = nvmtl_prologue_on();
+-    if (!pro && nvmtl_pre_submit_hook) { const int k0 = g_perf_kind; g_perf_kind |= 1; nvmtl_pre_submit_hook(); g_perf_kind = k0; }
++    if (!pro && nvmtl_pre_submit_hook) { const int k0 = g_perf_kind; g_perf_kind |= 1; nvmtl_desktop_trace("presubmit-begin","",0); nvmtl_pre_submit_hook(); nvmtl_desktop_trace("presubmit-end","",0); g_perf_kind = k0; }
+     const uint64_t sA = nvmtl_perf_now();
+     const uint32_t wseq = nvmtl_keep_on() ? nvmtl_wit_record(c) : 0;
+     VkResult result = pvkEndCommandBuffer(c->cb);
+@@ -5365,7 +5379,7 @@
+     pthread_mutex_lock(&nvmtl_submit_mutex);
+     if (pro && nvmtl_pre_submit_hook) {
+         nvmtl_prologue *const up = g_pre_cur; g_pre_cur = pre;
+-        const int k0 = g_perf_kind; g_perf_kind |= 1; nvmtl_pre_submit_hook(); g_perf_kind = k0;
++        const int k0 = g_perf_kind; g_perf_kind |= 1; nvmtl_desktop_trace("presubmit-begin","",0); nvmtl_pre_submit_hook(); nvmtl_desktop_trace("presubmit-end","",0); g_perf_kind = k0;
+         g_pre_cur = up;
+     }
+     const uint64_t sD = nvmtl_perf_now();
+@@ -5393,7 +5407,9 @@
+     nvmtl_pool_state(c,NVK_POOL_SUBMITTED);
+     if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_SUBMITTED);
+     nvmtl_counter_pool_state(c,NVK_POOL_SUBMITTED);
++    nvmtl_desktop_trace("queue-submit-begin",who,0);
+     result = g_state == 1 ? pvkQueueSubmit(g_queue, 1, &si, fence) : VK_ERROR_DEVICE_LOST;
++    nvmtl_desktop_trace("queue-submit-end",who,result);
+     pthread_mutex_unlock(&nvmtl_submit_mutex);
+     if (nvmtl_submit_trace(f->diagnostic_id))
+         nvlog("first-submit: #%llu queue result %d", (unsigned long long)f->diagnostic_id, result);
+@@ -5418,12 +5434,14 @@
+     const long budget_ms = nvmtl_gpu_wait_budget_ms();
+     const uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+     VkResult wr; long waited_ms = 0;
++    nvmtl_desktop_trace("fence-wait-begin","",0);
+     for (;;) {
+         wr = pvkWaitForFences(g_dev, 1, &fence, VK_TRUE, 250ull * 1000 * 1000);
+         waited_ms = (long)((clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - w0) / 1000000ull);
+         if (wr != VK_TIMEOUT) break;
+         if (waited_ms >= budget_ms) break;
+     }
++    nvmtl_desktop_trace("fence-wait-end","",wr);
+     if (nvmtl_submit_trace(f->diagnostic_id) || (wr != VK_SUCCESS && g_vendor == 0x8086))
+         nvlog("first-submit: #%llu fence result %d after %ld ms", (unsigned long long)f->diagnostic_id, wr, waited_ms);
+     pt[5] = nvmtl_perf_now();

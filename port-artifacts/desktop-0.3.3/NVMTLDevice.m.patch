@@ -1,0 +1,29 @@
+--- a/plugin/NVMTLDevice.m
++++ b/plugin/NVMTLDevice.m
+@@ -96,6 +96,17 @@
+     }
+     return path;
+ }
++#include "nvmtl_desktop_journal.h"
++void nvmtl_desktop_trace(const char *phase,const char *detail,int result)
++{
++    if(strcmp(getprogname(),"WindowServer"))return;
++    static _Atomic unsigned records;
++    if(atomic_fetch_add(&records,1)>=256)return;
++    int error=nvmtl_journal_append(NVMTL_DESKTOP_JOURNAL_PATH,phase,detail,result);
++    static _Atomic int reported;
++    if(error&&!atomic_exchange(&reported,1))
++        syslog(LOG_ERR,"NullMoth: desktop journal unavailable errno=%d",error);
++}
+ void nvlog(const char *fmt, ...) {
+     const char *diagnostic_env = getenv("NVMTL_DIAGNOSTIC_STDERR");
+     const int diagnostic = diagnostic_env && !strcmp(diagnostic_env, "1");
+@@ -114,7 +125,7 @@
+     }
+     if (dropped) return;
+ #if NVMTL_RELEASE
+-    if (nvmtl_log_failure(t)) syslog(LOG_ERR, "NullMoth: %s", t);
++    if (nvmtl_log_failure(t)) { nvmtl_desktop_trace("plugin-log",t,0); syslog(LOG_ERR, "NullMoth: %s", t); }
+ #else
+     syslog(LOG_NOTICE, "NVMTL: %s", t);
+     FILE *f = fopen(nvmtl_log_path(), "a"); if (f) { fprintf(f, "pid %d NVMTL: %s\n", getpid(), t); fclose(f); }

@@ -1,0 +1,16 @@
+{
+  "kernel": "1.0.14",
+  "uuid": "9B0192B5-D9CC-3FE1-9781-9276B170A4BE",
+  "sha256": "80c3fe8bfa639a1f6cd52a29ab485695d4f18ae289f70e39bbc4b021fb0ab0f6",
+  "hardware_verified": false,
+  "target_suite_run": false,
+  "passes": [
+    "438-object x86_64 link; undefined imports identical to frozen1.0.8",
+    "Actual old enqueue/worker/GuC callback reproduces context UAF; final implementation ASan/UBSan90000 lifetimes including publication race, parent/child, cancel, bulk remove, competing signal and duplicate signaling, zero live objects",
+    "Request iterator negative-control UAF reproduced and fixed",
+    "Actual integrated installer supports exact predecessor1.0.13/current1.0.14 identities, cache repair, final KC validation, rollback and marker cleanup",
+    "Actual kernel helper transactional rollback fixtures",
+    "Frozen22-case/26000-frame evidence file hashes verified; no GPU suite rerun"
+  ],
+  "limits": "Dell panic ordering not conclusively proven; candidate retains prior unverified DSM exclusion; full accelerated desktop unresolved"
+}

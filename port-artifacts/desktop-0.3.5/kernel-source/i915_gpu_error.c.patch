@@ -1,0 +1,35 @@
+--- a/i915_gpu_error.c
++++ b/i915_gpu_error.c
+@@ -1678,6 +1678,24 @@
+ 		return NULL;
+ 
+ 	intel_engine_get_hung_entity(engine, &ce, &rq);
++#ifdef NMXKPI
++    /* rq has a reference from get_hung_entity. Snapshot only existing state:
++       no new MMIO, list walks, allocation or wait in the hang path. */
++    if (rq && INTEL_DEVID(engine->i915)==0x7d45) {
++        pr_err("NMX-i915-request: engine=%s context=%llu seqno=%llu flags=%lx error=%d ready=%u active=%u started=%u completed=%u submit-pending=%d\n",
++            engine->name, (unsigned long long)rq->fence.context, (unsigned long long)rq->fence.seqno,
++            READ_ONCE(rq->fence.flags), READ_ONCE(rq->fence.error),
++            i915_request_is_ready(rq), i915_request_is_active(rq),
++            i915_request_started(rq), i915_request_completed(rq),atomic_read(&rq->submit.pending));
++        pr_err("NMX-i915-request: guc-id=%u sched=%08x lrca=%08x hwsp=%08x ring=%llx head=%x postfix=%x tail=%x batch=%llx bytes=%llx\n",
++            rq->context->guc_id.id,READ_ONCE(rq->context->guc_state.sched_state),rq->context->lrc.lrca,
++            hwsp_seqno(rq),(unsigned long long)rq->ring->vma->node.start,
++            rq->head,rq->postfix,rq->tail,
++            (unsigned long long)(rq->batch_res?rq->batch_res->start:0),
++            (unsigned long long)(rq->batch_res?rq->batch_res->vma_size:0));
++    }
++#endif
++
+ 	if (rq && !i915_request_started(rq)) {
+ 		/*
+ 		 * We want to know also what is the guc_id of the context,
+@@ -2216,6 +2234,7 @@
+         for (engine = gt->engine; engine && e < 16; engine = engine->next, e++) {
+             pr_err("NMX-i915-first-error: gt=%u engine=%u hung=%u pid=%d comm=%.16s reset=%u\n",
+                    g, e, engine->hung, engine->context.pid, engine->context.comm, engine->reset_count);
++            intel_guc_capture_log_engine_node(engine);
+             pr_err("NMX-i915-first-error: ring start=%08x head=%08x tail=%08x ctl=%08x active=%llx batch=%llx\n",
+                    engine->start, engine->head, engine->tail, engine->ctl,
+                    (unsigned long long)engine->acthd, (unsigned long long)engine->bbaddr);

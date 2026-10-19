@@ -1,0 +1,11 @@
+Oct 19 18:39:51 2026 5688 /Library/Logs/LatitudeDesktopAttempt.trace
+Oct 19 18:30:55 2026 11898 /Library/Logs/LatitudeDesktopAttempt.trace.previous
+MISSING LatitudeWindowServerSample.txt
+Oct 19 18:29:08 2026 91642 /Library/Logs/LatitudeWindowServerSample.txt.previous
+MISSING LatitudeWindowServerSample.stderr.txt
+Oct 19 18:29:08 2026 218 /Library/Logs/LatitudeWindowServerSample.stderr.txt.previous
+Oct 19 18:36:33 2026 100 /Library/Logs/LatitudeDesktopLive.log
+Oct 19 18:30:54 2026 17409229 /Library/Logs/LatitudeDesktopLive.log.previous
+Oct 19 18:36:32 2026 0 /Library/Logs/LatitudeDesktopRegistry.log
+Oct 19 18:29:27 2026 45722 /Library/Logs/LatitudeDesktopRegistry.log.previous
+Oct 19 18:39:24 2026 8350 /Library/Logs/LatitudePanelLoad.log

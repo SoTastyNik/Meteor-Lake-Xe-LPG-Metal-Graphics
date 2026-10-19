@@ -1,0 +1,208 @@
+ninja: Entering directory `/Users/ved/igpu-build/spirv-llvm-build'
+[1/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/Mangler/ManglingUtils.cpp.o
+[2/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/Mangler/FunctionDescriptor.cpp.o
+[3/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/Mangler/ParameterType.cpp.o
+[4/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/Mangler/Mangler.cpp.o
+[5/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/LLVMSPIRVOpts.cpp.o
+[6/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/OCLTypeToSPIRV.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLTypeToSPIRV.cpp:42:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLTypeToSPIRV.h:46:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[7/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/VectorComputeUtil.cpp.o
+[8/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerBitCastToNonStandardType.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVLowerBitCastToNonStandardType.cpp:47:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVLowerBitCastToNonStandardType.cpp:48:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/NoFolder.h:36:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   36 |   virtual void anchor();
+      |                ^
+2 warnings generated.
+[9/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVBuiltinHelper.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.cpp:40:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[10/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/LLVMToSPIRVDbgTran.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/LLVMToSPIRVDbgTran.cpp:40:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVWriter.h:46:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLTypeToSPIRV.h:46:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[11/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerBool.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVLowerBool.cpp:43:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[12/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/OCLUtil.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.cpp:39:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[13/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/OCLToSPIRV.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLToSPIRV.cpp:40:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLToSPIRV.h:43:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[14/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerLLVMIntrinsic.cpp.o
+[15/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerConstExpr.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVLowerConstExpr.cpp:40:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[16/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerMemmove.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVLowerMemmove.cpp:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[17/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVLowerOCLBlocks.cpp.o
+[18/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVRegularizeLLVM.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVRegularizeLLVM.cpp:40:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[19/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVToOCL12.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToOCL12.cpp:39:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToOCL.h:44:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[20/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVToLLVMDbgTran.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToLLVMDbgTran.cpp:45:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVReader.h:44:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[21/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVToOCL.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToOCL.cpp:43:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToOCL.h:44:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[22/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVToOCL20.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVToOCL20.cpp:39:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[23/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVWriterPass.cpp.o
+[24/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVTypeScavenger.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVTypeScavenger.cpp:128:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVTypeScavenger.cpp:132:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/NoFolder.h:36:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   36 |   virtual void anchor();
+      |                ^
+2 warnings generated.
+[25/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVDebug.cpp.o
+[26/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVBasicBlock.cpp.o
+[27/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/PreprocessMetadata.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/PreprocessMetadata.cpp:41:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[28/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVDecorate.cpp.o
+[29/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVUtil.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVUtil.cpp:49:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[30/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVReader.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVReader.cpp:39:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVReader.h:44:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[31/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/PassPlugin.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/PassPlugin.cpp:39:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLToSPIRV.h:43:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLUtil.h:44:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[32/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVFunction.cpp.o
+[33/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVInstruction.cpp.o
+[34/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVError.cpp.o
+[35/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVValue.cpp.o
+[36/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVType.cpp.o
+[37/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVStream.cpp.o
+[38/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVEntry.cpp.o
+[39/45] Building CXX object tools/llvm-spirv/CMakeFiles/llvm-spirv.dir/llvm-spirv.cpp.o
+[40/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVFnVar.cpp.o
+[41/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/libSPIRV/SPIRVModule.cpp.o
+[42/45] Building CXX object lib/SPIRV/CMakeFiles/LLVMSPIRVLib.dir/SPIRVWriter.cpp.o
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVWriter.cpp:41:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVWriter.h:46:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/OCLTypeToSPIRV.h:46:
+In file included from /Users/ved/igpu-build/spirv-llvm/lib/SPIRV/SPIRVBuiltinHelper.h:48:
+In file included from /opt/homebrew/opt/llvm@20/include/llvm/IR/IRBuilder.h:24:
+/opt/homebrew/opt/llvm@20/include/llvm/IR/ConstantFolder.h:31:16: warning: virtual method 'anchor' is inside a 'final' class and can never be overridden [-Wunnecessary-virtual-specifier]
+   31 |   virtual void anchor();
+      |                ^
+1 warning generated.
+[43/45] Linking CXX shared library lib/SPIRV/libLLVMSPIRVLib.dylib
+[44/45] Linking CXX executable tools/llvm-spirv/llvm-spirv
+[44/45] Install the project...
+-- Install configuration: "Release"
+-- Installing: /Users/ved/igpu-build/tools/include/LLVMSPIRVLib/LLVMSPIRVLib.h
+-- Installing: /Users/ved/igpu-build/tools/include/LLVMSPIRVLib/LLVMSPIRVOpts.h
+-- Installing: /Users/ved/igpu-build/tools/include/LLVMSPIRVLib/LLVMSPIRVExtensions.inc
+-- Installing: /Users/ved/igpu-build/tools/lib/pkgconfig/LLVMSPIRVLib.pc
+-- Installing: /Users/ved/igpu-build/tools/lib/libLLVMSPIRVLib.dylib
+-- Installing: /Users/ved/igpu-build/tools/bin/llvm-spirv

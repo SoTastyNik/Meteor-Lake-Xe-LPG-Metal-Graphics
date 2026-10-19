@@ -1,0 +1,11 @@
+41 CONFIG defines, 56 include dirs -> /Users/ved/igpu-build/xkpi/amd.flags
+i915_gem_mman.c fork applied
+Compiled 50 / 438
+Compiled 100 / 438
+Compiled 150 / 438
+Compiled 200 / 438
+Compiled 250 / 438
+Compiled 300 / 438
+Compiled 350 / 438
+Compiled 400 / 438
+TOTAL 438 FAILED 0 SECONDS 30.7

@@ -1,0 +1,18 @@
+{
+  "hardware_desktop_verified": false,
+  "target_tests_run": false,
+  "frozen_baseline": "22cases/26000frames/80020pools retained with originalkernel1.0.8; new diagnostic kernel not covered by that pass",
+  "local_passes": [
+    "Release x86_64 plugin/kernel/helper compile and ad-hoc signatures",
+    "438object kernel link; undefined imports identical to1.0.8",
+    "Actual parsedGuC logger ASan/UBSan:absent node, null/empty/large lists,192register bound; no new MMIO/waits/allocations",
+    "Actual noccs helper ASan/UBSan:exact scope, preserved existing flags, unset/empty/oversized handling; before-ICD-load ordering",
+    "Actual integrated installer+kernel helper with OS mocks:guards, success, KC preflight/mirroring, signature, journal and partial-arm rollback restores plugin/tools/kernel/cache",
+    "Separate actual kernel helper:already-current no-op and late rollback",
+    "Collector retains crashes/logs with current-kernel identity query, history failures still preserve artifacts",
+    "Actual native release policy masks47/63/38 and80failed command buffers",
+    "Actual readback implementation:20000balanced mocked allocations; timeout/backend-loss retention and app scope",
+    "Actual logger budget/throttle and loader/sample/fallback tests"
+  ],
+  "unresolved": "Physical desktop and compression hypothesis; primary GPU hang cause not established"
+}

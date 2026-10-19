@@ -1,0 +1,49 @@
+--- a/plugin/NVMTLDevice.m
++++ b/plugin/NVMTLDevice.m
+@@ -96,22 +96,26 @@
+     }
+     return path;
+ }
+-#include "nvmtl_desktop_journal.h"
++/* WindowServer cannot write the pre-created log file under its sandbox.
++   Use its existing system-log channel; the root loader streams and flushes it. */
+ void nvmtl_desktop_trace(const char *phase,const char *detail,int result)
+ {
+     if(strcmp(getprogname(),"WindowServer"))return;
+     static _Atomic unsigned records;
+-    if(atomic_fetch_add(&records,1)>=256)return;
+-    int error=nvmtl_journal_append(NVMTL_DESKTOP_JOURNAL_PATH,phase,detail,result);
+-    static _Atomic int reported;
+-    if(error&&!atomic_exchange(&reported,1))
+-        syslog(LOG_ERR,"NullMoth: desktop journal unavailable errno=%d",error);
+-}
++    unsigned record=atomic_fetch_add(&records,1);
++    if(record>=256)return;
++    uint64_t tid=0;pthread_threadid_np(NULL,&tid);
++    syslog(LOG_ERR,"NullMoth: desktop-trace: #%u ns=%llu tid=%llu phase=%.64s result=%d detail=%.480s",
++        record+1,(unsigned long long)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW),
++        (unsigned long long)tid,phase?phase:"?",result,detail?detail:"");
++}
++
+ void nvlog(const char *fmt, ...) {
+     const char *diagnostic_env = getenv("NVMTL_DIAGNOSTIC_STDERR");
+     const int diagnostic = diagnostic_env && !strcmp(diagnostic_env, "1");
+     uint64_t rep; const int dropped = nvlog_dropped(fmt, &rep);
+-    if (dropped && !diagnostic) return;
++    const int startup = !strcmp(getprogname(),"WindowServer") && !strncmp(fmt,"first-submit:",13);
++    if (dropped && !diagnostic && !startup) return;
+     char b[512]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a);
+     char t[640];
+     if (rep) snprintf(t, sizeof t, "%s   [logged %llu times now]", b, (unsigned long long)rep);
+@@ -123,9 +127,9 @@
+             (unsigned long long)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), t);
+         fflush(stderr);
+     }
+-    if (dropped) return;
++    if (dropped && !startup) return;
+ #if NVMTL_RELEASE
+-    if (nvmtl_log_failure(t)) { nvmtl_desktop_trace("plugin-log",t,0); syslog(LOG_ERR, "NullMoth: %s", t); }
++    if (nvmtl_log_failure(t)) { syslog(LOG_ERR, "NullMoth: %s", t); }
+ #else
+     syslog(LOG_NOTICE, "NVMTL: %s", t);
+     FILE *f = fopen(nvmtl_log_path(), "a"); if (f) { fprintf(f, "pid %d NVMTL: %s\n", getpid(), t); fclose(f); }

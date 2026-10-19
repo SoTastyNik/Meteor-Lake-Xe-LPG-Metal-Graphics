@@ -1,0 +1,21 @@
+diff --git a/MyIntelGPU.cpp b/MyIntelGPU.cpp
+index 51e8f65..cef97b5 100755
+--- a/MyIntelGPU.cpp
++++ b/MyIntelGPU.cpp
+@@ -3886,6 +3886,16 @@ void MyIntelGPU::dumpPMStatus(void)
+  */
+ bool MyIntelGPU::start(IOService *provider)
+ {
++    // Meteor Lake must never enter the legacy GT/display initialization.
++    // Match the real PCI configuration even if registry device-id is spoofed.
++    IOPCIDevice *candidate = OSDynamicCast(IOPCIDevice, provider);
++    if (candidate && candidate->configRead16(kIOPCIConfigVendorID) == 0x8086) {
++        const uint16_t device = candidate->configRead16(kIOPCIConfigDeviceID);
++        if ((device & 0xFF00) == 0x7D00) {
++            IODebug("Meteor Lake 0x%04X: legacy initialization blocked; use LatitudeMTLProbe", device);
++            return false;
++        }
++    }
+     /*
+      * ============================================================
+      *  Phase 0: Super Call + Validation

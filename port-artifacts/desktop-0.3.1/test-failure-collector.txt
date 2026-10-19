@@ -1,0 +1,1 @@
+PASS actual read-only collector with mocked system commands: latest preflight-only report selected over older results, boot-derived time window, saved evidence, NVRAM queries only, watchdog does not hold terminal pipe open

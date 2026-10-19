@@ -1,0 +1,33 @@
+epoch=1792429995 mono=796190808759 boot=71926D50-CCDE-4D5B-909B-C4750B78AA6D pid=1193 tid=14724 phase=prepared result=0 detail=candidate0.3.5
+epoch=1792430003 mono=804474356810 boot=71926D50-CCDE-4D5B-909B-C4750B78AA6D pid=1221 tid=14979 phase=installer-ready result=0 detail=firmware-stolen-1.0.13
+epoch=1792430071 mono=7418293610 boot=FE2F3FA3-9016-4B7F-9BCB-2689E2FD57E9 pid=289 tid=1841 phase=loader-start result=0 detail=candidate0.3.5
+epoch=1792430071 mono=7519359882 boot=FE2F3FA3-9016-4B7F-9BCB-2689E2FD57E9 pid=297 tid=1901 phase=loader-heartbeat result=0 detail=capture watcher
+epoch=1792430254 mono=7036101274 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=291 tid=1860 phase=loader-start result=0 detail=candidate0.3.5
+epoch=1792430254 mono=7178531877 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=0 detail=capture watcher
+epoch=1792430254 mono=7821486298 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=313 tid=2073 phase=claim-query-begin result=0 detail=0
+epoch=1792430254 mono=7846181788 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=318 tid=2100 phase=claim-query-end result=0 detail=0
+epoch=1792430256 mono=9191479771 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=342 tid=2262 phase=claim-query-begin result=0 detail=1
+epoch=1792430256 mono=9415435712 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=351 tid=2323 phase=claim-query-end result=0 detail=1
+epoch=1792430256 mono=9836764376 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=2 detail=capture watcher
+epoch=1792430257 mono=10786764451 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=360 tid=2416 phase=claim-query-begin result=0 detail=2
+epoch=1792430257 mono=10876481115 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=364 tid=2424 phase=claim-query-end result=0 detail=2
+epoch=1792430259 mono=12047388274 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=383 tid=2541 phase=claim-query-begin result=0 detail=3
+epoch=1792430259 mono=12108411806 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=387 tid=2548 phase=claim-query-end result=0 detail=3
+epoch=1792430259 mono=12396934660 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=4 detail=capture watcher
+epoch=1792430260 mono=13196462180 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=390 tid=2554 phase=claim-query-begin result=0 detail=4
+epoch=1792430260 mono=13221531032 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=394 tid=2561 phase=claim-query-end result=0 detail=4
+epoch=1792430261 mono=14339122687 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=398 tid=2584 phase=claim-query-begin result=0 detail=5
+epoch=1792430261 mono=14415259654 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=402 tid=2591 phase=claim-query-end result=0 detail=5
+epoch=1792430261 mono=14533687030 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=6 detail=capture watcher
+epoch=1792430262 mono=15529987258 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=406 tid=2603 phase=claim-query-begin result=0 detail=6
+epoch=1792430262 mono=15567986286 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=410 tid=2610 phase=claim-query-end result=0 detail=6
+epoch=1792430263 mono=16631392477 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=8 detail=capture watcher
+epoch=1792430263 mono=16697941930 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=415 tid=2629 phase=claim-query-begin result=0 detail=7
+epoch=1792430263 mono=16741758208 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=419 tid=2636 phase=claim-query-end result=0 detail=7
+epoch=1792430264 mono=17878077286 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=425 tid=2679 phase=claim-query-begin result=0 detail=8
+epoch=1792430264 mono=17901338559 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=429 tid=2687 phase=claim-query-end result=0 detail=8
+epoch=1792430265 mono=18697120669 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=10 detail=capture watcher
+epoch=1792430266 mono=19022115922 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=450 tid=2941 phase=claim-query-begin result=0 detail=9
+epoch=1792430266 mono=19198278397 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=464 tid=3011 phase=claim-query-end result=0 detail=9
+epoch=1792430268 mono=20642712861 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=517 tid=3410 phase=fallback-skip result=0 detail=No panel reservation
+epoch=1792430268 mono=20815681895 boot=2E4E20A4-CC3D-4E53-83C8-64CE488694BF pid=300 tid=1926 phase=loader-heartbeat result=12 detail=capture watcher

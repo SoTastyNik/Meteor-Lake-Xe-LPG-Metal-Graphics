@@ -1,0 +1,9 @@
+/Users/ved/Documents/iGPU Port/NullMoth/translator/wrapper/target/x86_64-apple-darwin/release/deps/zmij-122d1ed4ce975c45.d: /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/Users/ved/Documents/iGPU Port/NullMoth/translator/wrapper/target/x86_64-apple-darwin/release/deps/libzmij-122d1ed4ce975c45.rlib: /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/Users/ved/Documents/iGPU Port/NullMoth/translator/wrapper/target/x86_64-apple-darwin/release/deps/libzmij-122d1ed4ce975c45.rmeta: /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs:
+/Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs:
+/Users/ved/Documents/iGPU\ Port/toolchain/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs:

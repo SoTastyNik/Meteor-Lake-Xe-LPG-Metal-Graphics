@@ -1,0 +1,397 @@
+diff --git a/build/nmxaccel_build.sh b/build/nmxaccel_build.sh
+index fd622fe..477bcfb 100755
+--- a/build/nmxaccel_build.sh
++++ b/build/nmxaccel_build.sh
+@@ -14,7 +14,10 @@ RMINC=( -I"$NV/arch/nvalloc/unix/include" -I"$NV/arch/nvalloc/common/inc" -I"$NV
+   -I"$OGKM/src/common/inc/displayport" -I"$OGKM/src/common/nvlink/inband/interface" )
+ KMSINC=( -I"$KMS/os-interface/include" -I"$KMS/kapi/interface" -I"$KMS/kapi/include" -I"$OGKM/src/common/unix/nvidia-push/interface" -I"$KMS/interface" -I"$KMS/include"
+          -I"$OGKM/src/common/unix/common/inc" -I"$OGKM/src/common/modeset" -I"$OGKM/src/common/unix/common/utils/interface" )
+-RMDEFS=(); while read -r d; do RMDEFS+=("$d"); done < <(head -1 "$NV/_out/Darwin_x86_64/compile_cmds.sh" | tr ' ' '\n' | grep -E '^-D' | sed -e 's/"//g' | grep -v -E '^-D(NVRM|_LANGUAGE_C)$')
++RMDEFS=( -DNV_DARWIN -DNVCPU_X86_64 -DNV_64_BITS )
++if [ -f "$NV/_out/Darwin_x86_64/compile_cmds.sh" ]; then
++  while read -r d; do RMDEFS+=("$d"); done < <(head -1 "$NV/_out/Darwin_x86_64/compile_cmds.sh" | tr ' ' '\n' | grep -E '^-D' | sed -e 's/"//g' | grep -v -E '^-D(NVRM|_LANGUAGE_C)$')
++fi
+ CFLAGS=( -arch x86_64 -fapple-kext -mkernel -nostdinc -I"$KHDR" -I"$SRC" "${RMINC[@]}" "${KMSINC[@]}"
+   -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT "${RMDEFS[@]}" -DNMX_ACCEL ${NM_TAHOE:+-DNM_TAHOE}   # NM_TAHOE=1: the macOS 26 build
+   -std=c++17 -fno-rtti -fno-exceptions -fno-builtin -fno-common
+diff --git a/gpu-port/xkpi/bsdcompat/include/nmxxnu/nmx_xnu.h b/gpu-port/xkpi/bsdcompat/include/nmxxnu/nmx_xnu.h
+index ee462ea..e87bfdb 100644
+--- a/gpu-port/xkpi/bsdcompat/include/nmxxnu/nmx_xnu.h
++++ b/gpu-port/xkpi/bsdcompat/include/nmxxnu/nmx_xnu.h
+@@ -165,8 +165,13 @@ int nmx_xnu_devfs_busy(void);
+ /* a clone node at /dev/<path>; 'cookie' is handed back to nmx_cdev_open for every open of it */
+ void *nmx_xnu_devfs_make(const char *path, uint32_t uid, uint32_t gid, int mode, void *cookie);
+ void nmx_xnu_devfs_remove(void *node);
+-/* maps physical pages into the calling process (the GPU mmap ioctl); 'uaddr' receives the user address */
+-int nmx_xnu_map_user(const uint64_t *pages, size_t npages, int cache, int writable, uint64_t *uaddr, void **handle);
++/*
++ * maps physical pages into the calling process (the GPU mmap ioctl); 'uaddr' receives the user address. fixed != 0
++ * places the mapping at that address, replacing whatever the process had there (Linux MAP_FIXED); unmapping such a
++ * mapping leaves a hole, as munmap(2) does.
++ */
++int nmx_xnu_map_user(const uint64_t *pages, size_t npages, int cache, int writable, uint64_t fixed, uint64_t *uaddr,
++                     void **handle);
+ void nmx_xnu_unmap_user(void *handle);
+ 
+ /* implemented on the LinuxKPI side (override/src/nmx_linux_cdev.c), called by the device-node glue */
+diff --git a/gpu-port/xkpi/cc-i915.sh b/gpu-port/xkpi/cc-i915.sh
+index c1e88cf..c47d706 100755
+--- a/gpu-port/xkpi/cc-i915.sh
++++ b/gpu-port/xkpi/cc-i915.sh
+@@ -1,15 +1,15 @@
+ #!/bin/bash
+ # cc-i915.sh <source.c> [extra flags]: compiles one drm-kmod i915 source for the macOS kernel (x86_64) through the
+ # FreeBSD-on-xnu layer (bsdcompat) and FreeBSD LinuxKPI. drm-kmod's GPL-only linuxkpi/gplv2 headers are NOT on the path.
+-X=/Volumes/MiniData/build/gpu-src/xkpi
+-K=/Volumes/MiniData/build/gpu-src/kpi
++X=/Users/ved/igpu-build/xkpi
++K=/Users/ved/igpu-build/kpi
+ L=$K/freebsd-src/sys/compat/linuxkpi
+ D=$K/drm-kmod
+ A=$D/drivers/gpu/drm/amd
+ SDK=$(xcrun --sdk macosx --show-sdk-path)
+ KF=$SDK/System/Library/Frameworks/Kernel.framework/Headers
+ src=$1; shift
+-exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Volumes/MiniData/build/gpu-src=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
++exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Users/ved/igpu-build=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
+   -fno-builtin -fno-common -fno-strict-aliasing -fms-extensions -O2 -g0 \
+   -Wno-pointer-sign -Wno-unused-parameter -Wno-microsoft-anon-tag -ferror-limit=80 \
+   -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 \
+diff --git a/gpu-port/xkpi/cc.sh b/gpu-port/xkpi/cc.sh
+index 57a5296..32b7619 100755
+--- a/gpu-port/xkpi/cc.sh
++++ b/gpu-port/xkpi/cc.sh
+@@ -1,15 +1,15 @@
+ #!/bin/bash
+ # cc.sh <source.c> [extra flags]: compiles one drm-kmod source for the macOS kernel (x86_64) through the
+ # FreeBSD-on-xnu layer (bsdcompat) and FreeBSD LinuxKPI. drm-kmod's GPL-only linuxkpi/gplv2 headers are NOT on the path.
+-X=/Volumes/MiniData/build/gpu-src/xkpi
+-K=/Volumes/MiniData/build/gpu-src/kpi
++X=/Users/ved/igpu-build/xkpi
++K=/Users/ved/igpu-build/kpi
+ L=$K/freebsd-src/sys/compat/linuxkpi
+ D=$K/drm-kmod
+ A=$D/drivers/gpu/drm/amd
+ SDK=$(xcrun --sdk macosx --show-sdk-path)
+ KF=$SDK/System/Library/Frameworks/Kernel.framework/Headers
+ src=$1; shift
+-exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Volumes/MiniData/build/gpu-src=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
++exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Users/ved/igpu-build=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
+   -fno-builtin -fno-common -fno-strict-aliasing -fms-extensions -O2 -g0 \
+   -Wno-pointer-sign -Wno-unused-parameter -Wno-microsoft-anon-tag -ferror-limit=80 \
+   -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 \
+diff --git a/gpu-port/xkpi/cclk.sh b/gpu-port/xkpi/cclk.sh
+index 6bbae66..179d52e 100755
+--- a/gpu-port/xkpi/cclk.sh
++++ b/gpu-port/xkpi/cclk.sh
+@@ -1,15 +1,15 @@
+ #!/bin/bash
+ # cc.sh <source.c> [extra flags]: compiles one drm-kmod source for the macOS kernel (x86_64) through the
+ # FreeBSD-on-xnu layer (bsdcompat) and FreeBSD LinuxKPI. drm-kmod's GPL-only linuxkpi/gplv2 headers are NOT on the path.
+-X=/Volumes/MiniData/build/gpu-src/xkpi
+-K=/Volumes/MiniData/build/gpu-src/kpi
++X=/Users/ved/igpu-build/xkpi
++K=/Users/ved/igpu-build/kpi
+ L=$K/freebsd-src/sys/compat/linuxkpi
+ D=$K/drm-kmod
+ A=$D/drivers/gpu/drm/amd
+ SDK=$(xcrun --sdk macosx --show-sdk-path)
+ KF=$SDK/System/Library/Frameworks/Kernel.framework/Headers
+ src=$1; shift
+-exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Volumes/MiniData/build/gpu-src=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
++exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Users/ved/igpu-build=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
+   -fno-builtin -fno-common -fno-strict-aliasing -fms-extensions -O2 -g0 \
+   -Wno-pointer-sign -Wno-unused-parameter -Wno-microsoft-anon-tag -ferror-limit=80 \
+   -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 \
+diff --git a/gpu-port/xkpi/ccsrc.sh b/gpu-port/xkpi/ccsrc.sh
+index 08f8587..3704d6d 100755
+--- a/gpu-port/xkpi/ccsrc.sh
++++ b/gpu-port/xkpi/ccsrc.sh
+@@ -1,15 +1,15 @@
+ #!/bin/bash
+ # cc.sh <source.c> [extra flags]: compiles one drm-kmod source for the macOS kernel (x86_64) through the
+ # FreeBSD-on-xnu layer (bsdcompat) and FreeBSD LinuxKPI. drm-kmod's GPL-only linuxkpi/gplv2 headers are NOT on the path.
+-X=/Volumes/MiniData/build/gpu-src/xkpi
+-K=/Volumes/MiniData/build/gpu-src/kpi
++X=/Users/ved/igpu-build/xkpi
++K=/Users/ved/igpu-build/kpi
+ L=$K/freebsd-src/sys/compat/linuxkpi
+ D=$K/drm-kmod
+ A=$D/drivers/gpu/drm/amd
+ SDK=$(xcrun --sdk macosx --show-sdk-path)
+ KF=$SDK/System/Library/Frameworks/Kernel.framework/Headers
+ src=$1; shift
+-exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Volumes/MiniData/build/gpu-src=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
++exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Users/ved/igpu-build=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
+   -fno-builtin -fno-common -fno-strict-aliasing -fms-extensions -O2 -g0 \
+   -Wno-pointer-sign -Wno-unused-parameter -Wno-microsoft-anon-tag -ferror-limit=80 \
+   -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 \
+diff --git a/gpu-port/xkpi/ccxx.sh b/gpu-port/xkpi/ccxx.sh
+index d290e77..4cbfc1a 100755
+--- a/gpu-port/xkpi/ccxx.sh
++++ b/gpu-port/xkpi/ccxx.sh
+@@ -1,13 +1,13 @@
+ #!/bin/bash
+ # ccxx.sh <source.cpp>: compiles one IOKit-side file of the port with Apple's Kernel.framework headers only
+-X=/Volumes/MiniData/build/gpu-src/xkpi
++X="$(cd "$(dirname "$0")" && pwd)"
+ SDK=$(xcrun --sdk macosx --show-sdk-path)
+ KF=$SDK/System/Library/Frameworks/Kernel.framework/Headers
+-mkdir -p $X/xnuobj
++mkdir -p "$X/xnuobj" "$X/bsdcompat/include/nmxxnu"
+ # nmxxnu/ holds the two boundary headers for the IOKit side (which must not see the FreeBSD include tree); they are
+ # copies of bsdcompat/include's, refreshed here so a declaration added there always reaches the C++ side
+-cp -p $X/bsdcompat/include/nmx_port.h $X/bsdcompat/include/nmx_xnu.h $X/bsdcompat/include/nmxxnu/
++cp -p "$X/bsdcompat/include/nmx_port.h" "$X/bsdcompat/include/nmx_xnu.h" "$X/bsdcompat/include/nmxxnu/"
+ exec xcrun clang++ -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Volumes/MiniData/build/gpu-src=/src -mkernel -fapple-kext -nostdinc -isysroot "$SDK" -I"$KF" \
+-  -I$X/bsdcompat/include/nmxxnu -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
++  -I"$X/bsdcompat/include/nmxxnu" -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+   -std=c++17 -fno-rtti -fno-exceptions -fno-builtin -fno-common -O2 -g0 -Wall -Wno-unused-parameter \
+-  -Wno-deprecated-declarations -Wno-inconsistent-missing-override -c "$1" -o ${NMX_OBJ:-$X/xnuobj/$(basename "${1%.cpp}").o}
++  -Wno-deprecated-declarations -Wno-inconsistent-missing-override -c "$1" -o "${NMX_OBJ:-$X/xnuobj/$(basename "${1%.cpp}").o}"
+diff --git a/gpu-port/xkpi/kext/Info.plist b/gpu-port/xkpi/kext/Info.plist
+index aef3253..f4a8ae6 100644
+--- a/gpu-port/xkpi/kext/Info.plist
++++ b/gpu-port/xkpi/kext/Info.plist
+@@ -1,43 +1,59 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+-<plist version="1.0"><dict>
+-  <key>CFBundleIdentifier</key><string>com.nullmoth.NMXGPU</string>
+-  <key>CFBundleName</key><string>NMXGPU</string>
+-  <key>CFBundleExecutable</key><string>NMXGPU</string>
+-  <key>CFBundlePackageType</key><string>KEXT</string>
+-  <key>CFBundleVersion</key><string>1.0.0</string>
+-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+-  <key>IOKitPersonalities</key><dict>
+-    <key>NMXGPUAMD</key><dict>
+-      <key>CFBundleIdentifier</key><string>com.nullmoth.NMXGPU</string>
+-      <key>IOClass</key><string>NMXGPU</string>
+-      <key>IOProviderClass</key><string>IOPCIDevice</string>
+-      <!-- AMD display-class functions (opt-in: nmxamd=1 or nullmoth-gpu); probe() declines every one the user did not opt in, so the score only matters for devices the
+-           user handed to this driver -->
+-      <key>IOPCIPrimaryMatch</key><string>0x00001002&amp;0x0000ffff</string>
+-      <key>IOPCIClassMatch</key><string>0x03000000&amp;0xff000000</string>
+-      <key>IOProbeScore</key><integer>60000</integer>
+-    </dict>
+-    <key>NMXGPUIntel</key><dict>
+-      <key>CFBundleIdentifier</key><string>com.nullmoth.NMXGPU</string>
+-      <key>IOClass</key><string>NMXGPU</string>
+-      <key>IOProviderClass</key><string>IOPCIDevice</string>
+-      <!-- Intel display-class functions (opt-in: nmxintel=1 or nullmoth-gpu); probe() declines every one the user did not opt in, so the score only matters for devices the
+-           user handed to this driver -->
+-      <key>IOPCIPrimaryMatch</key><string>0x00008086&amp;0x0000ffff</string>
+-      <key>IOPCIClassMatch</key><string>0x03000000&amp;0xff000000</string>
+-      <key>IOProbeScore</key><integer>60000</integer>
+-    </dict>
+-  </dict>
+-  <key>OSBundleLibraries</key><dict>
+-    <key>com.apple.kpi.bsd</key><string>8.0</string>
+-    <key>com.apple.kpi.iokit</key><string>8.0</string>
+-    <key>com.apple.kpi.libkern</key><string>8.0</string>
+-    <key>com.apple.kpi.mach</key><string>8.0</string>
+-    <key>com.apple.kpi.unsupported</key><string>8.0</string>
+-    <key>com.apple.iokit.IOPCIFamily</key><string>1.0.0</string>
+-    <key>com.apple.iokit.IOACPIFamily</key><string>1.0.0</string>
+-    <key>com.apple.iokit.IOGraphicsFamily</key><string>1.0.0</string>
+-  </dict>
+-</dict></plist>
++<plist version="1.0">
++<dict>
++	<key>CFBundleIdentifier</key>
++	<string>com.nullmoth.NMXGPU</string>
++	<key>CFBundleName</key>
++	<string>NMXGPU</string>
++	<key>CFBundleExecutable</key>
++	<string>NMXGPU</string>
++	<key>CFBundlePackageType</key>
++	<string>KEXT</string>
++	<key>CFBundleVersion</key>
++	<string>1.0.0</string>
++	<key>CFBundleShortVersionString</key>
++	<string>1.0.0</string>
++	<key>CFBundleInfoDictionaryVersion</key>
++	<string>6.0</string>
++	<key>IOKitPersonalities</key>
++	<dict>
++		<key>NMXGPUIntel</key>
++		<dict>
++			<key>CFBundleIdentifier</key>
++			<string>com.nullmoth.NMXGPU</string>
++			<key>IOClass</key>
++			<string>NMXGPU</string>
++			<key>IOProviderClass</key>
++			<string>IOPCIDevice</string>
++			<key>IOPCIPrimaryMatch</key>
++			<string>0x7D458086</string>
++			<key>IOPCIClassMatch</key>
++			<string>0x03000000&amp;0xff000000</string>
++			<key>IOProbeScore</key>
++			<integer>60000</integer>
++			<key>LatitudePortStage</key>
++			<string>Experimental Meteor Lake i915; physical panel unverified</string>
++		</dict>
++	</dict>
++	<key>OSBundleLibraries</key>
++	<dict>
++		<key>com.apple.kpi.bsd</key>
++		<string>8.0</string>
++		<key>com.apple.kpi.iokit</key>
++		<string>8.0</string>
++		<key>com.apple.kpi.libkern</key>
++		<string>8.0</string>
++		<key>com.apple.kpi.mach</key>
++		<string>8.0</string>
++		<key>com.apple.kpi.unsupported</key>
++		<string>8.0</string>
++		<key>com.apple.iokit.IOPCIFamily</key>
++		<string>1.0.0</string>
++		<key>com.apple.iokit.IOACPIFamily</key>
++		<string>1.0.0</string>
++		<key>com.apple.iokit.IOGraphicsFamily</key>
++		<string>1.0.0</string>
++	</dict>
++</dict>
++</plist>
+diff --git a/gpu-port/xkpi/override/src/nmx_fb_bridge.c b/gpu-port/xkpi/override/src/nmx_fb_bridge.c
+index 3d7bb9b..0ee6ebd 100644
+--- a/gpu-port/xkpi/override/src/nmx_fb_bridge.c
++++ b/gpu-port/xkpi/override/src/nmx_fb_bridge.c
+@@ -42,11 +42,15 @@ static struct { void *dev; struct nmx_fb *fb; } fbs[MAX_FB];
+  * amdgpu may put scan-out buffers in system memory on APUs (scatter-gather display); the bridge needs them in
+  * contiguous VRAM so one physical range describes the whole frame. Set before the driver initialises its display.
+  */
++#ifndef NMX_I915_ONLY
+ extern int amdgpu_sg_display;
++#endif
+ 
+ void nmx_fb_before_attach(void)
+ {
++#ifndef NMX_I915_ONLY
+     amdgpu_sg_display = 0;
++#endif
+ }
+ 
+ /* the DRM device of the driver attached to the PCI function 'dev' (amdgpu keeps it as the PCI driver data) */
+diff --git a/gpu-port/xkpi/xnu/nmx_kext.cpp b/gpu-port/xkpi/xnu/nmx_kext.cpp
+index 91339e1..a7778a6 100644
+--- a/gpu-port/xkpi/xnu/nmx_kext.cpp
++++ b/gpu-port/xkpi/xnu/nmx_kext.cpp
+@@ -61,6 +61,14 @@ static IOLock *g_lock;
+ static bool g_started;
+ static int g_devices;
+ 
++// This local laptop build is restricted to the real Meteor Lake-U PCI ID.
++// Never treat it as the Panther Lake SR-IOV VF used by the VM patch series.
++static bool latitude_mtl_target(IOPCIDevice *pci)
++{
++    return pci && pci->configRead16(kIOPCIConfigVendorID) == INTEL_VENDOR &&
++           pci->configRead16(kIOPCIConfigDeviceID) == 0x7D45;
++}
++
+ static bool opted_in(IOPCIDevice *pci, uint16_t vendor)
+ {
+     int v = 0;
+@@ -104,7 +112,7 @@ IOService *NMXGPU::probe(IOService *provider, SInt32 *score)
+ {
+     IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
+     uint16_t vendor = pci ? pci->configRead16(kIOPCIConfigVendorID) : 0;
+-    if (vendor != AMD_VENDOR && vendor != INTEL_VENDOR)
++    if (!latitude_mtl_target(pci))
+         return nullptr;
+     if (!opted_in(pci, vendor))
+         return nullptr;     /* not asked for: leave the device to macOS */
+@@ -114,7 +122,7 @@ IOService *NMXGPU::probe(IOService *provider, SInt32 *score)
+ bool NMXGPU::start(IOService *provider)
+ {
+     IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
+-    if (pci == nullptr || g_lock == nullptr || !IOService::start(provider))
++    if (!latitude_mtl_target(pci) || g_lock == nullptr || !IOService::start(provider))
+         return false;
+     IOLockLock(g_lock);
+     if (!g_started) {
+@@ -254,7 +262,9 @@ void NMXGPU::attachNow()
+     pci_->setProperty("nmxgpu-claimed", kOSBooleanTrue);
+     pci_->registerService();
+     /* light the outputs and hand them to macOS; without it the device still renders, with no screen of its own */
+-    fb_ = nmx_fb_publish(this, dev_);
++    setProperty("LatitudeRenderOnly", true);
++    IOLog("NullMoth GPU: Latitude render-only attach; keeping the firmware framebuffer\n");
++    fb_ = nullptr;
+     nmx_marker_write(false);
+     IOLog("NullMoth GPU: driving %04x:%04x (build %s)\n", pci_->configRead16(kIOPCIConfigVendorID),
+           pci_->configRead16(kIOPCIConfigDeviceID), NMX_BUILD_STAMP);
+@@ -361,7 +371,7 @@ kern_return_t nmx_kmod_stop(kmod_info_t *ki, void *data)
+ extern "C" {
+ kern_return_t _start(kmod_info_t *ki, void *data);
+ kern_return_t _stop(kmod_info_t *ki, void *data);
+-KMOD_EXPLICIT_DECL(com.nullmoth.NMXGPU, "1.0.0", _start, _stop)
++KMOD_EXPLICIT_DECL(com.nullmoth.NMXGPU, "1.0.3", _start, _stop)
+ __private_extern__ kmod_start_func_t *_realmain = nmx_kmod_start;
+ __private_extern__ kmod_stop_func_t *_antimain = nmx_kmod_stop;
+ }
+diff --git a/gpu-port/xkpi/xnu/nmx_pci.cpp b/gpu-port/xkpi/xnu/nmx_pci.cpp
+index bd31bed..2e0966e 100644
+--- a/gpu-port/xkpi/xnu/nmx_pci.cpp
++++ b/gpu-port/xkpi/xnu/nmx_pci.cpp
+@@ -95,8 +95,8 @@ extern "C" int nmx_xnu_pci_bar_info(void *pci, int bar_reg, uint64_t *phys, uint
+ /* ---- interrupts --------------------------------------------------------------------------------------------------- */
+ 
+ /* the owner of an interrupt event source must be an OSObject; this one carries the driver's handler */
+-class NMXIrq : public OSObject {
+-    OSDeclareDefaultStructors(NMXIrq)
++class LatitudeMTLGPUIrq : public OSObject {
++    OSDeclareDefaultStructors(LatitudeMTLGPUIrq)
+ public:
+     IOWorkLoop *wl;
+     IOInterruptEventSource *es;
+@@ -105,11 +105,11 @@ public:
+     volatile SInt32 delivered;
+     bool initIrq() { delivered = 0; return init(); }
+ };
+-OSDefineMetaClassAndStructors(NMXIrq, OSObject)
++OSDefineMetaClassAndStructors(LatitudeMTLGPUIrq, OSObject)
+ 
+ static void irq_action(OSObject *owner, IOInterruptEventSource *src, int count)
+ {
+-    NMXIrq *irq = OSDynamicCast(NMXIrq, owner);
++    LatitudeMTLGPUIrq *irq = OSDynamicCast(LatitudeMTLGPUIrq, owner);
+     if (irq) {
+         if (OSIncrementAtomic(&irq->delivered) == 0)
+             IOLog("NullMoth GPU: first interrupt delivered\n");
+@@ -177,7 +177,7 @@ extern "C" int nmx_xnu_pci_irq_setup(void *pci, int vector, void (*handler)(void
+     int index = interrupt_index(d, vector);
+     if (index < 0)
+         return kIOReturnNotFound;
+-    NMXIrq *irq = OSTypeAlloc(NMXIrq);
++    LatitudeMTLGPUIrq *irq = OSTypeAlloc(LatitudeMTLGPUIrq);
+     if (irq == nullptr || !irq->initIrq()) {
+         if (irq)
+             irq->release();
+@@ -211,14 +211,14 @@ static IOReturn drain_action(OSObject *, void *, void *, void *, void *)
+ /* the work loop gate is held while a handler runs, so taking it once waits for that handler */
+ extern "C" void nmx_xnu_pci_irq_drain(void *cookie)
+ {
+-    NMXIrq *irq = (NMXIrq *)cookie;
++    LatitudeMTLGPUIrq *irq = (LatitudeMTLGPUIrq *)cookie;
+     if (irq != nullptr && irq->wl != nullptr)
+         irq->wl->runAction(drain_action, irq);
+ }
+ 
+ extern "C" void nmx_xnu_pci_irq_enable(void *cookie, int on)
+ {
+-    NMXIrq *irq = (NMXIrq *)cookie;
++    LatitudeMTLGPUIrq *irq = (LatitudeMTLGPUIrq *)cookie;
+     if (irq == nullptr)
+         return;
+     if (on)
+@@ -229,7 +229,7 @@ extern "C" void nmx_xnu_pci_irq_enable(void *cookie, int on)
+ 
+ extern "C" void nmx_xnu_pci_irq_teardown(void *cookie)
+ {
+-    NMXIrq *irq = (NMXIrq *)cookie;
++    LatitudeMTLGPUIrq *irq = (LatitudeMTLGPUIrq *)cookie;
+     if (irq == nullptr)
+         return;
+     irq->es->disable();
