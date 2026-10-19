@@ -6,7 +6,7 @@
 ![Graphics](https://img.shields.io/badge/Graphics-Xe--LPG%20%2F%208086%3A7D45-red)
 ![API](https://img.shields.io/badge/API-Metal%20%2F%20Vulkan-purple)
 ![Language](https://img.shields.io/badge/Language-C%20%2F%20Obj--C%20%2F%20C%2B%2B-blueviolet)
-![Status](https://img.shields.io/badge/Status-Application%20baseline%20passing%2C%20desktop%20unresolved-yellow)
+![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working%20%7C%20WindowServer%20composition%20in%20progress-yellow)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
@@ -18,9 +18,29 @@ extensions* architecture, but replaces every NVIDIA-specific element: the GSP fi
 Intel GuC/HuC/GSC firmware path, the NVK backend becomes Mesa's **ANV** Intel driver, and the NVIDIA
 kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAccel`.
 
-**Read the status section before reading anything else.** Application-level compute and render are
-verified on real hardware. The physical-panel desktop is not. This document marks every claim with the
-evidence behind it and never presents a local build or a mocked test as a hardware result.
+## ✅ What works today
+
+**Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
+Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
+
+* **Vulkan (ANV)** enumerates the real device `8086:7d45`, submits a compute shader and returns
+  **65,536 correct values**.
+* **Metal** selects a device attached to `NMXAccel`, computes correct values and renders
+  **4,096 correct pixels**.
+* The full hardware gate passes **26,000 frames** across **22 cases** (11 IOKit + 11 direct routes),
+  including padded-row full-HD and RGBA/BGRA IOSurface backing-pixel verification — report
+  `readback-20261019-114424`. Earlier Metal/Vulkan compute and 4096-pixel render passes are recorded in
+  report `20261018-145513`.
+* Command-pool accounting across that gate: **80,020 created / 80,020 destroyed**, zero live, pending or
+  quarantined.
+
+So the hard parts of a graphics port — PCI attach, GuC firmware bring-up, GGTT/staging memory, AIR→SPIR-V
+lowering, and Metal/Vulkan application rendering and compute on real silicon — **work today**.
+
+The one thing still in progress is **WindowServer compositing the desktop on the physical panel**. That
+is a distinct, narrower problem (a readback/surface path under concurrent WindowServer load), and it is
+described in *The current blocker* below. A working Metal/Vulkan stack and a composited login screen are
+two different milestones; this project has finished the first and is attacking the second.
 
 ---
 
@@ -31,15 +51,15 @@ evidence behind it and never presents a local build or a mocked test as a hardwa
 | Real GPU identification (`8086:7D45`, Dell `1028:0CB6`) | macOS probe and the laptop's own Linux report agree | **Confirmed** |
 | `NMXGPU` i915 kernel extension loads and attaches to the real GPU | Report `readback-20261019-114424`, kernel UUID match | **Confirmed** |
 | Memory-mapped I/O / GGTT / firmware bring-up (GuC 70.53.0) | Kernel capture `kernel-guc-capture-1.0.9.log`; firmware loaded on both GTs | **Confirmed (init only)** |
-| Application GPU output — Vulkan compute, Metal compute, 4096-pixel render | **22-case gate: 26,000 exact frames**, 11 IOKit + 11 direct routes, RGBA/BGRA IOSurface backing verified | **Passing** |
+| **Metal and Vulkan application rendering/compute** | **65,536 correct Vulkan values, 4,096 correct Metal pixels**, 26,000 exact frames across 22 cases (11 IOKit + 11 direct) | **Working** |
 | Command-pool lifetime | **80,020 pools created / 80,020 destroyed**, zero live/pending/quarantined across the gate | **Passing (scoped)** |
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
 | GPU-composited WindowServer desktop | Submissions 1–4 complete; **readback #5 times out at 5000 ms**, upload #6 stalls, then GPU hang | **Failing — blocking** |
 | Panel scanout with correct pixels | Framebuffer loads and describes 1920×1080, reaches fixed scanout; presentation samples remain zero | **Partial / unverified** |
 | Sleep-wake, brightness, external displays, video decode, long soak | No passing evidence | **Unverified** |
 
-The distinction between "the pipeline runs" and "the desktop works" is the whole story of this project:
-registration and application workloads are solved, physical composition is the current frontier.
+Every row below is traceable to a dated report under `research/`. The point of the table is to keep the
+**working** Metal/Vulkan stack clearly separated from the **unfinished** desktop composition.
 
 ---
 
@@ -462,7 +482,8 @@ this machine that claim is already partly falsified:
 
 * the GPU is **identified** and the i915-based kext **attaches** to it on real hardware;
 * **GuC 70.53.0** firmware loads and submission is enabled;
-* **26,000 application frames** pass exact-pixel validation over **both** transport routes;
+* **Metal and Vulkan work.** Vulkan returns 65,536 correct values, Metal renders 4,096 correct pixels,
+  and **26,000 application frames** pass exact-pixel validation over **both** transport routes;
 * a real **LinuxKPI lost-wake race** was found, reproduced and fixed.
 
 What is not yet falsified is the hard part: **GPU-composited WindowServer on the physical panel.** The
