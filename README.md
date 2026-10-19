@@ -14,7 +14,7 @@
 ![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working-brightgreen)
 ![Desktop](https://img.shields.io/badge/Desktop-WindowServer_in_progress-yellow)
 ![Verified](https://img.shields.io/badge/Verified-26%2C000_frames-brightgreen)
-![Candidate](https://img.shields.io/badge/Candidate-0.3.5-orange)
+![Candidate](https://img.shields.io/badge/Candidate-0.3.5_%2B_k1.0.12_%2B_fb0.2.4-orange)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
@@ -78,6 +78,13 @@ is a distinct, narrower problem (a readback/surface path under concurrent Window
 described in *The current blocker* below. A working Metal/Vulkan stack and a composited login screen are
 two different milestones; this project has finished the first and is attacking the second.
 
+The latest kernel work moved the question from *which submission stalls* to *what changed the ring*: the
+1.0.10 build captured the corrupted words, and the 1.0.11 mapping-safety fix was built and booted — the
+hardware reproduced the same overwrite, so the next step is naming the writer rather than guessing. A
+second candidate (kernel 1.0.12 + framebuffer 0.2.4) corrects a raw-physical allocation assumption and
+refuses to export a buffer whose pages are not host-contiguous; it builds, but has not been booted. That
+is documented in *The current blocker*.
+
 ---
 
 <a name="status"></a>
@@ -91,7 +98,10 @@ two different milestones; this project has finished the first and is attacking t
 | **Metal and Vulkan application rendering/compute** | **65,536 correct Vulkan values, 4,096 correct Metal pixels**, 26,000 exact frames across 22 cases (11 IOKit + 11 direct) | **Working** |
 | Command-pool lifetime | **80,020 pools created / 80,020 destroyed**, zero live/pending/quarantined across the gate | **Passing (scoped)** |
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
-| GPU-composited WindowServer desktop | Submissions 1–4 complete; **readback #5 times out at 5000 ms**, upload #6 stalls, then GPU hang | **Failing — blocking** |
+| GPU-composited WindowServer desktop | Submissions 1–4 complete; **readback #5 times out at 5000 ms**, upload #6 stalls, then GPU hang. Candidate 0.3.5 repeats it at **submission #8 / readback #3** despite `noccs` | **Failing — blocking** |
+| Kernel command-ring integrity | Kernel 1.0.10 capture: the words below request 20's head (`0xc98–0xca4` — request 18's switch-out and WA tail) read `0xff000000`; GuC `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`. **Identical on 1.0.11** | **Corrupted — writer unidentified** |
+| i915 CPU user-mapping page lifetime | Source audit: `lkpi_unmap_mapping_range` is a no-op and the i915 `vm_ops_cpu` path did not register the lifetime page pin the TTM path installs. Kernel 1.0.11 adds it | **Defect confirmed in source; does not fix the hang** |
+| Raw-physical buffer export | `nmxVramAlloc` / `nmx_xnu_mem_alloc` requested only `kIOMemoryPhysicallyContiguous` and exported `getPhysicalSegment(0, …, MapperNone)` without checking the segment length. 1.0.12 + framebuffer 0.2.4 add `HostPhysicallyContiguous \| MapperNone` and a span check | **Assumption corrected in source; scattered-page precondition not shown on this target; unverified** |
 | Panel scanout with correct pixels | Framebuffer loads and describes 1920×1080, reaches fixed scanout; presentation samples remain zero | **Partial / unverified** |
 | Sleep-wake, brightness, external displays, video decode, long soak | No passing evidence | **Unverified** |
 
@@ -124,7 +134,7 @@ configuration.
 
 | | |
 |---|---|
-| Machine | Dell Latitude 5350 2-in-1|
+| Machine | Dell Latitude 5350 |
 | CPU | Intel Core Ultra 5 135U — 12C/14T (2 P Redwood Cove + 8 E Crestmont + 2 LP E), CPUID `A06A4` |
 | iGPU | Meteor Lake-P Xe-LPG, PCI `8086:7D45`, subsystem `1028:0CB6`, rev 08 |
 | OS | macOS 15 Sequoia 15.8.1 (24H32), x86_64 |
@@ -213,9 +223,9 @@ each case logs and verifies the route it actually took rather than trusting the 
 
 | Component | Version / base | Source in tree | Licence |
 |---|---|---|---|
-| `NMXGPU.kext` | kernel 1.0.9 candidate | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
+| `NMXGPU.kext` | kernel **1.0.12** candidate (1.0.11 mapping-lifetime + raw-span correction lineage) | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
 | `NMXAccel.kext` | 0.1 | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
-| `LatitudeMTLFB.kext` | 0.1.0 (`LatitudeMTLPanel`) | `desktop-build/LatitudeMTLFB.kext` | project |
+| `LatitudeMTLFB.kext` | **0.2.4** candidate (raw host-physical allocation) | `desktop-build/LatitudeMTLFB.kext` | project |
 | `NMXAGDC.kext` | 0.1 (`NMXAGDCLoader`) | `desktop-build/NMXAGDC.kext` | project |
 | Metal plugin | `NVMTLDriver` 0.3.5 candidate | `NullMoth/plugin/` | PolyForm NC |
 | Shader translator | AIR → SPIR-V | `NullMoth/translator/` | LGPL-3.0 / GPL-3.0 |
@@ -373,6 +383,128 @@ three diagnostic defects (sandboxed journal writes, a per-format log throttle hi
 #8, and a `sample` invocation that returned success while producing no stack). It does not claim to fix
 the hang.
 
+### What the kernel 1.0.10 ring capture actually recorded
+
+Kernel 1.0.10 changes **diagnostics only**. Before the logical-ring tail is published it copies the
+request's own ring words plus the **four words below the head** into write-once boot slots, and on hang
+it re-reads the live pinned CPU ring. On the 17:14 boot it recorded this for render context 8 (ring GGTT
+base `a9d000`, size `0x4000`):
+
+| Request | head | infix | postfix | tail | WA tail | four words below the head, at submission |
+|---|---|---|---|---|---|---|
+| 16 | `9d8` | `a78` | `aa8` | `b38` | `b40` | `0x9c8–0x9d4`: `ff000000 ×4` (request 14's ending) |
+| 18 | `b40` | `be0` | `c10` | `ca0` | `ca8` | `0xb30–0xb3c`: `fedca540 / 0 / 02800000 / 0` (request 16's ending) |
+| 20 | `ca8` | `d48` | `d78` | `e08` | `e10` | `0xc98–0xca4`: `ff000000 ×4` (request 18's ending) |
+
+The window is `[head − 16, wa_tail + 8)`, so it also contains the request's *own* ending. That is what makes
+the comparison decisive:
+
+* At request 18's submission, `0xc98–0xca4` hold `fedca540 / 0 / 02800000 / 0` — request 18's own
+  switch-out `MI_STORE_DATA_IMM` and its `MI_ARB_CHECK` / `MI_NOOP` workaround tail.
+* At request 20's submission, the four words below its head are those same `0xc98–0xca4` offsets — now
+  `ff000000 ×4`.
+* At request 16's submission, the four words below its head (`0x9c8–0x9d4`, request 14's ending) already
+  read `ff000000`; at request 18's submission, request 16's ending (`0xb30–0xb3c`) was still intact. The
+  overwrite is therefore not uniformly applied to every retired request.
+* The **hang** snapshot, taken from the same pinned CPU mapping in the same millisecond, reads all zeros
+  — that capture follows the userspace crash and is *not* treated as the first corruption event.
+
+The GuC register capture independently shows the GPU fetching that word: `IPEHR=ff000000`,
+`INSTDONE=ffdfffff`, `RING_HEAD=ACTHD=0xca4` (the word after request 18's `MI_ARB_CHECK`), while
+`RING_TAIL=0xe08` (request 20 already published).
+
+**What this establishes:** real ring content changed at a request boundary and the GPU fetched it, seen by
+both the CPU mapping and the instruction-pointer register. It is not a fence-budget or scheduling artefact.
+**What it does not establish:** which code wrote those words, or how far back the change reaches — the
+window starts at `head − 16`, so it cannot bound the overwrite. `0xff000000` is *consistent with* opaque
+black, but that proves nothing on its own; a search of the port, plugin and accelerator sources finds no
+`0xff000000` constant (only unrelated PCI class masks), so it is not a marker this project writes
+deliberately.
+
+The same signature, byte for byte, was then recorded on a **second, independent build** (kernel 1.0.11,
+17:32 boot): context 8 request 18's ending intact at capture, request 20's ending `ff000000`, `IPEHR`
+`ff000000` again — and, later in the same boot, context 12's `0x9c8–0x9d4` (request 14's ending) and
+`0xb30–0xb3c` (request 16's ending) also read `ff000000`. In other words the overwrite is reproducible,
+is not a one-off scribble, and it *spreads* over the boot.
+
+**Candidate writers, none yet proven.** (1) An external write aliasing the ring's physical pages — a stale
+user mapping or a surface fill. (2) The ring emitter writing the wrong offset. (3) Cache/coherency
+(weakened: the CPU snapshot and the GPU `IPEHR` agree, so both saw the same memory). (4) The
+`RING_HEAD=ACTHD=0xca4` value itself being the anomaly, with head and tail both sitting mid-request. The
+raw-physical export correction below gives candidate (1) its first concrete mechanism — a fill over a
+flat range that may not match the allocation — while leaving it conditional on a system mapper.
+
+**The cheap decisive tests** are a **ring guard** (store the previous request's tail and WA-tail dwords at
+each tail publication and diff them at hang, turning "the words changed" into "these bytes changed between
+*these* two events") and a **physical-page ownership map** — the page numbers behind the ring, the
+IOSurface/private-image/staging buffers, and the earliest submission boundary whose words differ. Neither
+the pixel-looking constant nor a later crash stack names the writer.
+
+### The 1.0.12 raw-physical allocator correction
+
+The ring capture narrowed *where* the corruption lands. A second, independent audit asked a different
+question: **which code can write a flat physical range at all?** The answer includes every buffer the port
+exports to another agent as "one contiguous run of physical memory", because the exporter never checked
+that the run was real.
+
+Apple's `IOBufferMemoryDescriptor::initWithPhysicalMask` (xnu-11417.140.69) decides host contiguity like
+this:
+
+```c
+mapped = (NULL != IOMapper::gSystem);          // only if kIOMemoryMapperNone is absent
+contig = (0 != (options & kIOMemoryHostPhysicallyContiguous));
+if (!contig && (0 != (options & kIOMemoryPhysicallyContiguous))) {
+        contig |= (!mapped);
+        contig |= (0 != (kIOMemoryMapperNone & options));
+}
+```
+
+So `kIOMemoryPhysicallyContiguous` by itself requests **host**-page contiguity only when no system mapper
+exists (or when `kIOMemoryMapperNone` is also set). With an IOMMU, the allocation can be contiguous in the
+mapper's address space while the host pages are scattered.
+
+The port's surface allocator, `nmxVramAlloc()`, requested `kIODirectionInOut |
+kIOMemoryPhysicallyContiguous` and then exported the surface with
+`getPhysicalSegment(0, nullptr, kIOMemoryMapperNone)` — taking the **first segment's base** and ignoring the
+segment length it had just been handed. `NMXAccel` converts that base plus the surface size into an
+`IODeviceMemory` physical range. If the pages were scattered, the exported range extends into physical
+memory the allocation does not own, and any fill of "the surface" writes there. That is the first
+candidate mechanism in this investigation that can produce **pixel-valued writes outside the buffer**
+rather than an instruction-emitter bug.
+
+Kernel **1.0.12** and framebuffer **0.2.4** correct the assumption:
+
+* `nmxVramAlloc()` and `nmx_xnu_mem_alloc()` add `kIOMemoryHostPhysicallyContiguous | kIOMemoryMapperNone`.
+* They reject the export unless the first segment covers the whole request (segment length, descriptor
+  length, CPU pointer and address overflow); the kernel allocator also enforces the physical mask and
+  requested alignment.
+* A rejected allocation releases its slot and budget, and `nmxVramFree()` uses the same slot-release path,
+  so the slot bitmap and retain count stay balanced.
+* The installer stages, validates, backs up and rolls back the framebuffer together with the kernel and the
+  AuxKC, so a failed desktop boot cannot leave a new framebuffer paired with an old kernel.
+
+The host regression uses Apple's actual contiguity decision (copied from the Sequoia source, not
+reimplemented) plus the real old and new allocator functions, under ASan/UBSan: the deliberately
+fragmented allocator makes the old code export a 4 KiB segment for an 8 KiB request and the new code
+reject it; 2,000 allocate/free cycles leave no live descriptor and no leaked budget.
+
+**What this does not establish.** Two things weaken it as *the* cause on this laptop:
+
+1. **The precondition is not evidenced.** The 17:32 boot log records `AppleVTD is not yet installed as
+   gSystem`, with no later installation line, and the i915 first-error capture reports `iommu=0`. If
+   `IOMapper::gSystem` is `NULL`, Apple's own `contig |= !mapped` makes even the *old* flag request
+   host-contiguous pages. The candidate's research note concedes that the target's mapper state is not
+   proven; it should stay a conditional, not a conclusion.
+2. **The fix does not cover the scan-out and cursor exports.** `fScanBuf` (`nmxvgafb.cpp:909`) and
+   `fCursorBuf` (`nmxvgafb.cpp:1202`) still allocate with only `kIODirectionInOut |
+   kIOMemoryPhysicallyContiguous` and still publish `getPhysicalSegment(0, nullptr, kIOMemoryMapperNone)`
+   with no span check. Those two are the exports most directly tied to scan-out and cursor pixels.
+
+Kernel 1.0.12 is UUID `000EF47E-E9CC-3CFB-A130-4AEBD40B46C5`, signed-binary SHA-256
+`1ad3f4dc…`; framebuffer 0.2.4 is UUID `59DA4CD2-AF66-36A4-A364-A6A8E899666A`, SHA-256 `495ed4cc…`.
+Both build and link; **neither has been booted on the Dell**. Until they are, the honest status is
+"source-corrected assumption, hardware outcome unknown".
+
 ### What has been eliminated by controlled experiment
 
 | Hypothesis | How it was excluded |
@@ -384,6 +516,8 @@ the hang.
 | Timeout budget too short | The hang is a progress failure; lengthening the fence would not restore execution |
 | Firmware version mismatch | macOS loads `mtl_guc_70.bin` 70.53.0, matching the Linux report on both GTs |
 | Xe2/Xe3 workarounds | Different generation and different cache behaviour; explicitly not applicable |
+| Missing page pin on i915 CPU user mappings | Kernel 1.0.11 added the mapping-lifetime pin and the **identical** ring overwrite plus `IPEHR=ff000000` recurred on the 17:32 boot — reclamation stays as an independent correctness fix, not the cause |
+| Hardware compression (`noccs`) | Compression-off was confirmed applied before ICD load and submission #8 / readback #3 still stalled |
 
 ---
 
@@ -405,6 +539,8 @@ what it actually means and what to do next — so the next person does not have 
 | `GuC TLB invalidation response timeout` | The waiter did not observe the response | Check the LinuxKPI woken path; see the lost-wake fix |
 | `EXC_BAD_ACCESS` in the stack guard, hundreds of `RenderEncoder` frames | Recursive SkyLight rendering after command-buffer failure | Bound the error path; do not recurse |
 | `Failed to create MTLTexture` (BGRA8Unorm 1920×1080, managed) | CoreDisplay allocation after GPU loss | Restore GPU execution; do not fabricate textures |
+| `NMX-i915-ring-word … value=ff000000` / `IPEHR=ff000000` | Words below a request head changed to `0xff000000` and the GPU fetched them as an instruction | Run the ring-guard diff and the physical-page ownership map; do not assume a pixel write |
+| `RING_HEAD`/`ACTHD` mid-request (`0xca4`) while `RING_TAIL` is already ahead (`0xe08`) | The GPU's read pointer stopped *inside* a request after the CPU had published the next one | Read the saved ring window, not just the register values |
 
 **Reading rules.** The first error in the log is usually the cause; later ones are usually consequences.
 A timeout is a symptom of missing progress, not proof of a defective submission. A zeroed register dump
@@ -667,11 +803,66 @@ refuses the temporary one, and verifies the candidate UUID.
 **Lesson:** an installer that can produce a silent "driver installed but not loaded" state is worse than
 one that fails loudly. Rollback tests must assert *where* files came from, not just that they exist.
 
+### Phase 7 — A ring capture, a real source defect, and its falsification (19 October, 17:00–17:38)
+
+Kernel 1.0.10 was a **diagnostic-only** build: it saves the bounded words around each active
+render-ring request at submission and re-reads them at hang. The 17:14 boot with plugin 0.3.5 reproduced
+the familiar stall — submission #8 / readback #3 — and the capture finally showed *content*, not just a
+pointer: the words below request 20's head had become `0xff000000`, and the GuC `IPEHR` matched.
+
+A source audit then found a **genuine defect**, independent of the hang. The port's mapping-revocation
+shim, `lkpi_unmap_mapping_range()`, is deliberately empty, and it is safe only because mappings are
+supposed to be pinned for their lifetime. `drm_gem_ttm_mmap()` installs that lifetime pin
+(`nmx_ttm_pin`), but the i915 `vm_ops_cpu` path (`WB`/`WC`/`UC`) never did. On Linux, `put_pages`
+revokes the user PTE before the backing is freed; the port cannot revoke, so an idle *mapped* object's
+pages could be reclaimed and reused underneath a live user mapping.
+
+Kernel 1.0.11 is the fix candidate: pin i915 CPU user mappings for the lifetime of the mapping and
+release the pin after the IOKit mapping is gone; refuse the legacy `I915_MMAP_TYPE_GTT` alias the port
+cannot revoke; and report `i915_gem_mmap_gtt_version() = 4` under NMXKPI. It links **438 objects** with
+the same undefined-import set as 1.0.8, kernel UUID `B972B890-9276-3E0D-B260-190037118D3E`, signed-binary
+SHA-256 `496e108b4d94390ac6a7030aba655ff5c0c5c61d827d7d92c65b04315b27943a`, and passes a 20,000-lifetime
+ASan/UBSan fixture plus the installer/rollback fixtures.
+
+Then the 17:32 boot with 1.0.11 failed **the same way**. Same submission, same fence timeout, same
+`0xff000000` below request 20's head, same `IPEHR=ff000000`. The lifetime-pin omission is a real port bug
+and stays in the tree as a correctness fix — but it is **not the writer** of this overwrite.
+
+**Lesson:** a real defect is not the same thing as *the* cause. The pin is well-motivated and provable in
+source; the capture proved it was not sufficient. Keep both facts.
+
+### Phase 8 — From "which submission" to "which writer" (19 October, 17:39–17:47)
+
+The 1.0.11 falsification left two threads: prove the overwrite's extent, and name the code that can write a
+flat physical range. The second thread produced a source-demonstrated allocator defect rather than another
+scheduler theory. Apple's `IOBufferMemoryDescriptor` grants host-page contiguity for
+`kIOMemoryPhysicallyContiguous` only when there is no system mapper; the port's surface export assumed it
+unconditionally and ignored the segment length returned by `getPhysicalSegment()`. Kernel 1.0.12 and
+framebuffer 0.2.4 add `HostPhysicallyContiguous | MapperNone` and refuse a short span.
+
+The honest part is the caveat: the same boot log says `AppleVTD is not yet installed as gSystem`, so on
+*this* machine the old flag may already have produced contiguous pages. The correction is still right —
+the export should never have trusted a base address without its length — but it is a **candidate**, not a
+demonstrated fix. The scan-out and cursor exports (`fScanBuf`, `fCursorBuf`) still use the old pattern, so
+the audit is not finished either.
+
+**Lesson:** a mechanism that can explain the value is not the same as evidence that the mechanism ran.
+Record the precondition you have not measured next to the fix you have.
+
 ### The failures we still cannot explain, and say so
 
 * The **exact root cause** of the WindowServer hang is not established.
+* **Who writes `0xff000000` below a request head is unidentified.** The capture window starts at
+  `head − 16`, so it cannot bound how far the change reaches, and `0xff000000` is not a constant this
+  port, plugin or accelerator writes anywhere.
+* The overwrite is **reproducible across two independent kernel builds** (1.0.10 and 1.0.11) and
+  **spreads** over a single boot. That fits a systematic writer better than a random stray store, but
+  "systematic" is a description, not a cause, and no writer has been named.
 * `Readback #3` succeeds and `#5` fails on the same boot; the trace does **not** prove they share an
   image, so "reuse while pending" remains unproven.
+* Whether the raw-physical export defect could have run on **this** machine is unresolved. The 17:32 log
+  says `AppleVTD is not yet installed as gSystem`; a later installation is neither shown nor excluded, so
+  the precondition for scattered host pages is not established either way.
 * The not-started request `8:24 [0x1002]` may simply be blocked behind earlier work; it is not proof
   that its own copy instruction is defective.
 * IOSurface import refusal (`-1000072003`) cannot alone explain the stall, because the fallback's first
@@ -692,6 +883,12 @@ one that fails loudly. Rollback tests must assert *where* files came from, not j
    knowledge, not a retry candidate.
 5. **A verified software fix is not a hardware fix.** The lost-wake race is real, reproduced and fixed.
    It still does not explain the desktop hang, and the documentation refuses to conflate them.
+6. **A real defect can be the wrong defect.** The 1.0.11 mapping-lifetime omission is provable in source
+   and worth fixing; the hardware reproduced the original ring overwrite anyway. Record the falsification
+   instead of defending the fix.
+7. **A mechanism is not a measurement.** The 1.0.12 raw-span defect can explain a pixel-valued write, but
+   the boot log does not show that its precondition (a system mapper) was present. State the conditional
+   with the fix.
 
 ---
 
@@ -788,6 +985,8 @@ The recorded run behind the numbers above is `readback-20261019-114424` (on the 
   is current. A pass with different binaries is a different result, not a reproduction.
 * Local unit tests (ASan/UBSan, mocked Vulkan, installer rollback fixtures) validate code paths only and
   are never hardware evidence.
+* The kernel 1.0.10/1.0.11 ring words are diagnostic evidence, not a fix. A reproduction that still shows
+  `ff000000` below a request head reproduces the corruption; it does not identify the writer.
 
 ---
 
@@ -814,6 +1013,13 @@ log show --last 10m --predicate 'eventMessage CONTAINS "CoreUltraGraphics"'
 # Kernel GPU events
 log show --last 10m --predicate 'eventMessage CONTAINS "GPU HANG" OR eventMessage CONTAINS "TLB"'
 
+# Kernel 1.0.10+ command-ring words (the 0xff000000 overwrite), and the parsed request/GuC state
+log show --last 10m --predicate 'eventMessage CONTAINS "NMX-i915-ring"'
+log show --last 10m --predicate 'eventMessage CONTAINS "NMX-i915-request" OR eventMessage CONTAINS "NMX-i915-first-error"'
+
+# Framebuffer 0.2.4+: an allocation refused because its host pages are not contiguous
+log show --last 10m --predicate 'eventMessage CONTAINS "refusing noncontiguous"'
+
 # Newest WindowServer crash report
 ls -t ~/Library/Logs/DiagnosticReports/WindowServer*.ips | head -1
 
@@ -839,10 +1045,10 @@ iGPU Port/
 ├── NullMoth-Xe/           # Sibling Panther Lake / Xe3 SR-IOV VF work + patch series (separate target)
 ├── Vulkan-Headers/        # Khronos Vulkan headers
 ├── accel-build/           # NMXAccel.kext build output
-├── backups/               # Per-candidate source/EFI snapshots (backups/desktop-0.3.5-before/ …)
+├── backups/               # Per-candidate source/EFI snapshots (backups/desktop-0.3.5-before/, backups/kernel-1.0.11-before/ …)
 ├── build-inputs/          # Pre-flight compilation payloads
 ├── build-tree/            # Compiler intermediate object tree
-├── desktop-build/         # Versioned NVMTLDriver 0.2.4 → 0.3.5 binaries + kexts + link logs
+├── desktop-build/         # Versioned NVMTLDriver 0.2.4 → 0.3.5 binaries + kernel 1.0.11/1.0.12 link logs and tests
 ├── desktop-sources/       # Patch scripts that generate each candidate (implement-*, fix-*, package-*)
 ├── drm-kmod/              # Linux DRM ported to FreeBSD via linuxkpi (i915/, drm/, ttm/, linuxkpi/)
 ├── firmware/i915/         # mtl_guc_70.bin, mtl_dmc.bin, mtl_huc_gsc.bin, mtl_gsc_1.bin (+LICENSE.i915)
@@ -865,9 +1071,14 @@ iGPU Port/
 
 | File | Contents |
 |---|---|
+| `windowserver-raw-physical-1.0.12.md` | 1.0.12 / framebuffer 0.2.4 raw-physical allocation audit and its stated caveats |
+| `windowserver-1.0.11-failure-173438.md` | 1.0.11 hardware trial: identical ring overwrite; the page-pin fix is not the cause |
+| `windowserver-mmap-lifetime-1.0.11.md` | The mapping-lifetime defect and the 1.0.11 fix candidate |
+| `windowserver-boundary-diagnostic-1.0.10.md` | 1.0.10 diagnostic scope, bounds and capture design |
+| `windowserver-0.3.5-failure-165941.md` | Frozen-cursor boot; submission #8 / readback #3 stall |
 | `verified-0.3.1-full-gate-20261019.md` | The 22-case / 26,000-frame / 80,020-pool hardware gate record |
 | `verified-windowserver-20261019-1200.md` | The desktop failure, submission by submission |
-| `windowserver-0.3.5-research.md` | Current candidate: compression isolation + kernel capture |
+| `windowserver-0.3.5-research.md` | 0.3.5 candidate: compression isolation + kernel capture |
 | `windowserver-0.3.4-research.md` | Dedicated-staging candidate and the source audit table |
 | `verified-0.3.1-guc-wake-fix.md` | The LinuxKPI lost-wake race, reproduced and fixed |
 | `desktop-roadmap-evidence.json` | Machine-readable evidence |
@@ -898,9 +1109,13 @@ Never bypass a failed kernel-collection validation. Bring the report back instea
 
 `ROADMAP.md` is authoritative and dated. The following is a summary of its structure, not a substitute.
 
-**Current (0.3.5):** compression isolation for this WindowServer/device only, plus diagnostic NMXGPU
-1.0.9 kernel capture that reports referenced request state and parsed GuC registers. The 1.0.9 kernel
-changes **diagnostics only** — not scheduling, reset or timeouts.
+**Current (plugin 0.3.5, kernel 1.0.12, framebuffer 0.2.4):** compression isolation for this
+WindowServer/device only; diagnostic kernels 1.0.9 → 1.0.10 (bounded command-ring words, parsed GuC
+registers and request state); the 1.0.11 mapping-lifetime correction (lifetime page pin for i915 CPU user
+mappings; legacy GTT mmap refused); and the 1.0.12 / framebuffer 0.2.4 raw-physical correction
+(`HostPhysicallyContiguous | MapperNone`, verified segment span, rollback of kernel + framebuffer + AuxKC
+as one unit). Kernels 1.0.9 and 1.0.10 changed **diagnostics only**; 1.0.11 has been shown **not** to
+resolve the ring overwrite; 1.0.12 is **built but not booted**.
 
 **Promotion criteria (unchanged):**
 
@@ -911,10 +1126,13 @@ changes **diagnostics only** — not scheduling, reset or timeouts.
   render path.
 * No automatic reboot from any installer or test script.
 
-**If 0.3.5 still fails**, the next branch is targeted kernel request/dependency/GuC-progress capture
-correlated with the now-complete startup submissions, then physical memory ownership/layout
-investigation — **not** another identical reboot, longer fence timeout, or repeat of the application
-matrix.
+**The ring overwrite is now the target.** The next branch is a **ring guard** — diff the previous
+request's tail and WA-tail dwords between tail publications — plus a **physical-page ownership map** of the
+ring, the IOSurface/private-image/staging buffers, and the earliest submission boundary whose words
+changed. The raw-physical correction gives that map a specific question to answer: were the exported
+surfaces actually host-contiguous on this machine (`IOMapper::gSystem` present or not), and do `fScanBuf`
+and `fCursorBuf` need the same span check? **Not** another identical reboot, a longer fence timeout, a
+firmware swap, or a repeat of the application matrix.
 
 **Deferred:** sustained physical composition, sleep/wake, brightness, external outputs, hardware video
 decode, modesetting and error recovery. Every one of these is currently **unverified**, and no
@@ -923,7 +1141,7 @@ future-proof claim is made for any of them.
 ---
 
 <a name="versions"></a>
-## 🕓 Version history (0.2.4 → 0.3.5)
+## 🕓 Version history (plugin 0.2.4 → 0.3.5, kernel 1.0.8 → 1.0.12, framebuffer → 0.2.4)
 
 Each candidate changed as few things as possible, and each failure narrowed the next step. The one-line
 "what changed" and "what happened" is the honest spine of the project. All dates are October 2026.
@@ -942,6 +1160,9 @@ Each candidate changed as few things as possible, and each failure narrowed the 
 | 0.3.3 | Bounded `trylock` + deadline, pre-created startup journal, early loader capture, sampler fix | 8 submissions / 3 readbacks, then **readback #4 times out**; `GPU HANG 12:1:00dfffff` |
 | 0.3.4 | Dedicated fresh staging scoped to this `8086:7d45` WindowServer; journal, log-throttle and sampler fixes | Submissions 1–7 pass, **submission #8** (third readback) times out — staging reuse is not required to trigger the hang |
 | 0.3.5 | `noccs` compression isolation scoped to WindowServer/device; diagnostic kernel 1.0.9 (parsed GuC registers + request state) | AuxKC pointed at a deleted temporary bundle; the installer was rebuilt from permanent paths. **Desktop result still unverified** |
+| 0.3.5 + kernel 1.0.10 | Diagnostic only: bounded command-ring capture in `intel_guc_submission` and `i915_gpu_error` — the words below each active render request's head, saved at submission and re-read at hang (fixed ~60 KiB, write-once slots, no hot-path logging) | 17:14 boot reproduced submission #8 / readback #3. The 17:16 capture shows request 18's switch-out and WA tail (`0xc98–0xca4`) reading `0xff000000` before request 20, with GuC `IPEHR=ff000000`, `RING_HEAD=ACTHD=0xca4`. **Diagnostic only, no fix** |
+| kernel 1.0.11 (fix candidate) | Pin i915 CPU user mappings (`WB`/`WC`/`UC`) for the mapping lifetime and release the pin after the IOKit unmap; refuse the legacy `I915_MMAP_TYPE_GTT` alias; report `i915_gem_mmap_gtt_version() = 4` under NMXKPI | Local only: 438-object x86_64 link, undefined-import set equals 1.0.8, kernel UUID `B972B890-…`, signed-binary SHA-256 `496e108b…`, 20,000-lifetime ASan/UBSan fixture and installer/rollback fixtures pass. **17:32 hardware boot reproduced the identical ring overwrite and `IPEHR=ff000000`. Fix does not resolve the hang; retained as a correctness correction** |
+| kernel 1.0.12 + framebuffer 0.2.4 (candidate) | Request `kIOMemoryHostPhysicallyContiguous \| kIOMemoryMapperNone` in `nmxVramAlloc()` and `nmx_xnu_mem_alloc()`; refuse to export a raw physical span unless the first segment covers the whole request (segment/descriptor length, CPU pointer and overflow; mask and alignment in the kernel allocator); release slot and budget on rejection; installer stages/validates/backs up/rolls back kernel + framebuffer + AuxKC together | Local only: Sequoia-decision ASan/UBSan fixture (old code exports a 4 KiB segment for an 8 KiB request, new code rejects it; 2,000 balanced cycles), both kexts build and link, installer/rollback fixtures pass. Kernel UUID `000EF47E-…`, SHA-256 `1ad3f4dc…`; framebuffer UUID `59DA4CD2-…`, SHA-256 `495ed4cc…`. **Built, not booted; on this target `AppleVTD is not yet installed as gSystem`, so the scattered-page precondition is unproven** |
 
 ---
 
@@ -1025,6 +1246,10 @@ evidence in `research/` looks the way it does.
 | 11 | Kernel 1.0.9 changes diagnostics only | Change scheduling, reset policy or timeouts | No evidence supports a scheduling fix; capture the missing request/GuC state first |
 | 12 | Never reboot automatically; collect before reinstall | Auto-retry the boot | The failed boot's unified log is the evidence; rebooting or reinstalling destroys it |
 | 13 | Treat application and desktop as separate milestones | Assume one pass means "working" | 26,000 passing application frames demonstrably do not predict WindowServer success |
+| 14 | Pin i915 CPU user mappings for the mapping lifetime; refuse the legacy GTT mmap the port cannot revoke | Add a cache flush, raise the fence timeout, or restore FreeBSD's whole-object VM mmap | The port's revocation shim is a no-op, so a lifetime pin is the only way a static IOKit mapping is safe; a flush or a longer timeout would mask the sequence rather than restore GPU execution |
+| 15 | Keep the 1.0.11 correction in the tree even though the hang persisted | Revert it when the ring overwrite recurred | It fixes a real, source-demonstrated mapping-safety defect; "not the cause of *this* hang" is not the same as "not a bug" |
+| 16 | Require `HostPhysicallyContiguous \| MapperNone` and verify the returned segment spans the whole buffer before exporting a raw physical range | Trust `PhysicallyContiguous` and the base address alone | Apple's own code makes `PhysicallyContiguous` host-contiguous only when no system mapper exists; the exported `IODeviceMemory` range must not extend past memory the allocation owns, regardless of whether this target currently has a mapper |
+| 17 | Ship kernel 1.0.12 + framebuffer 0.2.4 as a candidate, not a fix | Call the hang solved because the allocator assumption was wrong | The scattered-page precondition is not evidenced on this target (`AppleVTD is not yet installed as gSystem`), the build has not been booted, and `fScanBuf`/`fCursorBuf` still export raw spans without a length check |
 
 ---
 
@@ -1078,6 +1303,16 @@ WindowServer is a different workload: concurrent surface import and readback, lo
 compression and panel scanout. The application gate does not exercise that path — and the project states
 explicitly that a passing application matrix does not predict desktop success.
 
+**Didn't you find the cause in the ring buffer?**
+We found the *symptom* precisely: a four-word `0xff000000` block replaces the previous request's
+switch-out and workaround tail, and the GPU fetches it (`IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`).
+We have **not** identified the writer. Kernel 1.0.11 fixed a real mapping-lifetime defect and the hardware
+reproduced the identical overwrite, so that defect is explicitly **not** claimed as the cause. Kernel 1.0.12
+and framebuffer 0.2.4 correct a second real defect — a raw physical span exported without checking that the
+pages were host-contiguous — which *could* explain a black-pixel fill landing outside its buffer; but the
+boot log does not show the system mapper its precondition needs, and those builds have not been booted. The
+next step is a ring guard plus physical-page ownership, not another guess.
+
 **Why not WhateverGreen?**
 Its own documentation lists Ice Lake as the newest supported Intel family; it supports neither Alder Lake
 nor Meteor Lake.
@@ -1124,5 +1359,8 @@ this machine that claim is already partly falsified:
 * a real **LinuxKPI lost-wake race** was found, reproduced and fixed.
 
 What is not yet falsified is the hard part: **GPU-composited WindowServer on the physical panel.** The
-evidence points at the surface/readback path under concurrent WindowServer load, and the next step is
-deeper kernel request-progress capture rather than another guess. That is the honest frontier.
+evidence now points at command-ring *content* at a request boundary: a four-word `0xff000000` block
+replaces the previous request's switch-out and workaround tail, and the GPU fetches it. The writer is
+unidentified; the next step is a ring guard and a physical-page ownership map rather than another guess.
+A second source defect — a raw physical span exported without verifying host contiguity — has a corrected
+candidate (1.0.12 + framebuffer 0.2.4) that is built but not yet booted. That is the honest frontier.
