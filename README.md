@@ -14,7 +14,7 @@
 ![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working-brightgreen)
 ![Desktop](https://img.shields.io/badge/Desktop-WindowServer_in_progress-yellow)
 ![Verified](https://img.shields.io/badge/Verified-26%2C000_frames-brightgreen)
-![Candidate](https://img.shields.io/badge/Candidate-0.3.5_%2B_k1.0.13_panic-red)
+![Candidate](https://img.shields.io/badge/Candidate-0.3.5_%2B_k1.0.14-unverified-orange)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
@@ -25,6 +25,18 @@ The port reuses NullMoth's *Metal driver plugin → shader translator → Mesa V
 extensions* architecture, but replaces every NVIDIA-specific element: the GSP firmware path becomes the
 Intel GuC/HuC/GSC firmware path, the NVK backend becomes Mesa's **ANV** Intel driver, and the NVIDIA
 kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAccel`.
+
+**Current state:** Metal and Vulkan application rendering work and are verified on real silicon.
+GPU-composited WindowServer does not. The current candidate is **kernel 1.0.14** — locally validated,
+hardware-unverified; its one trial panicked early in a pre-existing VoodooI2CHID touchscreen HID fault,
+not the GPU path.
+
+**Start here:**
+
+- *Does it work?* → [What works today](#works) and [Status at a glance](#status)
+- *Understand the project* → [Architecture](#architecture) and [The current blocker](#blocker)
+- *Build it* → [Building and testing](#build)
+- *Read the evidence* → [`research/`](research/) (newest files first)
 
 ## 📑 Contents
 
@@ -56,6 +68,14 @@ kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAcc
 <a name="works"></a>
 ## ✅ What works today
 
+| ✅ Verified today | ❌ Not yet |
+|---|---|
+| Metal render — 4,096 correct pixels | GPU-composited WindowServer desktop |
+| Vulkan compute — 65,536 correct values | Sleep/wake, brightness, external displays |
+| 26,000 exact frames across 22 cases (both transports) | Hardware video decode |
+| Command-pool lifetime — 80,020 created / destroyed, zero leaks | Sustained composition / long soak |
+| PCI attach + GuC 70.53.0 firmware bring-up | |
+
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
 Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
 
@@ -78,14 +98,16 @@ is a distinct, narrower problem (a readback/surface path under concurrent Window
 described in *The current blocker* below. A working Metal/Vulkan stack and a composited login screen are
 two different milestones; this project has finished the first and is attacking the second.
 
-The latest kernel work moved the question from *which submission stalls* to *what changed the ring*: the
-1.0.10 build captured the corrupted words, and the 1.0.11 mapping-safety fix was built and booted — the
-hardware reproduced the same overwrite, so the next step is naming the writer rather than guessing. A
-second candidate (kernel 1.0.12 + framebuffer 0.2.4) corrected a raw-physical allocation assumption and
-refused to export a buffer whose pages are not host-contiguous; it was booted on 19 October and the
-overwrite **still occurred**. A third candidate (kernel 1.0.13) withholds the firmware's stolen-memory
-region from i915; it **panicked ~8 seconds into boot**, before any desktop, on an uninitialised context
-lock in the GuC completion path. None of these is a fix. That is documented in *The current blocker*.
+The latest kernel work is **1.0.14**, which targets the 1.0.13 boot panic — a context use-after-free in the
+breadcrumb completion path, where `signal_irq_work` → `guc_retire_inflight_request_prio` reached a freed
+`intel_context`. 1.0.14 gives every breadcrumb-owned request reference its context (and, for parallel
+requests, a parent context), acquires ownership before publishing the fence's `SIGNALED` bit, and snapshots
+the next entry before a losing signal path can drop the last reference. It is locally validated — 90,000
+ASan/UBSan lifetimes, a reproduced-and-fixed request-iterator UAF — but **hardware-unverified**: its one
+trial panicked earlier and elsewhere, in a VoodooI2CHID touchscreen HID null-page-fault that predates
+1.0.14. The path to it ran through 1.0.10 (ring capture), 1.0.11 (mapping-lifetime pin, falsified),
+1.0.12 (raw-physical span, booted, overwrite persisted) and 1.0.13 (stolen-memory skip, panicked). None of
+those is a fix. That history is documented in *The current blocker*.
 
 ---
 
@@ -102,7 +124,10 @@ lock in the GuC completion path. None of these is a fix. That is documented in *
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
 | GPU-composited WindowServer desktop | The cut-off moves with the candidate — 0.2.5/0.3.2 stall at readback **#5** (upload #6 ~80 ms later), 0.3.3 at its **fourth** readback, 0.3.4/0.3.5 at **submission #8**, 1.0.12 completes readback #8 then stalls on **submission #9**. The hang itself is invariant | **Failing — blocking** |
 | Kernel command-ring integrity | 1.0.10 capture: the words below request 20's head (`0xc98–0xca4` — request 18's switch-out and WA tail) read `0xff000000`; GuC `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`. **Identical on 1.0.11.** The 1.0.12 boot again saved `0xff000000` at request 22's `0xe00–0xe0c`, with `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xe0c`, `RING_TAIL=0xf70` | **Corrupted — writer unidentified** |
-| Kernel boot integrity (1.0.13) | `panic: NullMoth xkpi: mutex … used before mtx_init` at 8.04 s uptime, backtrace `guc_retire_inflight_request_prio` ← `signal_irq_work` ← `irq_work`. The lock is a zeroed `intel_context.guc_state.lock`; no desktop was reached | **Panics before desktop — parked** |
+| Kernel boot integrity (1.0.13) | `panic: NullMoth xkpi: mutex … used before mtx_init` at 8.04 s uptime, backtrace `guc_retire_inflight_request_prio` ← `signal_irq_work` ← `irq_work`. A freed/stale `intel_context` in the breadcrumb completion path; no desktop was reached | **Panics before desktop — parked** |
+| Kernel 1.0.14 (current candidate) | Targets that panic: breadcrumb-owned requests now hold their context/parent context, ownership is taken before the fence's `SIGNALED` bit is published, and the iterators snapshot before release. Locally validated (90,000 ASan/UBSan lifetimes, request-iterator UAF reproduced and fixed) | **Built; hardware-unverified** |
+| Attach guard / retry | A panic during `NMXGPU::attach` leaves the NVRAM `nullmoth-gpu-attaching` marker set, so the next boot parks instead of attaching. 1.0.14's installer clears that marker before arming a retry | **Fixed in the installer; unverified on target** |
+| VoodooI2CHID touchscreen HID panic | 1.0.14's one trial (18:39:51) panicked at 9.12 s: null-page fault in `VoodooI2CTouchscreenHIDEventDriver::forwardReport`. The same signature is in four older panics (Oct 17/18); NMXGPU 1.0.14 was loaded but not in the faulting backtrace | **Pre-existing, under separate investigation** |
 | i915 CPU user-mapping page lifetime | Source audit: `lkpi_unmap_mapping_range` is a no-op and the i915 `vm_ops_cpu` path did not register the lifetime page pin the TTM path installs. Kernel 1.0.11 adds it | **Defect confirmed in source; does not fix the hang** |
 | Raw-physical buffer export | `nmxVramAlloc` / `nmx_xnu_mem_alloc` requested only `kIOMemoryPhysicallyContiguous` and exported `getPhysicalSegment(0, …, MapperNone)` without checking the segment length. 1.0.12 + framebuffer 0.2.4 add `HostPhysicallyContiguous \| MapperNone` and a span check | **Booted 19 Oct 18:00; overwrite persisted; no span-refusal line in the retained log, so the guard's execution is unverified** |
 | Panel scanout with correct pixels | Framebuffer loads and describes 1920×1080, reaches fixed scanout; presentation samples remain zero | **Partial / unverified** |
@@ -226,7 +251,7 @@ each case logs and verifies the route it actually took rather than trusting the 
 
 | Component | Version / base | Source in tree | Licence |
 |---|---|---|---|
-| `NMXGPU.kext` | kernel **1.0.13** (parked — boot panic) on the 1.0.12/1.0.11 correction lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
+| `NMXGPU.kext` | kernel **1.0.14** (current candidate — completion-context fix, hardware-unverified) on the 1.0.13/1.0.12/1.0.11 lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
 | `NMXAccel.kext` | 0.1 | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
 | `LatitudeMTLFB.kext` | **0.2.4** candidate (raw host-physical allocation) | `desktop-build/LatitudeMTLFB.kext` | project |
 | `NMXAGDC.kext` | 0.1 (`NMXAGDCLoader`) | `desktop-build/NMXAGDC.kext` | project |
@@ -577,8 +602,42 @@ this boot. The stolen/DSM overlap hypothesis is therefore **untested**, not disp
 is unattributed; 1.0.13 is parked, not promoted.** The detailed record is
 `research/windowserver-1.0.13-panic-181731.md`.
 
-The last booted payload whose behaviour is characterised therefore remains **1.0.12 + framebuffer 0.2.4**:
-ring corrupted, readback timed out. That is the state this document reports.
+### The 1.0.14 trial (18:28–18:39) — completion-context fix, separate HID panic
+
+Kernel **1.0.14** (UUID `9B0192B5-D9CC-3FE1-9781-9276B170A4BE`, SHA-256 `80c3fe8b…`) targets the 1.0.13
+panic directly. The 1.0.13 stack — `signal_irq_work` → `guc_retire_inflight_request_prio` reading
+`ce->guc_state.lock` — is a **context use-after-free**: the breadcrumb completion path reaches a context
+that has already been freed. This matches an upstream Linux patch, *"drm/i915/gt: Fix ce use-after-free in
+signal_irq_work()"* (https://lists.openwall.net/linux-kernel/2026/09/16/2418), which the port adapts to the
+FreeBSD RCU list primitives available under LinuxKPI.
+
+The correction:
+
+* Every breadcrumb-owned request reference now also holds its context and, for parallel requests, a separate
+  parent context reference under NMXKPI. Their lifetime runs through deferred GuC priority retirement, fence
+  notification or cancellation.
+* The already-completed enqueue path acquires ownership **before** publishing the fence's `SIGNALED` bit,
+  since timeline retirement can act immediately on that bit.
+* The signaler iterator snapshots the next context before releasing the current one; the request iterator
+  snapshots its next entry before a losing signal path can drop its last request reference.
+
+Local validation: the actual old enqueue/worker/GuC functions reproduce a heap-use-after-free, and the
+corrected functions pass **90,000** ASan/UBSan lifetimes (publication race, parent/child, cancel, bulk
+remove, competing signal, duplicate signaling) with zero live objects; a separate request-iterator UAF was
+reproduced and fixed. The 438-object link keeps the frozen 1.0.8 undefined-symbol set.
+
+**What is and is not established.** The fix is real and locally reproduced, but the target panic is **not**
+verified fixed. The one 1.0.14 trial (18:39:51) panicked earlier and elsewhere: a null-page fault
+(`CR2=0`, uptime 9.12 s) in `VoodooI2CTouchscreenHIDEventDriver::forwardReport`. The same function and
+offset appear in four older panic reports from 17–18 October, predating 1.0.14, and NMXGPU 1.0.14 was in
+loaded modules but **not** in the faulting backtrace. So the HID fault is a pre-existing, separate problem —
+it does not confirm or refute the GPU fix. Separately, the 1.0.14 installer now clears the NVRAM
+`nullmoth-gpu-attaching` marker that a failed attach leaves behind, which had been parking subsequent boots
+(`research/windowserver-1.0.14-attach-guard.md`).
+
+The detailed records are `research/windowserver-completion-context-1.0.14.md` and
+`research/windowserver-1.0.14-result-183951.md`. **1.0.14 is the current candidate: built and locally
+validated, hardware-unverified.**
 
 ### What has been eliminated by controlled experiment
 
@@ -947,6 +1006,26 @@ nothing in the two diffs shows a path from "region withheld" to "context never i
 capture does not even show that the new log lines executed. **Lesson:** a candidate that fails earlier is
 not a stronger explanation; it is a new question. Park it, record it, and do not re-arm it unchanged.
 
+### Phase 10 — The panic named, and a separate HID fault (19 October, 18:23–18:41)
+
+The 1.0.13 panic got a name: a context use-after-free in the breadcrumb completion path. The stack —
+`signal_irq_work` → `guc_retire_inflight_request_prio` reading `ce->guc_state.lock` — reaches a context
+that timeline retirement has already freed, and it matches an upstream Linux patch. Kernel 1.0.14 gives
+every breadcrumb-owned request reference its context (and a parent context for parallel requests), takes
+ownership before the fence's `SIGNALED` bit is published, and snapshots the iterators before a losing
+signal path can drop the last reference. A local fixture with the actual old functions reproduces the
+UAF; the corrected functions pass 90,000 ASan/UBSan lifetimes.
+
+The honest part is the same as always: the fix is real and locally reproduced, but the target panic is
+**not** verified fixed. 1.0.14's one trial panicked earlier and elsewhere — a VoodooI2CHID touchscreen HID
+null-page-fault at 9.12 s, a signature also present in four older panics from 17–18 October, with NMXGPU
+loaded but not in the faulting backtrace. A separate pre-existing HID fault, not a verdict on the GPU fix.
+The 1.0.14 installer also clears the NVRAM `nullmoth-gpu-attaching` marker that a failed attach left
+behind, which had been parking every subsequent boot.
+
+**Lesson:** a fix you can reproduce locally is still not a hardware fix. The only thing that settles it is
+a target boot that reaches the GPU work — and 1.0.14's first trial never got that far.
+
 ### The failures we still cannot explain, and say so
 
 * The **exact root cause** of the WindowServer hang is not established.
@@ -1185,6 +1264,9 @@ iGPU Port/
 
 | File | Contents |
 |---|---|
+| `windowserver-completion-context-1.0.14.md` | 1.0.14: the completion-context use-after-free behind the 1.0.13 panic, and the fix |
+| `windowserver-1.0.14-result-183951.md` | 1.0.14 target trial: attach guard verified, then a separate VoodooI2CHID HID panic |
+| `windowserver-1.0.14-attach-guard.md` | The failed-attach NVRAM marker that parked retries, and the installer fix |
 | `windowserver-1.0.13-panic-181731.md` | 1.0.13 boot panic: verbatim stack, the zeroed context lock in source, and why the cause is unattributed |
 | `windowserver-firmware-stolen-1.0.13.md` | The stolen/DSM ownership hypothesis and the region-skip candidate |
 | `windowserver-1.0.12-failure-180032.md` | 1.0.12 / framebuffer 0.2.4 target trial: corruption and timeout persist; no span-refusal evidence |
@@ -1353,15 +1435,18 @@ the one-shot opt-in.
 
 `ROADMAP.md` is authoritative and dated. The following is a summary of its structure, not a substitute.
 
-**Current (plugin 0.3.5, kernel 1.0.13 parked, framebuffer 0.2.4):** compression isolation for this
+**Current (plugin 0.3.5, kernel 1.0.14, framebuffer 0.2.4):** compression isolation for this
 WindowServer/device only; diagnostic kernels 1.0.9 → 1.0.10 (bounded command-ring words, parsed GuC
 registers and request state); the 1.0.11 mapping-lifetime correction (lifetime page pin for i915 CPU user
 mappings; legacy GTT mmap refused); the 1.0.12 / framebuffer 0.2.4 raw-physical correction
 (`HostPhysicallyContiguous | MapperNone`, verified segment span, rollback of kernel + framebuffer + AuxKC
-as one unit); and kernel 1.0.13, which withholds the MTL stolen-memory regions from i915 on `8086:7d45`.
-Kernels 1.0.9 and 1.0.10 changed **diagnostics only**; 1.0.11 was shown **not** to resolve the ring
-overwrite; **1.0.12 was booted and the overwrite persisted**; **1.0.13 panicked 8.04 s into boot** and is
-parked until that panic is attributed or the change is reverted.
+as one unit); kernel 1.0.13, which withholds the MTL stolen-memory regions from i915 on `8086:7d45`; and
+kernel **1.0.14**, which fixes the 1.0.13 boot panic (a context use-after-free in the breadcrumb completion
+path) and clears the failed-attach NVRAM marker. Kernels 1.0.9 and 1.0.10 changed **diagnostics only**;
+1.0.11 was shown **not** to resolve the ring overwrite; **1.0.12 was booted and the overwrite persisted**;
+**1.0.13 panicked 8.04 s into boot**; **1.0.14 is built and locally validated but hardware-unverified** —
+its one trial panicked early in a separate VoodooI2CHID touchscreen HID fault. See
+`research/windowserver-completion-context-1.0.14.md`.
 
 **Promotion criteria (unchanged):**
 
@@ -1389,7 +1474,7 @@ future-proof claim is made for any of them.
 ---
 
 <a name="versions"></a>
-## 🕓 Version history (plugin 0.2.4 → 0.3.5, kernel 1.0.8 → 1.0.13, framebuffer → 0.2.4)
+## 🕓 Version history (plugin 0.2.4 → 0.3.5, kernel 1.0.8 → 1.0.14, framebuffer → 0.2.4)
 
 Each candidate changed as few things as possible, and each failure narrowed the next step. The one-line
 "what changed" and "what happened" is the honest spine of the project. All dates are October 2026.
@@ -1412,6 +1497,7 @@ Each candidate changed as few things as possible, and each failure narrowed the 
 | kernel 1.0.11 (fix candidate) | Pin i915 CPU user mappings (`WB`/`WC`/`UC`) for the mapping lifetime and release the pin after the IOKit unmap; refuse the legacy `I915_MMAP_TYPE_GTT` alias; report `i915_gem_mmap_gtt_version() = 4` under NMXKPI | Local only: 438-object x86_64 link, undefined-import set equals 1.0.8, kernel UUID `B972B890-…`, signed-binary SHA-256 `496e108b…`, 20,000-lifetime ASan/UBSan fixture and installer/rollback fixtures pass. **17:32 hardware boot reproduced the identical ring overwrite and `IPEHR=ff000000`. Fix does not resolve the hang; retained as a correctness correction** |
 | kernel 1.0.12 + framebuffer 0.2.4 (candidate) | Request `kIOMemoryHostPhysicallyContiguous \| kIOMemoryMapperNone` in `nmxVramAlloc()` and `nmx_xnu_mem_alloc()`; refuse to export a raw physical span unless the first segment covers the whole request (segment/descriptor length, CPU pointer and overflow; mask and alignment in the kernel allocator); release slot and budget on rejection; installer stages/validates/backs up/rolls back kernel + framebuffer + AuxKC together | Local: Sequoia-decision ASan/UBSan fixture (old code exports a 4 KiB segment for an 8 KiB request, new code rejects it; 2,000 balanced cycles), both kexts build and link, installer/rollback fixtures pass. Kernel UUID `000EF47E-…`, SHA-256 `1ad3f4dc…`; framebuffer UUID `59DA4CD2-…`, SHA-256 `495ed4cc…`. **Booted 19 Oct 17:58: readback #8 completed, submission #9 timed out at 5000 ms, `0xff000000` recurred at `0xe00–0xe0c` with `IPEHR=ff000000`; no span-refusal line in the log, so the guard's execution is unverified. Does not fix the hang** |
 | kernel 1.0.13 (parked) | Withhold `INTEL_MEMORY_STOLEN_LOCAL` and `INTEL_MEMORY_STOLEN_SYSTEM` from i915 for `8086:7d45` under `NMXKPI`, so rings/objects allocate from system memory instead of the DSM pool the firmware panel occupies; log `stolen=`/`size=`/`ggtt=` at ring pin | Local: 438-object x86_64 link with the frozen 1.0.8 import set, region-probe/ring-allocation sanitizer fixtures, installer/KC rollback fixtures. Kernel UUID `121AACAE-4C53-3357-9356-38C79222A842`, SHA-256 `d57981cb…`. **Booted 19 Oct 18:17 and panicked after 8.04 s: `mutex … used before mtx_init` in `guc_retire_inflight_request_prio`, on a zeroed `intel_context.guc_state.lock`. No desktop. Cause unattributed; do not re-arm unchanged** |
+| kernel 1.0.14 (current candidate) | Fix the 1.0.13 boot panic: breadcrumb-owned request references hold their context and (for parallel requests) a parent context under NMXKPI; ownership is acquired before the fence's `SIGNALED` bit is published; the signaler and request iterators snapshot their next entry before a losing signal path can drop the last reference. Installer clears the NVRAM `nullmoth-gpu-attaching` marker a failed attach leaves behind | Local: 438-object link with the frozen 1.0.8 import set; the actual old enqueue/worker/GuC functions reproduce a heap-use-after-free and the corrected functions pass 90,000 ASan/UBSan lifetimes; request-iterator UAF reproduced and fixed; installer/KC rollback fixtures. Kernel UUID `9B0192B5-…`, SHA-256 `80c3fe8b…`. **Hardware-unverified: the one trial (18:39:51) panicked at 9.12 s in a VoodooI2CHID touchscreen HID null-page-fault that predates 1.0.14; NMXGPU was loaded but not in the faulting backtrace. Desktop still unresolved** |
 
 ---
 
@@ -1559,11 +1645,12 @@ switch-out and workaround tail, and the GPU fetches it (`IPEHR=0xff000000`, `RIN
 We have **not** identified the writer. Kernel 1.0.11 fixed a real mapping-lifetime defect and the hardware
 reproduced the identical overwrite, so that defect is explicitly **not** claimed as the cause. Kernel 1.0.12
 and framebuffer 0.2.4 corrected a second real defect — a raw physical span exported without checking that
-the pages were host-contiguous — but that build was booted on 19 October and the overwrite recurred, with
-no span-refusal line in the log to show the guard even ran. Kernel 1.0.13 then withheld i915's stolen-memory
-region and **panicked 8 seconds into boot** on an uninitialised context lock, a failure whose cause is not
-yet attributed. The next step is a ring guard plus physical-page ownership, not another guess — and not
-another boot of 1.0.13 unchanged.
+the pages were host-contiguous — but that build was booted and the overwrite recurred, with no span-refusal
+line in the log to show the guard even ran. Kernel 1.0.13 then withheld i915's stolen-memory region and
+**panicked 8 seconds into boot**; that panic was a context use-after-free in the breadcrumb completion path.
+Kernel **1.0.14** fixes it and is locally validated, but is hardware-unverified — its one trial panicked
+early in a separate VoodooI2CHID touchscreen HID fault. The next step is still a ring guard plus
+physical-page ownership, not another guess.
 
 **Why not WhateverGreen?**
 Its own documentation lists Ice Lake as the newest supported Intel family; it supports neither Alder Lake
@@ -1611,10 +1698,11 @@ this machine that claim is already partly falsified:
 * a real **LinuxKPI lost-wake race** was found, reproduced and fixed.
 
 What is not yet falsified is the hard part: **GPU-composited WindowServer on the physical panel.** The
-evidence now points at command-ring *content* at a request boundary: a four-word `0xff000000` block
-replaces the previous request's switch-out and workaround tail, and the GPU fetches it. The writer is
-unidentified; the next step is a ring guard and a physical-page ownership map rather than another guess.
-A second source defect — a raw physical span exported without verifying host contiguity — has a corrected
-candidate (1.0.12 + framebuffer 0.2.4) that was booted and did **not** stop the overwrite; the log does not
-show its guard executing. A third candidate (1.0.13, stolen-memory withholding) panicked 8 seconds into
-boot and is parked. That is the honest frontier.
+evidence points at command-ring *content* at a request boundary: a four-word `0xff000000` block replaces
+the previous request's switch-out and workaround tail, and the GPU fetches it. The writer is unidentified;
+the next step is a ring guard and a physical-page ownership map rather than another guess. Along the way
+three real source defects were found and fixed — the 1.0.11 mapping-lifetime pin (falsified as the cause),
+the 1.0.12 raw-physical span (booted, overwrite persisted) and the 1.0.13 boot panic, a context use-after-free
+in the breadcrumb completion path that **1.0.14** now fixes and validates locally. 1.0.14 is
+hardware-unverified: its one trial panicked early in a separate VoodooI2CHID touchscreen HID fault. That is
+the honest frontier.
