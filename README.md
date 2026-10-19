@@ -2,11 +2,19 @@
 
 ![License](https://img.shields.io/badge/License-Custom_(Apache--2.0_original_work)-lightgrey.svg)
 ![Platform](https://img.shields.io/badge/Platform-macOS_15_Sequoia-blue)
+![Arch](https://img.shields.io/badge/Arch-x86__64-informational)
+![Bootloader](https://img.shields.io/badge/Bootloader-OpenCore_1.0.8-9cf)
 ![Hardware](https://img.shields.io/badge/Hardware-Intel_Core_Ultra_5_135U-orange)
 ![Graphics](https://img.shields.io/badge/Graphics-Xe--LPG%20%2F%208086%3A7D45-red)
+![Firmware](https://img.shields.io/badge/Firmware-GuC_70.53.0-blue)<br>
 ![API](https://img.shields.io/badge/API-Metal%20%2F%20Vulkan-purple)
-![Language](https://img.shields.io/badge/Language-C%20%2F%20Obj--C%20%2F%20C%2B%2B-blueviolet)
-![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working%20%7C%20WindowServer%20composition%20in%20progress-yellow)
+![Vulkan](https://img.shields.io/badge/Vulkan-ANV_%2F_Mesa_26.3.0-purple)
+![Kernel](https://img.shields.io/badge/Kext-i915_on_LinuxKPI-red)
+![Language](https://img.shields.io/badge/Language-C%20%2F%20Obj--C%20%2F%20C%2B%2B-blueviolet)<br>
+![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working-brightgreen)
+![Desktop](https://img.shields.io/badge/Desktop-WindowServer_in_progress-yellow)
+![Verified](https://img.shields.io/badge/Verified-26%2C000_frames-brightgreen)
+![Candidate](https://img.shields.io/badge/Candidate-0.3.5-orange)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
