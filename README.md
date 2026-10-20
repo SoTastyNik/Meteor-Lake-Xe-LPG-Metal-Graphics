@@ -170,6 +170,7 @@ configuration.
 | CPU | Intel Core Ultra 5 135U — 12C/14T (2 P Redwood Cove + 8 E Crestmont + 2 LP E), CPUID `A06A4` |
 | iGPU | Meteor Lake-P Xe-LPG, PCI `8086:7D45`, subsystem `1028:0CB6`, rev 08 |
 | Wireless | Intel `8086:7E40` (Meteor Lake) on a **custom AirportItlwm** — see *Custom wireless* below |
+| Touchscreen / touchpad | I2C-HID **ELAN04F3:328E** touchpad + multitouch screen on `8086:7E7B`, via a **Legion-adapted controller** and **VoodooI2CHID** — see *Touch input* below |
 | OS | macOS 15 Sequoia 15.8.1 (24H32), x86_64 |
 | Graphics stepping | `B0` |
 | Cache/coherency | `has_llc=no`, `has_snoop=yes`, `has_flat_ccs=no` (from the laptop's Linux report) |
@@ -205,6 +206,44 @@ working. This is the same "confirmed vs. not verified" standard the GPU work is 
 Evidence: preserved EFI config and kext under `checkpoints/usable-desktop-1.0.15-20261019-224818/`
 (`EFI/OC/config.plist`, `EFI/OC/Kexts/AirportItlwm.kext/`) and the boot args in
 `port-artifacts/windowserver-mapping-lifetime-1.0.11/.../current-boot-arguments.txt`.
+
+### Touch input — a Legion-adapted I2C controller and a Linux IRQ mapping
+
+The Dell's I2C-HID input — an **ELAN04F3:328E** touchpad and a multitouch screen on the I2C3 controller
+`8086:7E7B` (`_SB.PC00.I2C3.TPD0`) — is brought up by adapting the
+[LegionI2CArrowLake](https://github.com/watchthelight-labs/LegionI2CArrowLake) approach rather than by
+replacing hardware:
+
+* **Controller**: `LatitudeI2CMeteorLake` is a small subclass of VoodooI2C's exported PCI controller.
+  It restricts vendor/device/subsystem, discovers the PCI PM capability instead of assuming its offset,
+  requests and verifies D0 (the firmware leaves the controller in D3hot, where every register read
+  returns `0xffffffff`), and refuses a nonresponsive controller before the base probe. The bxt I2C timing
+  (133 MHz, SDA hold 42 ns, SDA fall 171 ns, SCL fall 208 ns) is taken from Linux
+  `drivers/mfd/intel-lpss-pci.c` — the same table Linux uses for this controller.
+* **GPIO / interrupt**: the interrupt path runs through **VoodooGPIO** — VoodooI2C's per-generation GPIO
+  controller (Cannon Lake / Ice Lake / Tiger Lake / Sunrise Point) — together with `linuxirq.h`, the
+  Linux IRQ-mapping shim that routes a Linux-style GPIO interrupt onto macOS. Where no community GPIO data
+  exists (the Meteor Lake `INTC1082`/`INTC1084` controllers), the driver falls back to **polling**
+  (`-vi2c-force-polling`) rather than guessing a pin. No slave address, descriptor register or GPIO pin is
+  invented.
+* **ACPI**: the firmware's `TPD0._DSM` fails (`HIDG` missing), so an SSDT supplies replacement methods —
+  the HID DSM returns firmware `TPDH`, and `_CRS` concatenates the device's own firmware `SBFB` serial-bus
+  and `SBFI` interrupt buffers. Only the `_DSM`/`_CRS` names (`XDSM`/`XCRS`) and the table checksum change;
+  length is unchanged and it decompiles.
+* **Touchscreen**: the screen is driven by **VoodooI2CHID** (the I2C-HID multitouch driver) behind
+  `VoodooI2CPrecisionTouchpadHIDEventDriver` → `VoodooInput` → `AppleMultitouchTrackpadHIDEventDriver`.
+  An earlier panic in `VoodooI2CTouchscreenHIDEventDriver::forwardReport` is held by the guarded HID 1.0.1
+  null-guard.
+
+**Status: the touchpad attaches and is readable; the touchscreen works.** The 12:16 capture shows the ELAN
+attaching through the full registry chain with successful reads, and the Wacom touchscreen service is
+present. **Gestures are not yet verified** — the notes are explicit that "successful reads/attachment do not
+establish correct event contents or gesture behaviour," and multi-finger gestures had not been tested on
+this laptop. This is the same confirmed-vs-not-verified standard as the GPU and wireless work.
+
+Evidence: `touchpad-candidate/` (`LatitudeI2CMeteorLake.kext`, `Legion-README.md`, `config.plist`),
+`touchpad-sources/` (`SSDT-LAT-TPD0.dsl`, `LatitudeI2CMeteorLake.cpp`), and
+`research/touchpad-result-20261020-121643.md`.
 
 > **Note on neighbouring hardware.** The sibling `NullMoth-Xe` work targets **Panther Lake / Xe3
 > (`8086:b080`)** as an SR-IOV virtual function on a QEMU host. Meteor Lake is **Xe-LPG**, a different
