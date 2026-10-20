@@ -76,6 +76,7 @@ unresolved. The current candidate is **kernel 1.0.15 + plugin 0.3.6 + framebuffe
 | 26,000 exact frames across 22 cases (both transports) | Hardware video decode |
 | **GPU-composited WindowServer desktop — real GPU work, no hang** | Host-pointer (zero-copy) imports — copy fallback |
 | Command-pool lifetime — 80,020 created / destroyed, zero leaks | Sustained composition / long soak |
+| **Touchscreen multitouch + gestures (VoodooI2CHID)** | Touchpad (ELAN04F3:328E) — **work in progress** |
 | PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (12,288 MB) | |
 
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
@@ -170,7 +171,7 @@ configuration.
 | CPU | Intel Core Ultra 5 135U — 12C/14T (2 P Redwood Cove + 8 E Crestmont + 2 LP E), CPUID `A06A4` |
 | iGPU | Meteor Lake-P Xe-LPG, PCI `8086:7D45`, subsystem `1028:0CB6`, rev 08 |
 | Wireless | Intel `8086:7E40` (Meteor Lake) on a **custom AirportItlwm** — see *Custom wireless* below |
-| Touchscreen / touchpad | I2C-HID **ELAN04F3:328E** touchpad + multitouch screen on `8086:7E7B`, via a **Legion-adapted controller** and **VoodooI2CHID** — see *Touch input* below |
+| Touch input | I2C-HID multitouch screen on `8086:7E7B` via **VoodooI2CHID** — **working, gestures confirmed**; ELAN04F3:328E touchpad — **work in progress** — see *Touch input* below |
 | OS | macOS 15 Sequoia 15.8.1 (24H32), x86_64 |
 | Graphics stepping | `B0` |
 | Cache/coherency | `has_llc=no`, `has_snoop=yes`, `has_flat_ccs=no` (from the laptop's Linux report) |
@@ -235,11 +236,11 @@ replacing hardware:
   An earlier panic in `VoodooI2CTouchscreenHIDEventDriver::forwardReport` is held by the guarded HID 1.0.1
   null-guard.
 
-**Status: the touchpad attaches and is readable; the touchscreen works.** The 12:16 capture shows the ELAN
-attaching through the full registry chain with successful reads, and the Wacom touchscreen service is
-present. **Gestures are not yet verified** — the notes are explicit that "successful reads/attachment do not
-establish correct event contents or gesture behaviour," and multi-finger gestures had not been tested on
-this laptop. This is the same confirmed-vs-not-verified standard as the GPU and wireless work.
+**Status: the touchscreen works flawlessly, including gestures; the touchpad is a work in progress.**
+The touchscreen (VoodooI2CHID) is confirmed working with full gesture support. The touchpad (ELAN)
+attaches and is readable — the 12:16 capture shows it coming up through the full registry chain — but it is
+**not yet working**; treat it as a work in progress. This split is deliberate: the screen is done, the pad
+is not.
 
 Evidence: `touchpad-candidate/` (`LatitudeI2CMeteorLake.kext`, `Legion-README.md`, `config.plist`),
 `touchpad-sources/` (`SSDT-LAT-TPD0.dsl`, `LatitudeI2CMeteorLake.cpp`), and
