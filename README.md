@@ -169,6 +169,7 @@ configuration.
 | Machine | Dell Latitude 5350 |
 | CPU | Intel Core Ultra 5 135U — 12C/14T (2 P Redwood Cove + 8 E Crestmont + 2 LP E), CPUID `A06A4` |
 | iGPU | Meteor Lake-P Xe-LPG, PCI `8086:7D45`, subsystem `1028:0CB6`, rev 08 |
+| Wireless | Intel `8086:7E40` (Meteor Lake) on a **custom AirportItlwm** — see *Custom wireless* below |
 | OS | macOS 15 Sequoia 15.8.1 (24H32), x86_64 |
 | Graphics stepping | `B0` |
 | Cache/coherency | `has_llc=no`, `has_snoop=yes`, `has_flat_ccs=no` (from the laptop's Linux report) |
@@ -178,6 +179,32 @@ The GPU model is not guessed: the macOS PCI probe and the Linux `i915` report fr
 laptop identify the same device, the same stepping and the same firmware family. That agreement is what
 makes the retargeting plan viable, and it is the reference point every kernel experiment is measured
 against.
+
+### Custom wireless — a Linux driver ported to macOS
+
+The Dell's Intel wireless controller (`8086:7E40`, Meteor Lake) is driven by a **custom AirportItlwm
+2.4.0**, not the stock kext. AirportItlwm is itself the macOS port of Intel's Linux `iwlwifi` driver, and
+this build carries Meteor Lake–specific changes on top of it:
+
+* **Base**: laobamac Sequoia build (`d695c97`), `com.zxystd.AirportItlwm`, version 2.4.0.
+* **Hardware**: `IOPCIMatch` extended with `0x7E408086` so the MTL controller attaches.
+* **Firmware**: `iwlwifi-ma-b0-gf-a0-83.ucode` (MA-B0 / GF-A0, API 83), with a **custom fragmented
+  PNVM** loader that matches hardware/SKU and reports completion.
+* **Initialization**: an internal auxiliary-station path selected by `itlwm_mtl_internal_aux=1`.
+* **Receive aggregation**: custom receive Block Ack handling (`airport-sequoia-rx-aggregation-test16`).
+* **Diagnostics**: firmware, scan, link, station, encryption-key and firmware-error status properties.
+
+The EFI **enables AirportItlwm and disables the older `itlwm` 2.3.0** alternative, so the system uses the
+macOS-native Wi‑Fi integration path (`en0`) rather than the separate itlwm/HeliPort setup. `itlwm_he=1`
+is set, but that flag alone does not prove an active 802.11ax link.
+
+**Status: loaded and registered `en0`.** Throughput, sleep/wake reliability, AirDrop and full Wi‑Fi 6
+behaviour are **unverified** — the logs confirm the driver attached, not that the wireless path is fully
+working. This is the same "confirmed vs. not verified" standard the GPU work is held to.
+
+Evidence: preserved EFI config and kext under `checkpoints/usable-desktop-1.0.15-20261019-224818/`
+(`EFI/OC/config.plist`, `EFI/OC/Kexts/AirportItlwm.kext/`) and the boot args in
+`port-artifacts/windowserver-mapping-lifetime-1.0.11/.../current-boot-arguments.txt`.
 
 > **Note on neighbouring hardware.** The sibling `NullMoth-Xe` work targets **Panther Lake / Xe3
 > (`8086:b080`)** as an SR-IOV virtual function on a QEMU host. Meteor Lake is **Xe-LPG**, a different
@@ -1644,6 +1671,8 @@ evidence in `research/` looks the way it does.
 | **SIP** | System Integrity Protection |
 | **SPIR-V** | Vulkan's shader IR |
 | **Xe-LPG** | The GPU generation in Meteor Lake, distinct from Xe2 (Lunar Lake) and Xe3 (Panther Lake) |
+| **AirportItlwm / itlwm** | The macOS ports of Intel's Linux `iwlwifi` driver; the custom build drives the MTL wireless controller |
+| **PNVM** | Wi‑Fi calibration data the firmware loads at attach |
 
 ---
 
@@ -1662,18 +1691,20 @@ different device ID needs `IOPCIPrimaryMatch` changes and a fresh evidence run; 
 There is no generic installer.
 
 **Can I use it as a daily driver, for games or video editing?**
-No. Sustained stability, WindowServer composition, hardware video decode, sleep/wake, brightness and
-external displays are all unverified. The only validated workload is the application gate.
+No. The desktop is GPU-composited but choppy, and sustained stability, sleep/wake, brightness and external
+displays are all unverified. Wireless attaches (`en0`) but its throughput and sleep/wake are unverified. The
+only fully validated workload is the application gate.
 
 **Is it safe to install?**
 No. The setup disables large parts of SIP and AMFI and loads unsigned kexts. A boot loop or a damaged
 kernel collection can make the machine unbootable. Keep a known-good EFI on a separate USB and a full
 backup off-device.
 
-**Why does the desktop fail if Metal works?**
-WindowServer is a different workload: concurrent surface import and readback, long-lived contexts, colour
-compression and panel scanout. The application gate does not exercise that path — and the project states
-explicitly that a passing application matrix does not predict desktop success.
+**Why is the desktop choppy if Metal works?**
+Because the GPU executes correctly but presentation is not yet smooth: WindowServer submits real work and
+completes readbacks, yet CoreAnimation logs fence timeouts and WindowServer sits at 163–205% CPU
+(`windowserver-result-231630`). That is a composition-latency and synchronization problem — a different
+layer from application rendering, which is why the passing application gate never predicted it.
 
 **Didn't you find the cause in the ring buffer?**
 That question is now historical. The ring capture precisely documented the GPU-execution failure — a
@@ -1701,6 +1732,11 @@ The probes read exact values and pixels back from device memory and verify the t
 application results are real GPU execution. A *visible desktop* is a different matter: presenting the
 firmware framebuffer is not accelerated composition, and the project does not count it as success.
 
+**Does Wi‑Fi work?**
+It attaches. A custom AirportItlwm (the macOS port of Intel's Linux `iwlwifi`) drives the Meteor Lake
+wireless controller, loads its firmware and registers `en0`. Throughput, sleep/wake, AirDrop and full Wi‑Fi 6
+are **unverified** — see *Custom wireless* in *Hardware and software target*.
+
 **Can I contribute? What do you need?**
 The same hardware and reproducible evidence: the report directory, boot UUID, exact log lines and the gate
 output. "It works for me" without logs is not usable, and neither is a local build pass presented as a
@@ -1727,7 +1763,10 @@ this machine that claim is already partly falsified:
 * **GuC 70.53.0** firmware loads and submission is enabled;
 * **Metal and Vulkan work.** Vulkan returns 65,536 correct values, Metal renders 4,096 correct pixels,
   and **26,000 application frames** pass exact-pixel validation over **both** transport routes;
-* a real **LinuxKPI lost-wake race** was found, reproduced and fixed.
+* a real **LinuxKPI lost-wake race** was found, reproduced and fixed;
+* a **Linux Wi‑Fi driver is ported and running natively on macOS** — a custom AirportItlwm (the macOS port
+  of Intel's Linux `iwlwifi`) drives the Meteor Lake wireless controller, loads its firmware and registers
+  `en0`.
 
 What is not yet falsified is the last mile: **smooth, presentation-stable GPU-composited WindowServer.** The
 harder claim — that the desktop can be GPU-composited at all — is now falsified in the project's favour:
