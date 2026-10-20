@@ -3,6 +3,7 @@
  */
 
 #include "anv_private.h"
+#include "anv_latitude_heap.h"
 #include "anv_api_version.h"
 #include "anv_measure.h"
 
@@ -2560,6 +2561,11 @@ anv_init_meminfo(struct anv_physical_device *device, int fd)
    device->sys.region = &devinfo->mem.sram.mem;
    device->sys.size =
       anv_restrict_sys_heap_size(device, devinfo->mem.sram.mappable.size);
+#ifdef __APPLE__
+   device->sys.size = anv_latitude_heap_limit(devinfo->pci_device_id,
+                                            devinfo->has_local_mem, true,
+                                            device->sys.size);
+#endif
    device->sys.available = devinfo->mem.sram.mappable.free;
 
    device->vram_mappable.region = &devinfo->mem.vram.mem;

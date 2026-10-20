@@ -1,0 +1,29 @@
+{
+  "kernel_version": "1.0.15",
+  "uuid": "39DFCF2A-34D0-3276-A204-71CC3B860A29",
+  "sha256": "81981def42d7761c68a12fc70ea57ea7f48b8eaf6628578739c4a859977ec037",
+  "hardware_verified": false,
+  "full_windowserver_acceleration_verified": false,
+  "full_gpu_suite_rerun": false,
+  "earliest_observed_failure": "GuC crash/exception and non-recoverable wedged on init at22:19:41, before WindowServer enumeration",
+  "change": "Replace whole-region stolen exclusion with validated, aligned firmware GOP prefix exclusion; restore remaining stolen allocator; initialization phase errors and collector summary",
+  "local_tests": [
+    "old enabled allocator overlap reproduced",
+    "actual initializer/bound helper:524288 offset/size cases ASan/UBSan plus overflow/refusal/other-device cases",
+    "actual console bridge ASan/UBSan valid/error/bounds cases",
+    "four changed kernel sources compile;438-object x86_64 link; added import limited to IOService::getPlatform already used by framebuffer",
+    "completion-context90000 sanitizer lifetimes pass",
+    "integrated installer/kernel helper upgrade/rollback/KC/prelink/arming regression fixtures pass",
+    "collector preserves crash/panic data on failed history search"
+  ],
+  "retained_payloads": {
+    "Library/Extensions/NMXGPU.kext/Contents/MacOS/NMXGPU": "9b8cd6315b6bf6080b09d7e258921d7461efbb2e3b2140a24bf8e30dc7c5d078",
+    "Library/Extensions/NMXAccel.kext/Contents/MacOS/NMXAccel": "9359839810f6e345b15ae9221f4cf3aacd2b0a497f23bb9bb118100df3421361",
+    "WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB": "495ed4cce9ece3fda3fd038e82031ab11ca1b8167c56f7bf7f66d13b8f2ed3b7",
+    "Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver": "153afd4b5a34008b2c27307dee646798c2180ab68a5e536d0901445d34a7fc2c",
+    "Library/GPUBundles/nvmtl/libdrm.2.dylib": "8053e30835b7dc065e594522e34531f46e14d8d0aa7f242b4e84c967c6a3fda1",
+    "WindowServerTransport/libdrm.2.dylib": "2e0eb9f1cf0105aa22d24fc7368c78f30cda645ef9110c7dfeeed7baf3ca2c5f"
+  },
+  "usb_hid_sha256": "862fb5d5620b8e438572ce3e5e9aeca746af2f012340d2bb4e19bb39e560a36c",
+  "limits": "GuC crash causality and hardware recovery not proven; old failed-ring physical overlap not proven; full desktop unresolved"
+}

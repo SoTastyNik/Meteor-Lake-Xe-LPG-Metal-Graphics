@@ -1758,7 +1758,8 @@ VkResult anv_AllocateMemory(
    struct anv_memory_heap *mem_heap =
       &pdevice->memory.heaps[mem_type->heapIndex];
 
-   if (aligned_alloc_size > mem_heap->size)
+   if (pAllocateInfo->allocationSize > mem_heap->size ||
+       aligned_alloc_size > mem_heap->size)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
    uint64_t mem_heap_used = p_atomic_read(

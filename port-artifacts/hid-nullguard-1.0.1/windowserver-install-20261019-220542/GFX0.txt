@@ -1,0 +1,130 @@
++-o GFX0@2  <class IOPCIDevice, id 0x1000002fe, registered, matched, active, busy 0 (287 ms), retain 21>
+  | {
+  |   "assigned-addresses" = <101000c240000000000000180000000000000001181000c240000000000000000000000000000010>
+  |   "AAPL,gray-value" = <00000000>
+  |   "IOInterruptSpecifiers" = (<0500000000000100>)
+  |   "class-code" = <00000300>
+  |   "IODeviceMemory" = (({"address"=275280560128,"length"=16777216}),({"address"=274877906944,"length"=268435456}))
+  |   "AAPL,gray-page" = <01000000>
+  |   "IOPowerManagement" = {"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+  |   "subsystem-vendor-id" = <28100000>
+  |   "built-in" = <00>
+  |   "acpi-device" = "IOACPIPlatformDevice is not serializable"
+  |   "IOBusyInterest" = "IOCommand is not serializable"
+  |   "IOInterruptControllers" = ("IOPCIMessagedInterruptController")
+  |   "vendor-id" = <86800000>
+  |   "name" = <"display">
+  |   "device-id" = <457d0000>
+  |   "acpi-pmcap-offset" = 208
+  |   "IOPCIResourced" = Yes
+  |   "AAPL,ndrv-dev" = Yes
+  |   "compatible" = <"pci1028,cb6","pci8086,7d45","pciclass,030000","GFX0">
+  |   "IOPCIExpressLinkCapabilities" = 4197393
+  |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+  |   "acpi-path" = "IOACPIPlane:/_SB/PC00/GFX0@20000"
+  |   "LatitudePanelClaimProbe" = "one-shot unavailable"
+  |   "subsystem-id" = <b60c0000>
+  |   "revision-id" = <08000000>
+  |   "IOPCIExpressLinkStatus" = 17
+  |   "IOPCIExpressCapabilities" = 146
+  |   "pcidebug" = "0:2:0"
+  |   "IOName" = "display"
+  |   "AAPL,RegEntryID" = <00f9c433fbffffffff063bcc04000000656d6953000000007a6c755200000000>
+  |   "reg" = <001000000000000000000000000000000000000010100042000000000000000000000000000000011810004200000000000000000000000000000010>
+  |   "attached-gpu-control-path" = "IOService:/AppleACPIPlatformExpert/PC00/AppleACPIPCI/GFX0@2/IONDRVFramebuffer/AGPM"
+  | }
+  | 
+  +-o LatitudeMTLProbe  <class LatitudeMTLProbe, id 0x100000321, registered, matched, active, busy 0 (0 ms), retain 5>
+  |   {
+  |     "IOClass" = "LatitudeMTLProbe"
+  |     "PCICommandAtAttach" = 7
+  |     "ActualVendorID" = 32902
+  |     "IOMatchedAtBoot" = Yes
+  |     "PCIBAR0Raw" = 402653196
+  |     "IOProviderClass" = "IOPCIDevice"
+  |     "PCIBAR1Raw" = 64
+  |     "PCIBAR2Raw" = 12
+  |     "PCIBAR3Raw" = 64
+  |     "PCIBAR4Raw" = 0
+  |     "IOProbeScore" = 1000
+  |     "ActualRevisionID" = 8
+  |     "PCIBAR5Raw" = 0
+  |     "HardwareWritesEnabled" = No
+  |     "CFBundleIdentifierKernel" = "com.vedcloud.LatitudeMTLProbe"
+  |     "IOPCIPrimaryMatch" = "0x7D458086"
+  |     "IOMatchCategory" = "LatitudeMTLDiagnostics"
+  |     "CFBundleIdentifier" = "com.vedcloud.LatitudeMTLProbe"
+  |     "ActualDeviceID" = 32069
+  |     "PortStage" = "PCI diagnostic only; acceleration not implemented"
+  |   }
+  |   
+  +-o IONDRVFramebuffer  <class IONDRVFramebuffer, id 0x1000004f3, registered, matched, active, busy 0 (23 ms), retain 15>
+    | {
+    |   "IOClass" = "IONDRVFramebuffer"
+    |   "CFBundleIdentifier" = "com.apple.iokit.IONDRVSupport"
+    |   "IOProviderClass" = "IOPCIDevice"
+    |   "IOPMStrictTreeOrder" = Yes
+    |   "IONDRVFramebufferGeneration" = <0200000002000000>
+    |   "IOPowerManagement" = {"CapabilityFlags"=0,"ChildProxyPowerState"=18446744073709551615,"CurrentPowerState"=0}
+    |   "IOFBUIScale" = <00000000>
+    |   "IOProbeScore" = 20000
+    |   "IONameMatch" = "display"
+    |   "IOMatchCategory" = "IOFramebuffer"
+    |   "IOFBIntegrated" = Yes
+    |   "IONameMatched" = "display"
+    |   "IOPersonalityPublisher" = "com.apple.iokit.IONDRVSupport"
+    |   "CFBundleIdentifierKernel" = "com.apple.iokit.IONDRVSupport"
+    | }
+    | 
+    +-o AppleMCCSControlModule  <class AppleMCCSControlModule, id 0x1000004f8, registered, matched, active, busy 0 (1 ms), retain 7>
+    | | {
+    | |   "IOProbeScore" = 0
+    | |   "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+    | |   "IOMatchCategory" = "AppleMCCSControlFamily"
+    | |   "IOClass" = "AppleMCCSControlModule"
+    | |   "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+    | |   "IOKitDebug" = 0
+    | |   "IOProviderClass" = "IOFramebuffer"
+    | |   "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+    | |   "IOUserClientClass" = "AppleMCCSUserClient"
+    | |   "IOResourceMatch" = "IOKit"
+    | | }
+    | | 
+    | +-o AppleMCCSParameterHandler  <class AppleMCCSParameterHandler, id 0x100000505, registered, matched, active, busy 0 (0 ms), retain 5>
+    |     {
+    |       "IOProbeScore" = 0
+    |       "CFBundleIdentifier" = "com.apple.driver.AppleMCCSControl"
+    |       "IOMatchCategory" = "IODisplayParameters"
+    |       "IOClass" = "AppleMCCSParameterHandler"
+    |       "IOPersonalityPublisher" = "com.apple.driver.AppleMCCSControl"
+    |       "IOKitDebug" = 0
+    |       "AppleMCCSFeatures" = 1
+    |       "IOProviderClass" = "AppleMCCSControlFamily"
+    |       "CFBundleIdentifierKernel" = "com.apple.driver.AppleMCCSControl"
+    |       "IOResourceMatch" = "IOKit"
+    |     }
+    |     
+    +-o AppleUpstreamUserClientDriver  <class AppleUpstreamUserClientDriver, id 0x1000004fa, registered, matched, active, busy 0 (0 ms), retain 5>
+    |   {
+    |     "IOProbeScore" = 0
+    |     "CFBundleIdentifier" = "com.apple.driver.AppleUpstreamUserClient"
+    |     "IOMatchCategory" = "AppleUpstreamUserClientDriver"
+    |     "IOClass" = "AppleUpstreamUserClientDriver"
+    |     "IOPersonalityPublisher" = "com.apple.driver.AppleUpstreamUserClient"
+    |     "IOProviderClass" = "IOFramebuffer"
+    |     "CFBundleIdentifierKernel" = "com.apple.driver.AppleUpstreamUserClient"
+    |     "IOUserClientClass" = "AppleUpstreamUserClient"
+    |     "IOResourceMatch" = "IOKit"
+    |   }
+    |   
+    +-o AGPM  <class AGPM, id 0x10000053d, registered, matched, active, busy 0 (0 ms), retain 8>
+        {
+          "IOReportLegend" = ({"IOReportChannels"=((5795122739160566084,6442450945,"PlimitNS"),(6008203707511294276,6442450945,"PlimitSampleTimeNS")),"IOReportGroupName"="AGPMStatistics","IOReportChannelInfo"={"IOReportChannelUnit"=0}})
+          "max-value" = 15
+          "min-value" = 0
+          "IOReportLegendPublic" = Yes
+          "IOPowerManagement" = {"CapabilityFlags"=0,"CurrentPowerState"=0}
+          "Heuristic-ID" = <ffffffff>
+        }
+        
+

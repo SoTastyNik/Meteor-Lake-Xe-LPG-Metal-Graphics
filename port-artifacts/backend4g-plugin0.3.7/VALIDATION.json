@@ -1,0 +1,25 @@
+{
+  "baseline": "usable-desktop-real-memory-0.2.5-20261019-232025",
+  "backend_heap_cap_bytes": 4294967296,
+  "scope": "Darwin integrated 8086:7d45, min(normal ANV shared heap,4GiB), per physical-device heap/allocation accounting; not a physical reservation or kernel-wide aggregate RAM quota",
+  "backend_sha256": "0061729e94f341dbecb2e6d2bcc5b8416d3b7bd3c077143ff292ca22b149152e",
+  "plugin_version": "0.3.7",
+  "plugin_sha256": "df48a79c1a43cbb9617426bd0d59316429e2b8ed613d800fb6e3bb990361a366",
+  "plugin_uuid": "1CFB311D-A260-334C-8B6F-1BAAA6EF62C4",
+  "reporting": "existing reporter queries actual backend heap; GPU name remains automatic",
+  "allocator_enforced": true,
+  "pipeline_cache": "one device-lifetime cache only in integrated MTL WindowServer; default internally synchronized flags; failed cache creation retains uncached path; command pools remain fresh",
+  "build": "ANV incremental cross-build/link pass; three plugin variants pass",
+  "local_tests": [
+    "actual ANV heap policy and allocation prefix ASan/UBSan: scope,4GiB boundary,current usage,page rounding,integer-wrap rejection",
+    "actual pipeline cache helper ASan/UBSan: default synchronization flags,owner device,existing explicit cache,disabled/creation-failed fallback",
+    "release logging pass",
+    "installer backend replacement/readback/signature failure rollback fixtures pass",
+    "loader active/fallback/reporting-failure isolation and early/late samples pass",
+    "collector crash/panic retention fixture pass"
+  ],
+  "external_symbols": "backend exports/imports unchanged; plugin old exports retained, no added external imports",
+  "hardware_cap_verified": false,
+  "smoothness_improvement_verified": false,
+  "full_gpu_suite_rerun": false
+}

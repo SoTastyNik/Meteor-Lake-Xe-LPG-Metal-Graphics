@@ -1,0 +1,158 @@
+--- a/NullMoth/kexts/NMXVGAFB/nmxvgafb.cpp
++++ b/NullMoth/kexts/NMXVGAFB/nmxvgafb.cpp
+@@ -23,6 +23,8 @@
+ #include <mach/mach_time.h>
+ #ifdef LATITUDE_MTL_PANEL
+ #include "latitude_scanout.h"
++#include "latitude_gpu_identity.h"
++#include <IOKit/IOUserClient.h>
+ #endif
+ #include <sys/sysctl.h>
+ #include <sys/proc.h>
+@@ -33,7 +35,7 @@
+ #include <mach/kmod.h>
+ extern "C" kern_return_t _start(kmod_info_t *ki, void *d); extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
+ #ifdef LATITUDE_MTL_PANEL
+-extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.LatitudeMTLFB, "0.2.4", _start, _stop) }
++extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.LatitudeMTLFB, "0.2.5", _start, _stop) }
+ #else
+ extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.NMXVGAFB, "0.1", _start, _stop) }
+ #endif
+@@ -229,6 +231,9 @@
+ public:
+     IOService *probe(IOService *provider, SInt32 *score) override;
+     bool start(IOService *provider) override;
++#ifdef LATITUDE_MTL_PANEL
++    IOReturn setProperties(OSObject *properties) override;
++#endif
+     void stop(IOService *provider) override;
+ 
+     IOReturn enableController() override { return kIOReturnSuccess; }
+@@ -693,6 +698,8 @@
+ }
+ #endif
+ 
++#include "latitude_gpu_identity_kernel.inc"
++
+ bool NMXVGAFB::start(IOService *provider)
+ {
+     // the mode the firmware lit (GOP): base, size and pitch of the linear framebuffer
+@@ -789,7 +796,9 @@
+         setProperty("IOFBDependentID", 0x4E4D58560000001ull, 64);
+         setProperty("IOFBDependentIndex", 0ull, 32);
+         // what WindowServer may place its flip surfaces in (NVRMFB reports its VRAM here); system memory backs them
++#ifndef LATITUDE_MTL_PANEL
+         setProperty("IOFBMemorySize", (unsigned long long)(1ull << 30), 64);
++#endif
+     } else VFBLOG("the framebuffer would not map write-combined: no accelerated frames for it");
+     setProperty("built-in", kOSBooleanTrue);
+     // the timing AGDC link-config answers read (NMXAGDC, from NVRMAGDC: NVRMFB publishes the same record); the same
+--- a/latitude-desktop/install-windowserver.sh
++++ b/latitude-desktop/install-windowserver.sh
+@@ -40,7 +40,7 @@
+   nvram -d nullmoth-panel-once 2>/dev/null || true
+ fi
+ [ -n "$kernel_source" ] || { echo 'Unexpected loaded GPU kernel; no changes made.'; exit 2; }
+-cmp -s "$HERE/Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB" /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB || cmp -s "$HERE/WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB" /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB || { echo 'Unexpected installed framebuffer; no changes made.'; exit 2; }
++cmp -s "$HERE/Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB" /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB || cmp -s "$HERE/WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB" /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB || cmp -s "$HERE/PreviousWindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB" /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB || { echo 'Unexpected installed framebuffer; no changes made.'; exit 2; }
+ codesign --verify --strict "$HERE/WindowServerFramebuffer/LatitudeMTLFB.kext"
+ codesign --verify --strict "$HERE/validate-kernel-prelink"
+ codesign --verify --strict "$HERE/WindowServerKernel/NMXGPU.kext"
+@@ -55,13 +55,15 @@
+ DEST=/Library/GPUBundles/NVMTLDriver.bundle
+ HELPER=/Library/NullMoth/latitude-desktop-journal
+ LOADER=/Library/NullMoth/load-panel-framebuffer.sh
++IDENTITY=/Library/NullMoth/latitude-gpu-identity
++codesign --verify --strict "$HERE/Library/NullMoth/latitude-gpu-identity"
+ [ -d "$DEST" ] || { echo 'Existing runtime bundle missing; install the base runtime first.'; exit 2; }
+ BACKUP="/Library/NullMoth/latitude5350-backups/windowserver-$(date +%Y%m%d-%H%M%S)"
+ mkdir -p "$BACKUP"
+ cp -p "$TRANSPORT" "$BACKUP/libdrm.2.dylib"
+ WORK=$(mktemp -d /Library/GPUBundles/.latitude-windowserver.XXXXXX)
+ # Capture every file before changing any runtime component.
+-for file in "$HELPER" "$LOADER"; do
++for file in "$HELPER" "$LOADER" "$IDENTITY"; do
+   if [ -e "$file" ]; then cp -p "$file" "$BACKUP/$(basename "$file")"; else touch "$BACKUP/$(basename "$file").absent"; fi
+ done
+ changed=0
+@@ -83,7 +85,7 @@
+       restore_failed=1
+       echo "Kernel rollback needs attention; retained work: $WORK; backup: $BACKUP"
+     fi
+-    for file in "$HELPER" "$LOADER"; do
++    for file in "$HELPER" "$LOADER" "$IDENTITY"; do
+       name=$(basename "$file")
+       if [ -f "$BACKUP/$name.absent" ]; then rm -f "$file"; else cp -p "$BACKUP/$name" "$file"; fi
+     done
+@@ -115,7 +117,7 @@
+ codesign --verify --strict "$DEST"
+ cmp -s "$HERE/WindowServerPlugin/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver" "$DEST/Contents/MacOS/NVMTLDriver"
+ ditto "$WORK/previous.bundle" "$BACKUP/NVMTLDriver.bundle"
+-for file in "$HELPER" "$LOADER"; do
++for file in "$HELPER" "$LOADER" "$IDENTITY"; do
+   cp "$HERE/Library/NullMoth/$(basename "$file")" "$file.new"
+   chown root:wheel "$file.new"
+   chmod 755 "$file.new"
+@@ -123,10 +125,11 @@
+   cmp -s "$HERE/Library/NullMoth/$(basename "$file")" "$file"
+ done
+ codesign --verify --strict "$HELPER"
++codesign --verify --strict "$IDENTITY"
+ "$HELPER" prepare
+ commit_windowserver_kernel
+ "$HELPER" stage installer-ready scanout-reservation-1.0.15 0
+-shasum -a 256 "$HELPER" "$LOADER" > "$REPORT/installed-capture-tools.txt"
++shasum -a 256 "$HELPER" "$LOADER" "$IDENTITY" > "$REPORT/installed-capture-tools.txt"
+ shasum -a 256 "$DEST/Contents/MacOS/NVMTLDriver" > "$REPORT/installed-plugin.txt"
+ shasum -a 256 "$TRANSPORT" > "$REPORT/installed-transport.txt"
+ printf '%s\n' "$BACKUP" > "$REPORT/backup.txt"
+@@ -138,7 +141,7 @@
+ nvram nullmoth-panel-once >> "$REPORT/armed-markers.txt"
+ success=1
+ echo "WindowServer scanout-reservation-1.0.15 installed. Backup: $BACKUP"
+-echo 'Includes NMXGPU1.0.15: validated firmware scanout prefix reserved; remaining stolen memory restored for i915. Completion-context correction retained. LatitudeMTLFB0.2.4 retained. Hardware desktop success remains unverified; reboot required.'
++echo 'Includes NMXGPU1.0.15: validated firmware scanout prefix reserved; remaining stolen memory restored for i915. Completion-context correction retained. LatitudeMTLFB0.2.5 publishes driver-queried PCI model and shared-memory capacity. Reporting candidate needs next-boot validation.'
+ echo 'Metal plugin0.3.6: corrected MTL unified-memory identity, heap diagnostics, unsupported host-import attempts removed. Name and memory reporting use Vulkan hardware queries; no OpenCore name or VRAM override.'
+ echo 'Includes WindowServer IOKit transport correction: denied writable render opens use an IOKit token; device identity uses the established DRM file. Startup ioctl results captured.'
+ echo 'ONE desktop boot armed. Reboot through this USB once when ready.'
+--- a/latitude-desktop/Library/NullMoth/load-panel-framebuffer.sh
++++ b/latitude-desktop/Library/NullMoth/load-panel-framebuffer.sh
+@@ -3,7 +3,7 @@
+ J=/Library/NullMoth/latitude-desktop-journal
+ stage() { "$J" stage "$1" "${2:-}" "${3:-0}" || echo "Journal stage failed: $1"; }
+ # Preserve the pre-created attempt file across fallback boots; each record has a boot UUID.
+-stage loader-start candidate0.3.5
++stage loader-start registry-report0.2.5
+ "$J" watch 120 >/dev/null 2>&1 &
+ journal_child=$!
+ bounded() {
+@@ -98,6 +98,18 @@
+ result=$?
+ stage framebuffer-load-end '' "$result"
+ echo "Framebuffer boot-load exit=$result"
++# Query-only Vulkan enumeration: no device/queue/allocation/rendering tests.
++# Do not delay framebuffer startup or change its result on reporting failure.
++if [ "$result" = 0 ]; then
++  IDLOG=/Library/Logs/LatitudeGPUIdentity.log
++  [ ! -f "$IDLOG" ] || mv -f "$IDLOG" "$IDLOG.previous"
++  { date; sysctl kern.boottime; } > "$IDLOG"
++  stage gpu-identity-begin
++  bounded 20 /Library/NullMoth/latitude-gpu-identity >> "$IDLOG" 2>&1
++  identity_result=$?
++  stage gpu-identity-end '' "$identity_result"
++  "$J" flush "$IDLOG" || true
++fi
+ wait "$stream_child"; stream_result=$?; stream_child=''
+ stage capture-end '' "$stream_result"
+ wait "$snapshot_child" 2>/dev/null; snapshot_child=''
+--- a/desktop-sources/collect-desktop-failure.sh
++++ b/desktop-sources/collect-desktop-failure.sh
+@@ -50,7 +50,7 @@
+   shasum -a 256 /Library/GPUBundles/nvmtl/libdrm.2.dylib > "$OUT/current-installed-transport-sha256.txt" 2>&1
+ fi
+ mkdir -p "$OUT/retained-boot-files"
+-for saved in LatitudeDesktopEarly.log LatitudeDesktopEarly.log.previous LatitudeDesktopAttempt.trace LatitudeDesktopAttempt.trace.previous LatitudeWindowServerSample.txt LatitudeWindowServerSample.txt.previous LatitudeWindowServerSample.stderr.txt LatitudeWindowServerSample.stderr.txt.previous LatitudeDesktopLive.log LatitudeDesktopLive.log.previous LatitudeDesktopRegistry.log LatitudeDesktopRegistry.log.previous LatitudePanelLoad.log; do
++for saved in LatitudeGPUIdentity.log LatitudeGPUIdentity.log.previous LatitudeDesktopEarly.log LatitudeDesktopEarly.log.previous LatitudeDesktopAttempt.trace LatitudeDesktopAttempt.trace.previous LatitudeWindowServerSample.txt LatitudeWindowServerSample.txt.previous LatitudeWindowServerSample.stderr.txt LatitudeWindowServerSample.stderr.txt.previous LatitudeDesktopLive.log LatitudeDesktopLive.log.previous LatitudeDesktopRegistry.log LatitudeDesktopRegistry.log.previous LatitudePanelLoad.log; do
+   if [ -f "/Library/Logs/$saved" ]; then
+     if cp -p "/Library/Logs/$saved" "$OUT/retained-boot-files/$saved"; then
+       stat -f '%Sm %z %N' "/Library/Logs/$saved" >> "$OUT/retained-files-status.txt"

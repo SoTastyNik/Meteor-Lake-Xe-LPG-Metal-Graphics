@@ -83,7 +83,7 @@ extern uint64_t (*nvmtl_res2_evict_hook)(uint64_t want);
 #include "nvmtl_probe_controls.h"
 __attribute__((constructor)) static void nvmtl_conf_knobs(void)
 {
-    nvmtl_desktop_trace("plugin-constructor","candidate0.3.5",0);
+    nvmtl_desktop_trace("plugin-constructor","candidate0.3.7",0);
 #if NVMTL_RELEASE
     { extern char **environ; char *names[256]; unsigned n = 0;
       const int probe=nvmtl_probe_controls_enabled(getprogname(),getenv("NVMTL_DIAGNOSTIC_STDERR"));

@@ -1,0 +1,104 @@
+ninja: Entering directory `build-tree/mesa-build'
+[1/54] Generating src/git_sha1.h with a custom command
+[2/50] Generating src/intel/blorp/blorp_shaders.spv with a custom command
+[3/50] Generating src/intel/blorp/blorp_shaders.cpp with a custom command
+[4/50] Generating src/intel/shaders/intel_gfx80_shaders.spv with a custom command
+[5/50] Generating src/intel/shaders/intel_gfx120_shaders.spv with a custom command
+[6/50] Generating src/intel/shaders/intel_gfx110_shaders.spv with a custom command
+[7/50] Generating src/intel/shaders/intel_gfx80_shaders_binding.cpp with a custom command
+[8/50] Generating src/intel/shaders/intel_gfx90_shaders.spv with a custom command
+[9/50] Generating src/intel/shaders/intel_gfx125_shaders.spv with a custom command
+[10/50] Generating src/intel/shaders/intel_gfx350_shaders.spv with a custom command
+[11/50] Generating src/intel/shaders/intel_gfx300_shaders.spv with a custom command
+[12/50] Generating src/intel/shaders/intel_gfx120_shaders_binding.cpp with a custom command
+[13/50] Generating src/intel/shaders/intel_gfx200_shaders.spv with a custom command
+[14/50] Generating src/intel/shaders/intel_gfx110_shaders_binding.cpp with a custom command
+[15/50] Generating src/intel/shaders/intel_gfx90_shaders_binding.cpp with a custom command
+[16/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_indirect_copy.c.o
+[17/50] Generating src/intel/shaders/intel_gfx125_shaders_binding.cpp with a custom command
+[18/50] Generating src/intel/shaders/intel_gfx350_shaders_binding.cpp with a custom command
+[19/50] Generating src/intel/shaders/intel_gfx200_shaders_binding.cpp with a custom command
+[20/50] Generating src/intel/shaders/intel_gfx300_shaders_binding.cpp with a custom command
+[21/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_clear.c.o
+[22/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_blit.c.o
+[23/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx80_shaders_binding.cpp.o
+[24/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx125_shaders_binding.cpp.o
+[25/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx350_shaders_binding.cpp.o
+[26/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx110_shaders_binding.cpp.o
+[27/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx200_shaders_binding.cpp.o
+[28/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx90_shaders_binding.cpp.o
+[29/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx120_shaders_binding.cpp.o
+[30/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx300_shaders_binding.cpp.o
+[31/50] Compiling C++ object src/intel/blorp/libblorp.a.p/meson-generated_.._blorp_shaders.cpp.o
+[32/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver90.a.p/genX_internal_kernels.c.o
+[33/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver110.a.p/genX_internal_kernels.c.o
+[34/50] Linking static target src/intel/shaders/libintel_shaders.a
+[35/50] Linking static target src/intel/blorp/libblorp.a
+[36/50] Linking static target src/intel/vulkan/libanv_per_hw_ver90.a
+[37/50] Linking static target src/intel/vulkan/libanv_per_hw_ver110.a
+[38/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver120.a.p/genX_internal_kernels.c.o
+[39/50] Linking static target src/intel/vulkan/libanv_per_hw_ver120.a
+[40/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver125.a.p/genX_internal_kernels.c.o
+[41/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver200.a.p/genX_internal_kernels.c.o
+[42/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver350.a.p/genX_internal_kernels.c.o
+[43/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver300.a.p/genX_internal_kernels.c.o
+[44/50] Linking static target src/intel/vulkan/libanv_per_hw_ver125.a
+[45/50] Linking static target src/intel/vulkan/libanv_per_hw_ver200.a
+[46/50] Linking static target src/intel/vulkan/libanv_per_hw_ver350.a
+[47/50] Linking static target src/intel/vulkan/libanv_per_hw_ver300.a
+[48/50] Compiling C object src/intel/vulkan/libanv_common.a.p/anv_physical_device.c.o
+[49/50] Linking static target src/intel/vulkan/libanv_common.a
+[50/50] Linking target src/intel/vulkan/libvulkan_intel.dylib
+ld: warning: ignoring duplicate libraries: '-lexpat', '-lz'
+ninja: Entering directory `build-tree/mesa-build'
+[1/55] Generating src/git_sha1.h with a custom command
+[2/50] Generating src/intel/blorp/blorp_shaders.spv with a custom command
+[3/50] Generating src/intel/blorp/blorp_shaders.cpp with a custom command
+[4/50] Generating src/intel/shaders/intel_gfx80_shaders.spv with a custom command
+[5/50] Generating src/intel/shaders/intel_gfx120_shaders.spv with a custom command
+[6/50] Generating src/intel/shaders/intel_gfx80_shaders_binding.cpp with a custom command
+[7/50] Generating src/intel/shaders/intel_gfx110_shaders.spv with a custom command
+[8/50] Generating src/intel/shaders/intel_gfx90_shaders.spv with a custom command
+[9/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_indirect_copy.c.o
+[10/50] Generating src/intel/shaders/intel_gfx350_shaders.spv with a custom command
+[11/50] Generating src/intel/shaders/intel_gfx125_shaders.spv with a custom command
+[12/50] Generating src/intel/shaders/intel_gfx110_shaders_binding.cpp with a custom command
+[13/50] Generating src/intel/shaders/intel_gfx120_shaders_binding.cpp with a custom command
+[14/50] Generating src/intel/shaders/intel_gfx300_shaders.spv with a custom command
+[15/50] Generating src/intel/shaders/intel_gfx200_shaders.spv with a custom command
+[16/50] Generating src/intel/shaders/intel_gfx90_shaders_binding.cpp with a custom command
+[17/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_clear.c.o
+[18/50] Generating src/intel/shaders/intel_gfx350_shaders_binding.cpp with a custom command
+[19/50] Generating src/intel/shaders/intel_gfx125_shaders_binding.cpp with a custom command
+[20/50] Generating src/intel/shaders/intel_gfx300_shaders_binding.cpp with a custom command
+[21/50] Generating src/intel/shaders/intel_gfx200_shaders_binding.cpp with a custom command
+[22/50] Compiling C object src/intel/blorp/libblorp.a.p/blorp_blit.c.o
+[23/50] Compiling C++ object src/intel/blorp/libblorp.a.p/meson-generated_.._blorp_shaders.cpp.o
+[24/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx300_shaders_binding.cpp.o
+[25/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx80_shaders_binding.cpp.o
+[26/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx90_shaders_binding.cpp.o
+[27/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx110_shaders_binding.cpp.o
+[28/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx125_shaders_binding.cpp.o
+[29/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx200_shaders_binding.cpp.o
+[30/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx120_shaders_binding.cpp.o
+[31/50] Compiling C++ object src/intel/shaders/libintel_shaders.a.p/meson-generated_.._intel_gfx350_shaders_binding.cpp.o
+[32/50] Linking static target src/intel/blorp/libblorp.a
+[33/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver90.a.p/genX_internal_kernels.c.o
+[34/50] Linking static target src/intel/shaders/libintel_shaders.a
+[35/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver110.a.p/genX_internal_kernels.c.o
+[36/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver120.a.p/genX_internal_kernels.c.o
+[37/50] Linking static target src/intel/vulkan/libanv_per_hw_ver90.a
+[38/50] Linking static target src/intel/vulkan/libanv_per_hw_ver110.a
+[39/50] Linking static target src/intel/vulkan/libanv_per_hw_ver120.a
+[40/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver125.a.p/genX_internal_kernels.c.o
+[41/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver300.a.p/genX_internal_kernels.c.o
+[42/50] Linking static target src/intel/vulkan/libanv_per_hw_ver125.a
+[43/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver350.a.p/genX_internal_kernels.c.o
+[44/50] Compiling C object src/intel/vulkan/libanv_per_hw_ver200.a.p/genX_internal_kernels.c.o
+[45/50] Linking static target src/intel/vulkan/libanv_per_hw_ver300.a
+[46/50] Linking static target src/intel/vulkan/libanv_per_hw_ver350.a
+[47/50] Linking static target src/intel/vulkan/libanv_per_hw_ver200.a
+[48/50] Compiling C object src/intel/vulkan/libanv_common.a.p/anv_device.c.o
+[49/50] Linking static target src/intel/vulkan/libanv_common.a
+[50/50] Linking target src/intel/vulkan/libvulkan_intel.dylib
+ld: warning: ignoring duplicate libraries: '-lexpat', '-lz'

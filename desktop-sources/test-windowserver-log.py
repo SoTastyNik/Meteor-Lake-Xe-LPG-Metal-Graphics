@@ -27,6 +27,8 @@ post='''int main(void){
  unsigned before=output;process="normal-app";nvmtl_desktop_trace("should-not-appear","",0);assert(output==before);
  for(int i=0;i<24;i++)nvlog("first-submit: app normal throttle %d",i);assert(first==32);
  for(int i=0;i<24;i++)nvlog("vk: repeated FAIL %d",i);assert(output==before+16);
+ before=output;nvlog("memory-report0.3.6: heap 0 bytes 8589934592 flags 1");assert(output==before+1);
+ before=output;nvlog("pipeline-cache0.3.7: graphics result=0 elapsed_us=200 cache=1");assert(output==before+1);
  puts("PASS actual release logger: all24 finite desktop submissions survive site throttle,256-stage cap, non-WindowServer trace disabled, application/failure throttling preserved; no file-write path");}
 '''
 with tempfile.TemporaryDirectory() as d:

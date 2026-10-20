@@ -130,6 +130,10 @@ static int g_atomic64_buffer, g_atomic64_shared;
 static int g_coop_matrix, g_float16, g_vulkan_memory_model, g_vulkan_memory_device_scope, g_storage16, g_uniform_storage16;
 static int g_bindless;
 static VkPhysicalDeviceMemoryProperties g_memp;
+#include "nvmtl_memory_identity.h"
+static int g_integrated_memory;
+static VkPipelineCache g_pipeline_cache;
+#include "nvmtl_pipeline_cache.h"
 static uint32_t g_qfam = UINT32_MAX;
 static uint32_t g_timestamp_bits;
 static PFN_vkGetCalibratedTimestampsEXT pvkGetCalibratedTimestampsEXT;
@@ -406,7 +410,11 @@ static VkResult nvmtl_opaque_CreateGraphicsPipelines(VkDevice dev, VkPipelineCac
     VkPipeline handle = VK_NULL_HANDLE;
     VkGraphicsPipelineCreateInfo pinfo;
     if (g_pstat) { pinfo = *info; pinfo.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR; info = &pinfo; }
+    cache=nvmtl_pipeline_cache_pick(dev,g_dev,cache,g_pipeline_cache);
+    uint64_t compile_start=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     VkResult result = pvkCreateGraphicsPipelines(dev, cache, count, info, allocator, &handle);
+    if(g_pipeline_cache)nvlog("pipeline-cache0.3.7: graphics result=%d elapsed_us=%llu cache=%d",result,
+                             (unsigned long long)((clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)-compile_start)/1000),cache!=VK_NULL_HANDLE);
     if (result == VK_SUCCESS) *out = handle;
     else if (handle) pvkDestroyPipeline(dev, handle, allocator);
     return result;
@@ -767,6 +775,20 @@ static int nvmtl_vk_initialize(void)
             g_lim.maxImageArrayLayers, g_lim.maxComputeSharedMemorySize, g_lim.maxComputeWorkGroupSize[0], g_lim.maxComputeWorkGroupSize[1],
             g_lim.maxComputeWorkGroupSize[2], g_lim.maxComputeWorkGroupInvocations, g_sm_count); }
     pvkGetPhysicalDeviceMemoryProperties(g_pdev, &g_memp);
+    if (!nvmtl_memory_properties_valid(&g_memp)) {
+        nvlog("vk: invalid memory properties: heaps %u types %u; refusing device initialization",
+              g_memp.memoryHeapCount, g_memp.memoryTypeCount);
+        return -1;
+    }
+    g_integrated_memory = nvmtl_mtl_unified_identity(pp.vendorID, pp.deviceID, pp.deviceType);
+    nvlog("memory-report0.3.6: physical type %u unified %d heaps %u types %u",
+          pp.deviceType, g_integrated_memory, g_memp.memoryHeapCount, g_memp.memoryTypeCount);
+    for (uint32_t i = 0; i < g_memp.memoryHeapCount; i++)
+        nvlog("memory-report0.3.6: heap %u bytes %llu flags 0x%x", i,
+              (unsigned long long)g_memp.memoryHeaps[i].size, g_memp.memoryHeaps[i].flags);
+    for (uint32_t i = 0; i < g_memp.memoryTypeCount; i++)
+        nvlog("memory-report0.3.6: type %u heap %u flags 0x%x", i,
+              g_memp.memoryTypes[i].heapIndex, g_memp.memoryTypes[i].propertyFlags);
 
     uint32_t qn = 0; pvkGetPhysicalDeviceQueueFamilyProperties(g_pdev, &qn, NULL);
     VkQueueFamilyProperties qf[16]; if (qn > 16) qn = 16; pvkGetPhysicalDeviceQueueFamilyProperties(g_pdev, &qn, qf);
@@ -808,6 +830,10 @@ static int nvmtl_vk_initialize(void)
     }
     g_dyn3 = have[0]; g_clip = have[0] && have[1]; g_budget_ext = have[2]; g_rt = have[3] && have[4] && have[5];
     g_host_import = have[6];
+    if (nvmtl_mtl_userptr_unavailable(pp.vendorID, pp.deviceID)) {
+        g_host_import = 0;
+        nvlog("memory-report0.3.6: MTL i915 userptr unavailable in this port; using the existing copy path without attempted host imports");
+    }
     g_linmod = have[7];
     g_extfd = have[8];
     { const char *e = getenv("NVMTL_PSTAT"); g_pstat = have[13] && e && *e == '1'; }
@@ -960,6 +986,12 @@ static int nvmtl_vk_initialize(void)
                                1, &qci, 0, NULL, next, next ? exts : NULL, &enabled };
     VKCK(pvkCreateDevice(g_pdev, &dci, NULL, &g_dev), "vkCreateDevice");
     DEVICE_FNS(LOAD_D)
+    {
+        PFN_vkCreatePipelineCache create_cache=(PFN_vkCreatePipelineCache)pvkGetDeviceProcAddr(g_dev,"vkCreatePipelineCache");
+        int enabled=g_integrated_memory && !strcmp(getprogname(),"WindowServer");
+        VkResult cr=nvmtl_pipeline_cache_start(g_dev,enabled,create_cache,&g_pipeline_cache);
+        if(enabled)nvlog("pipeline-cache0.3.7: init result=%d enabled=%d (device-lifetime, internally synchronized)",cr,g_pipeline_cache!=VK_NULL_HANDLE);
+    }
     if (g_pstat) { p_pstat_props = (PFN_vkGetPipelineExecutablePropertiesKHR)pvkGetDeviceProcAddr(g_dev, "vkGetPipelineExecutablePropertiesKHR");
                    p_pstat_stats = (PFN_vkGetPipelineExecutableStatisticsKHR)pvkGetDeviceProcAddr(g_dev, "vkGetPipelineExecutableStatisticsKHR");
                    if (!p_pstat_props || !p_pstat_stats) g_pstat = 0;
@@ -1578,6 +1610,10 @@ uint64_t nvmtl_vk_vram_bytes(void)
         if ((g_memp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && g_memp.memoryHeaps[i].size > best) best = g_memp.memoryHeaps[i].size;
     return best;
 }
+int nvmtl_vk_has_unified_memory(void)
+{
+    return nvmtl_vk_init() == 0 && g_integrated_memory;
+}
 void nvmtl_vk_mem_split(uint64_t *vram, uint64_t *sys) { if (vram) *vram = g_vram_bytes; if (sys) *sys = g_sys_bytes; }
 static int nvmtl_vk_vram_budget(uint64_t *budget, uint64_t *used)
 {
@@ -1679,7 +1715,16 @@ static int nvmtl_vk_vram_wall0(uint64_t want, uint64_t *freev_out, uint64_t *bud
 }
 uint64_t nvmtl_vk_working_set(void)
 {
-    uint64_t b = 0, u = 0; if (nvmtl_vk_init()) return 2ull << 30;
+    uint64_t b = 0, u = 0; if (nvmtl_vk_init()) return 0;
+    if (g_integrated_memory) {
+        const int measured = nvmtl_vk_vram_budget(&b, &u);
+        const uint64_t heap = nvmtl_vk_vram_bytes();
+        const uint64_t limit = nvmtl_shared_working_set(heap, b);
+        nvlog("memory-report0.3.6: shared heap=%llu budget=%llu usage=%llu recommended=%llu source=%s",
+              (unsigned long long)heap, (unsigned long long)b, (unsigned long long)u,
+              (unsigned long long)limit, measured ? "VK_EXT_memory_budget" : "existing 70-percent heap estimate");
+        return limit;
+    }
     { static int res2 = -1; if (res2 < 0) { const char *e = getenv("NVMTL_NO_RES2"), *w = getenv("NVMTL_RES2_WS");
           res2 = !(w && w[0] == '0') && g_sparse && !(e && e[0] == '1'); }
       if (res2 && nvmtl_vk_vram_bytes()) return nvmtl_vk_vram_bytes(); }

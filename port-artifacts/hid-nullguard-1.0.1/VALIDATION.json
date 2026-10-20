@@ -1,0 +1,28 @@
+{
+  "version": "1.0.1",
+  "uuid": "D7FE79DC-8031-304F-8FBC-E413C10B56F7",
+  "sha256": "862fb5d5620b8e438572ce3e5e9aeca746af2f012340d2bb4e19bb39e560a36c",
+  "original_sha256": "1ba930b05d5c786b97353a63767fab090125d8d3e665443db4e07e46ab8b2e53",
+  "core_commit": "e3ac3ed207170c39db88d6a67a76cc9fd3a1895a",
+  "hid_commit": "a478fd605043989269584a73e23a15cc78994f5b",
+  "gpio_header_commit": "733dc8063f5ef07288a7bc648fff5348df6d8f65",
+  "tests": [
+    "original null dereference reproduced with ASan/UBSan",
+    "actual patched function: 200000 modeled cases pass",
+    "original public symbols preserved; disassembly null branch verified",
+    "loader/collector mocked OS regressions pass"
+  ],
+  "new_imports": [
+    "IOHIDEventService::newUserClient",
+    "IOHIDEventService::dispatchBiometricEvent"
+  ],
+  "hardware_verified": false,
+  "full_gpu_suite_rerun": false,
+  "full_windowserver_acceleration_verified": false,
+  "unchanged_gpu_payloads": {
+    "WindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU": "80c3fe8bfa639a1f6cd52a29ab485695d4f18ae289f70e39bbc4b021fb0ab0f6",
+    "WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB": "495ed4cce9ece3fda3fd038e82031ab11ca1b8167c56f7bf7f66d13b8f2ed3b7",
+    "Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver": "153afd4b5a34008b2c27307dee646798c2180ab68a5e536d0901445d34a7fc2c"
+  },
+  "opencore_config_sha256": "81fd91f71161cfb9d04b3a70d9b0df475b23bd405706def77c0775858df27e08"
+}

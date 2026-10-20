@@ -1,0 +1,36 @@
+{
+  "plugin_version": "0.3.6",
+  "uuid": "966CC5F4-D571-31CB-A739-F9137CC6D96D",
+  "sha256": "35f7b2e5c08c764d5aa556682ff06bba44c5f20e594daadccd36116b3e602f4e",
+  "hardware_verified": false,
+  "efi_unchanged_sha256": "81fd91f71161cfb9d04b3a70d9b0df475b23bd405706def77c0775858df27e08",
+  "gpu_name_source": "VkPhysicalDeviceProperties.deviceName, returned directly for scoped integrated GPU",
+  "shared_capacity_source": "VkPhysicalDeviceMemoryProperties actual DEVICE_LOCAL heap; never forced to 1536/2048MB",
+  "recommended_working_set": "VK_EXT_memory_budget if available; otherwise existing conservative 70-percent queried-heap estimate, explicitly labelled; bounded by queried heap and no fixed 1/2GiB fallback",
+  "dedicated_memory_for_UMA": 0,
+  "system_information_Display_7MB_fixed": false,
+  "retained_payloads": {
+    "WindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU": "81981def42d7761c68a12fc70ea57ea7f48b8eaf6628578739c4a859977ec037",
+    "PreviousWindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU": "80c3fe8bfa639a1f6cd52a29ab485695d4f18ae289f70e39bbc4b021fb0ab0f6",
+    "WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB": "495ed4cce9ece3fda3fd038e82031ab11ca1b8167c56f7bf7f66d13b8f2ed3b7",
+    "Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver": "153afd4b5a34008b2c27307dee646798c2180ab68a5e536d0901445d34a7fc2c",
+    "WindowServerTransport/libdrm.2.dylib": "2e0eb9f1cf0105aa22d24fc7368c78f30cda645ef9110c7dfeeed7baf3ca2c5f",
+    "Library/GPUBundles/nvmtl/libdrm.2.dylib": "8053e30835b7dc065e594522e34531f46e14d8d0aa7f242b4e84c967c6a3fda1",
+    "Library/Extensions/NMXAccel.kext/Contents/MacOS/NMXAccel": "9359839810f6e345b15ae9221f4cf3aacd2b0a497f23bb9bb118100df3421361"
+  },
+  "checks": [
+    "three plugin build variants pass",
+    "ASan/UBSan heap/type validation, shared-budget bounds and target scope pass",
+    "release logger pass",
+    "installer rollback/KC/one-shot fixtures pass",
+    "collector crash preservation and bounded display query pass",
+    "baseline exports preserved; no added external imports",
+    "code signature verified"
+  ],
+  "full_gpu_suite_rerun": false,
+  "limits": [
+    "No target validation yet. System Information obtains framebuffer identity through a separate registry path; this candidate does not bridge Vulkan identity into that path.",
+    "The physical scanout mapping remains its real size. No OpenCore VRAM or model injection.",
+    "Unsupported MTL userptr imports bypassed using the existing copy path; no zero-copy implementation or promise of curing CA timeouts."
+  ]
+}

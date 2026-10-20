@@ -18,6 +18,24 @@
 #include "gt/intel_region_lmem.h"
 #include "i915_drv.h"
 #include "i915_gem_stolen.h"
+
+#ifdef NMXKPI
+extern int nmx_xnu_firmware_scanout(u64 *base, u64 *size);
+
+static int latitude_stolen_start(u64 dsm, u64 usable, u64 base, u64 size,
+				u64 alignment, u64 *start)
+{
+	u64 end;
+	if (!dsm || !size || !alignment || (alignment & (alignment - 1)) ||
+	    base < dsm || size > usable || base - dsm > usable - size)
+		return -ENOSPC;
+	end = base - dsm + size;
+	if (end > U64_MAX - (alignment - 1))
+		return -ENOSPC;
+	*start = ALIGN(end, alignment);
+	return *start < usable ? 0 : -ENOSPC;
+}
+#endif
 #include "i915_pci.h"
 #include "i915_reg.h"
 #include "i915_utils.h"
@@ -515,6 +533,7 @@ bail_out:
 static int i915_gem_init_stolen(struct intel_memory_region *mem)
 {
 	struct drm_i915_private *i915 = mem->i915;
+	u64 allocator_start = 0;
 
 	mutex_init(&i915->mm.stolen_lock);
 
@@ -560,7 +579,23 @@ static int i915_gem_init_stolen(struct intel_memory_region *mem)
 		return -ENOSPC;
 
 	/* Basic memrange allocator for stolen space. */
-	drm_mm_init(&i915->mm.stolen, 0, i915->dsm.usable_size);
+#ifdef NMXKPI
+	if (INTEL_DEVID(i915) == 0x7d45) {
+		u64 base, size;
+		u64 dsm = intel_uncore_read64(&i915->uncore, GEN6_DSMBASE) & GEN11_BDSM_MASK;
+		if (nmx_xnu_firmware_scanout(&base, &size) ||
+		    latitude_stolen_start(dsm, i915->dsm.usable_size, base, size,
+					  max_t(u64, SZ_64K, mem->min_page_size),
+					  &allocator_start)) {
+			drm_err(&i915->drm, "Latitude MTL: cannot bound firmware scanout inside DSM; refusing stolen allocator\n");
+			return -ENOSPC;
+		}
+		drm_info(&i915->drm, "Latitude MTL: firmware scanout phys=0x%llx size=0x%llx reserved stolen prefix=0x%llx usable-end=0x%llx\n",
+			 base, size, allocator_start, (u64)i915->dsm.usable_size);
+	}
+#endif
+	drm_mm_init(&i915->mm.stolen, allocator_start,
+		    i915->dsm.usable_size - allocator_start);
 
 	/*
 	 * Access to stolen lmem beyond certain size for MTL A0 stepping

@@ -5573,12 +5573,18 @@ static int nmx_uc_call(io_connect_t conn, unsigned long request, void *arg)
     kern_return_t kr = IOConnectCallMethod(conn, 0, &cmd, 1, (request & IOC_IN) ? arg : NULL,
                                            (request & IOC_IN) ? len : 0, &err, &nout,
                                            (request & IOC_OUT) ? arg : NULL, &outlen);
+    static unsigned startup_calls;
+    if (__atomic_fetch_add(&startup_calls, 1, __ATOMIC_RELAXED) < 64)
+        os_log(nmx_log(), "DRM startup ioctl 0x%{public}lx kr=0x%{public}x errno=%{public}llu output=%{public}zu", request, kr, (unsigned long long)err, outlen);
     if (kr != KERN_SUCCESS) {
         os_log_error(nmx_log(), "ioctl 0x%{public}lx transport failure: kr=0x%{public}x output-count=%{public}u", request, kr, nout);
         errno = EIO;
         return -1;
     }
     if (err) {
+        static unsigned reported;
+        if (__atomic_fetch_add(&reported, 1, __ATOMIC_RELAXED) < 64)
+            os_log_error(nmx_log(), "DRM ioctl 0x%{public}lx kernel errno=%{public}llu", request, (unsigned long long)err);
         errno = (int)err;
         return -1;
     }
@@ -5693,6 +5699,11 @@ drm_public int drmNmxOpen(const char *path, int flags)
 
     if (fd >= 0 || (errno != EPERM && errno != EACCES))
         return fd;
+    /* A denied writable render open must use one IOKit DRM file throughout
+     * initialization. A read-only descriptor sends later identity queries
+     * back into devfs even after enumeration used the IOKit fallback. */
+    if ((flags & O_ACCMODE) != O_RDONLY && !strcmp(path, NMX_UC_NODE))
+        return nmx_token_open(flags & O_CLOEXEC);
     if ((flags & O_ACCMODE) != O_RDONLY && (fd = open(path, (flags & ~O_ACCMODE) | O_RDONLY)) >= 0)
         return fd;
     if ((errno != EPERM && errno != EACCES) || strcmp(path, NMX_UC_NODE) != 0)
@@ -5766,8 +5777,9 @@ static int drm_darwin_token_type(int fd)
 
 static int drm_darwin_token_device(int fd, uint32_t flags, drmDevicePtr *device)
 {
-    (void)flags;
-    if (drm_darwin_token_type(fd) != DRM_NODE_RENDER) return -ENOENT;
+    if (!device || drm_device_validate_flags(flags)) return -EINVAL;
+    /* A real character fd can also have switched after an ioctl denial.
+     * Query its established DRM file instead of rediscovering via devfs. */
     io_connect_t conn = nmx_uc_get(fd, 0);
     return conn ? drm_darwin_uc_device(conn, device) : -ENOENT;
 }

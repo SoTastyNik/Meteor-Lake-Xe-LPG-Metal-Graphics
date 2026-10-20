@@ -10,5 +10,12 @@ backups/desktop-0.2.6-before/package/Library/GPUBundles/NVMTLDriver.bundle/Conte
 toolchain/rustup/toolchains/stable-aarch64-apple-darwin/lib/libLLVM.dylib
 nullmoth-nvidia-2.0.2.tar.gz
 
+# Regenerable installed runtime and distribution snapshots. These contain build
+# products (including >100 MB libLLVM.dylib copies) and are reproduced by the
+# build/install step, not tracked in the repo.
+checkpoints/
+latitude-desktop/WindowServerPlugin/
+latitude-desktop/Library/
+
 # macOS cruft
 .DS_Store

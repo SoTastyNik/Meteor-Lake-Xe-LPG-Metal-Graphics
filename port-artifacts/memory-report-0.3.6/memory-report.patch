@@ -1,0 +1,127 @@
+--- a/NVMTLDevice.m
++++ b/NVMTLDevice.m
+@@ -549,7 +549,9 @@
+     static int vk = 0; if (!vk) { vk = 1; nvmtl_vk_init(); }
+     nvmtl_amgl_caps(__builtin_return_address(0));
+     const char *vkname = nvmtl_vk_device_name();
+-    NSString *full = [NSString stringWithUTF8String:(vkname ? vkname : "NVIDIA GPU")];
++    NSString *full = [NSString stringWithUTF8String:(vkname ? vkname : "(GPU identity unavailable)")];
++    /* UMA identity comes from the selected Vulkan device, not OpenCore branding. */
++    if (nvmtl_vk_has_unified_memory()) return full;
+     NSRange cut = [full rangeOfString:@" (NVK "];
+     NSString *marketing = (cut.location != NSNotFound) ? [full substringToIndex:cut.location] : full;
+     return [NSString stringWithFormat:@"%@ (NVMTL over %@)", marketing, full];
+@@ -1979,8 +1981,8 @@
+     nvlog("recommendedMaxWorkingSetSize -> %llu MB", (unsigned long long)(ws >> 20));
+     return ws;
+ }
+-- (BOOL)hasUnifiedMemory { return NO; }
+-- (uint64_t)dedicatedMemorySize { return nvmtl_vk_vram_bytes(); }
++- (BOOL)hasUnifiedMemory { return nvmtl_vk_has_unified_memory() ? YES : NO; }
++- (uint64_t)dedicatedMemorySize { return nvmtl_vk_has_unified_memory() ? 0 : nvmtl_vk_vram_bytes(); }
+ 
+ - (BOOL)nvmtlSampleCountOK:(NSUInteger)n {
+     if (n == 0 || (n & (n - 1)) != 0 || n > 64) return NO;
+--- a/nvmtl_vk.c
++++ b/nvmtl_vk.c
+@@ -130,6 +130,8 @@
+ static int g_coop_matrix, g_float16, g_vulkan_memory_model, g_vulkan_memory_device_scope, g_storage16, g_uniform_storage16;
+ static int g_bindless;
+ static VkPhysicalDeviceMemoryProperties g_memp;
++#include "nvmtl_memory_identity.h"
++static int g_integrated_memory;
+ static uint32_t g_qfam = UINT32_MAX;
+ static uint32_t g_timestamp_bits;
+ static PFN_vkGetCalibratedTimestampsEXT pvkGetCalibratedTimestampsEXT;
+@@ -767,6 +769,20 @@
+             g_lim.maxImageArrayLayers, g_lim.maxComputeSharedMemorySize, g_lim.maxComputeWorkGroupSize[0], g_lim.maxComputeWorkGroupSize[1],
+             g_lim.maxComputeWorkGroupSize[2], g_lim.maxComputeWorkGroupInvocations, g_sm_count); }
+     pvkGetPhysicalDeviceMemoryProperties(g_pdev, &g_memp);
++    if (!nvmtl_memory_properties_valid(&g_memp)) {
++        nvlog("vk: invalid memory properties: heaps %u types %u; refusing device initialization",
++              g_memp.memoryHeapCount, g_memp.memoryTypeCount);
++        return -1;
++    }
++    g_integrated_memory = nvmtl_mtl_unified_identity(pp.vendorID, pp.deviceID, pp.deviceType);
++    nvlog("memory-report0.3.6: physical type %u unified %d heaps %u types %u",
++          pp.deviceType, g_integrated_memory, g_memp.memoryHeapCount, g_memp.memoryTypeCount);
++    for (uint32_t i = 0; i < g_memp.memoryHeapCount; i++)
++        nvlog("memory-report0.3.6: heap %u bytes %llu flags 0x%x", i,
++              (unsigned long long)g_memp.memoryHeaps[i].size, g_memp.memoryHeaps[i].flags);
++    for (uint32_t i = 0; i < g_memp.memoryTypeCount; i++)
++        nvlog("memory-report0.3.6: type %u heap %u flags 0x%x", i,
++              g_memp.memoryTypes[i].heapIndex, g_memp.memoryTypes[i].propertyFlags);
+ 
+     uint32_t qn = 0; pvkGetPhysicalDeviceQueueFamilyProperties(g_pdev, &qn, NULL);
+     VkQueueFamilyProperties qf[16]; if (qn > 16) qn = 16; pvkGetPhysicalDeviceQueueFamilyProperties(g_pdev, &qn, qf);
+@@ -808,6 +824,10 @@
+     }
+     g_dyn3 = have[0]; g_clip = have[0] && have[1]; g_budget_ext = have[2]; g_rt = have[3] && have[4] && have[5];
+     g_host_import = have[6];
++    if (nvmtl_mtl_userptr_unavailable(pp.vendorID, pp.deviceID)) {
++        g_host_import = 0;
++        nvlog("memory-report0.3.6: MTL i915 userptr unavailable in this port; using the existing copy path without attempted host imports");
++    }
+     g_linmod = have[7];
+     g_extfd = have[8];
+     { const char *e = getenv("NVMTL_PSTAT"); g_pstat = have[13] && e && *e == '1'; }
+@@ -1578,6 +1598,10 @@
+         if ((g_memp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && g_memp.memoryHeaps[i].size > best) best = g_memp.memoryHeaps[i].size;
+     return best;
+ }
++int nvmtl_vk_has_unified_memory(void)
++{
++    return nvmtl_vk_init() == 0 && g_integrated_memory;
++}
+ void nvmtl_vk_mem_split(uint64_t *vram, uint64_t *sys) { if (vram) *vram = g_vram_bytes; if (sys) *sys = g_sys_bytes; }
+ static int nvmtl_vk_vram_budget(uint64_t *budget, uint64_t *used)
+ {
+@@ -1679,7 +1703,16 @@
+ }
+ uint64_t nvmtl_vk_working_set(void)
+ {
+-    uint64_t b = 0, u = 0; if (nvmtl_vk_init()) return 2ull << 30;
++    uint64_t b = 0, u = 0; if (nvmtl_vk_init()) return 0;
++    if (g_integrated_memory) {
++        const int measured = nvmtl_vk_vram_budget(&b, &u);
++        const uint64_t heap = nvmtl_vk_vram_bytes();
++        const uint64_t limit = nvmtl_shared_working_set(heap, b);
++        nvlog("memory-report0.3.6: shared heap=%llu budget=%llu usage=%llu recommended=%llu source=%s",
++              (unsigned long long)heap, (unsigned long long)b, (unsigned long long)u,
++              (unsigned long long)limit, measured ? "VK_EXT_memory_budget" : "existing 70-percent heap estimate");
++        return limit;
++    }
+     { static int res2 = -1; if (res2 < 0) { const char *e = getenv("NVMTL_NO_RES2"), *w = getenv("NVMTL_RES2_WS");
+           res2 = !(w && w[0] == '0') && g_sparse && !(e && e[0] == '1'); }
+       if (res2 && nvmtl_vk_vram_bytes()) return nvmtl_vk_vram_bytes(); }
+--- a/nvmtl_vk.h
++++ b/nvmtl_vk.h
+@@ -117,6 +117,7 @@
+ int  nvmtl_vk_cmd_begin_render_ms(nvk_cmdbuf *c, nvk_image *img, nvk_pipeline *p, const float clear[4], uint32_t load, nvk_image *resolve);
+ uint64_t nvmtl_vk_working_set(void);
+ uint64_t nvmtl_vk_vram_bytes(void);
++int nvmtl_vk_has_unified_memory(void);
+ void     nvmtl_vk_mem_split(uint64_t *vram, uint64_t *sys);
+ int  nvmtl_vk_image_create_ms(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, uint32_t samples, nvk_image *out);
+ int  nvmtl_vk_image_create_ms_full(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, uint32_t samples, uint32_t mtl_type, uint32_t layers, nvk_image *out);
+--- a/NVMTLObjects.m
++++ b/NVMTLObjects.m
+@@ -83,7 +83,7 @@
+ #include "nvmtl_probe_controls.h"
+ __attribute__((constructor)) static void nvmtl_conf_knobs(void)
+ {
+-    nvmtl_desktop_trace("plugin-constructor","candidate0.3.5",0);
++    nvmtl_desktop_trace("plugin-constructor","candidate0.3.6",0);
+ #if NVMTL_RELEASE
+     { extern char **environ; char *names[256]; unsigned n = 0;
+       const int probe=nvmtl_probe_controls_enabled(getprogname(),getenv("NVMTL_DIAGNOSTIC_STDERR"));
+--- a/nvmtl_log_failure.h
++++ b/nvmtl_log_failure.h
+@@ -26,6 +26,7 @@
+                     /* a process denied a device: for WindowServer that is the "Failed to create MetalDevice" abort,
+                      * and /tmp/nvmtl.log is gone after the reboot that rescues the machine */
+                     strstr(text, "no device") || strstr(text, "disabling backend") ||
++                    strstr(text, "memory-report0.3.6:") ||
+                     strstr(text, "completion witness missing") || strstr(text, "first-submit:"));
+ }
+ #endif

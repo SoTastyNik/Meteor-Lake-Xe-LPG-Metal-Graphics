@@ -1,0 +1,2 @@
+/var/folders/g5/fvw5_nsx7z19whzmrx5qgmvr0000gn/T/tmpba4_1ds4/old.cpp:34:36: runtime error: member call on null pointer of type 'OSNumber'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /var/folders/g5/fvw5_nsx7z19whzmrx5qgmvr0000gn/T/tmpba4_1ds4/old.cpp:34:36 

@@ -1,0 +1,1 @@
+Verified com.nullmoth.LatitudeMTLFB 0.2.4 UUID=59DA4CD2-AF66-36A4-A364-A6A8E899666A path=/Library/Extensions/LatitudeMTLFB.kext

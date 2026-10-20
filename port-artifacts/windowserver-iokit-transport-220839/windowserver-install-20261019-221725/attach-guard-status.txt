@@ -1,0 +1,1 @@
+No failed-attach marker reported; kernel boot guard remains enabled.

@@ -320,8 +320,7 @@ bool VoodooGPIOIntel::intel_gpio_irq_set_type(unsigned pin, unsigned type) {
 
     value = readl(reg);
 
-    /* Pmode of zero makes sure pin is muxed into the GPIO controller logic */
-    value &= ~(PADCFG0_RXEVCFG_MASK | PADCFG0_RXINV | PADCFG0_PMODE_MASK);
+    value &= ~(PADCFG0_RXEVCFG_MASK | PADCFG0_RXINV);
 
     if ((type & IRQ_TYPE_EDGE_BOTH) == IRQ_TYPE_EDGE_BOTH) {
         value |= PADCFG0_RXEVCFG_EDGE_BOTH << PADCFG0_RXEVCFG_SHIFT;
@@ -697,6 +696,13 @@ bool VoodooGPIOIntel::start(IOService *provider) {
             continue;
         }
         memset(communities[i].pinInterruptRefcons, 0, sizeof(void *) * communities[i].npins);
+
+        communities[i].isActiveCommunity = IONew(bool, 1);
+        if (!communities[i].isActiveCommunity) {
+            IOLog("%s::Error allocating isActiveCommunity for community %d\n", getName(), i);
+            continue;
+        }
+        *communities[i].isActiveCommunity = false;
     }
     nInactiveCommunities = (UInt32)ncommunities - 1;
 
@@ -760,6 +766,7 @@ void VoodooGPIOIntel::stop(IOService *provider) {
         IOSafeDeleteNULL(communities[i].pinInterruptAction, IOInterruptAction, communities[i].npins);
         IOSafeDeleteNULL(communities[i].interruptTypes, unsigned, communities[i].npins);
         IOSafeDeleteNULL(communities[i].pinInterruptRefcons, void*, communities[i].npins);
+        IOSafeDeleteNULL(communities[i].isActiveCommunity, bool, 1);
         OSSafeReleaseNULL(communities[i].mmap);
     }
 
@@ -877,8 +884,10 @@ void VoodooGPIOIntel::intel_gpio_pin_irq_handler(unsigned hw_pin) {
         handler(owner, refcon, this, pad_group_i + pad_group->gpio_base);
     }
 
-    /* Clear interrupt status */
-    writel(static_cast<UInt32>(BIT(pad_group_i)), pending_address);
+    if (community->interruptTypes[community_i] & IRQ_TYPE_LEVEL_MASK) {
+        /* For Level interrupts, we need to clear the interrupt status or we get too many interrupts */
+        writel(static_cast<UInt32>(BIT(pad_group_i)), pending_address);
+    }
 }
 
 /**
@@ -886,19 +895,11 @@ void VoodooGPIOIntel::intel_gpio_pin_irq_handler(unsigned hw_pin) {
  * @param interruptType variable to store interrupt type for specified GPIO pin.
  */
 IOReturn VoodooGPIOIntel::getInterruptType(int pin, int *interruptType) {
-    struct intel_community *community;
-    SInt32 hw_pin = intel_gpio_to_pin(pin, &community, nullptr);
+    SInt32 hw_pin = intel_gpio_to_pin(pin, nullptr, nullptr);
     if (hw_pin < 0)
         return kIOReturnNoInterrupt;
-    
-    unsigned communityidx = hw_pin - community->pin_base;
-    if (community->interruptTypes[communityidx] & IRQ_TYPE_LEVEL_MASK) {
-        *interruptType = kIOInterruptTypeLevel;
-    } else {
-        *interruptType = kIOInterruptTypeEdge;
-    }
-    
-    return kIOReturnSuccess;
+
+    return getProvider()->getInterruptType(0, interruptType);
 }
 
 /**
@@ -929,6 +930,7 @@ IOReturn VoodooGPIOIntel::registerInterrupt(int pin, OSObject *target, IOInterru
         community->pinInterruptActionOwners[communityidx] = target;
         community->pinInterruptAction[communityidx] = handler;
         community->pinInterruptRefcons[communityidx] = refcon;
+        *community->isActiveCommunity = true;
     } else {
         IOLog("%s::Unable to allocate interrupt pin", getName());
         return kIOReturnNoResources;
@@ -985,6 +987,7 @@ IOReturn VoodooGPIOIntel::enableInterrupt(int pin) {
 
     unsigned communityidx = hw_pin - community->pin_base;
     if (community->pinInterruptActionOwners[communityidx]) {
+        intel_gpio_irq_set_type(hw_pin, community->interruptTypes[communityidx]);
         intel_gpio_irq_mask_unmask(hw_pin, false);
         return getProvider()->enableInterrupt(0);
     }
@@ -1015,7 +1018,8 @@ IOReturn VoodooGPIOIntel::setInterruptTypeForPin(int pin, int type) {
 
     unsigned communityidx = hw_pin - community->pin_base;
     community->interruptTypes[communityidx] = type;
-    intel_gpio_irq_set_type(hw_pin, type);
+    if (type & IRQ_TYPE_LEVEL_MASK)
+        *community->isActiveCommunity = true;
     return kIOReturnSuccess;
 }
 

@@ -31,6 +31,13 @@ identity_watcher=$!
 wait "$identity_child"; identity_result=$?
 kill "$identity_watcher" 2>/dev/null; wait "$identity_watcher" 2>/dev/null
 printf 'current kernel identity query exit=%s\n' "$identity_result" >> "$OUT/status.txt"
+/usr/sbin/system_profiler SPDisplaysDataType -json > "$OUT/current-displays.json" 2> "$OUT/current-displays.stderr.txt" &
+profile_child=$!
+( sleep 20; kill -TERM "$profile_child" 2>/dev/null; sleep 1; kill -KILL "$profile_child" 2>/dev/null ) >/dev/null 2>&1 &
+profile_watcher=$!
+wait "$profile_child"; profile_result=$?
+kill "$profile_watcher" 2>/dev/null; wait "$profile_watcher" 2>/dev/null
+printf 'current display profile exit=%s\n' "$profile_result" >> "$OUT/status.txt"
 # Collection-boot installed file identity, not proof of the failed boot's loaded UUID.
 if [ -f /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB ]; then
   shasum -a 256 /Library/Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB > "$OUT/current-installed-framebuffer-sha256.txt" 2>&1
@@ -39,8 +46,24 @@ fi
 if [ -f /Library/Extensions/NMXGPU.kext/Contents/MacOS/NMXGPU ]; then
   shasum -a 256 /Library/Extensions/NMXGPU.kext/Contents/MacOS/NMXGPU > "$OUT/current-installed-kernel-sha256.txt" 2>&1
 fi
+if [ -f /Library/GPUBundles/nvmtl/libdrm.2.dylib ]; then
+  shasum -a 256 /Library/GPUBundles/nvmtl/libdrm.2.dylib > "$OUT/current-installed-transport-sha256.txt" 2>&1
+fi
+if [ -f /Library/GPUBundles/nvmtl/libvulkan_intel.dylib ]; then
+  shasum -a 256 /Library/GPUBundles/nvmtl/libvulkan_intel.dylib > "$OUT/current-installed-backend-sha256.txt" 2>&1
+fi
+# Bounded input-chain snapshots for the Meteor Lake touchpad trial.
+mkdir -p "$OUT/input"
+for input_class in LatitudeI2CMeteorLakeController VoodooI2CHIDDevice VoodooI2CPrecisionTouchpadHIDEventDriver VoodooInput; do
+  /usr/sbin/ioreg -r -c "$input_class" -l -w0 > "$OUT/input/$input_class.txt" 2>&1 &
+  input_child=$!
+  ( sleep 5; kill -TERM "$input_child" 2>/dev/null; sleep 1; kill -KILL "$input_child" 2>/dev/null ) >/dev/null 2>&1 & input_watch=$!
+  wait "$input_child"; input_result=$?
+  kill "$input_watch" 2>/dev/null; wait "$input_watch" 2>/dev/null
+  printf '%s exit=%s\n' "$input_class" "$input_result" >> "$OUT/input/status.txt"
+done
 mkdir -p "$OUT/retained-boot-files"
-for saved in LatitudeDesktopAttempt.trace LatitudeDesktopAttempt.trace.previous LatitudeWindowServerSample.txt LatitudeWindowServerSample.txt.previous LatitudeWindowServerSample.stderr.txt LatitudeWindowServerSample.stderr.txt.previous LatitudeDesktopLive.log LatitudeDesktopLive.log.previous LatitudeDesktopRegistry.log LatitudeDesktopRegistry.log.previous LatitudePanelLoad.log; do
+for saved in LatitudeWindowServerLateSample.txt LatitudeWindowServerLateSample.txt.previous LatitudeWindowServerLateSample.stderr.txt LatitudeWindowServerLateSample.stderr.txt.previous LatitudeGPUIdentity.log LatitudeGPUIdentity.log.previous LatitudeDesktopEarly.log LatitudeDesktopEarly.log.previous LatitudeDesktopAttempt.trace LatitudeDesktopAttempt.trace.previous LatitudeWindowServerSample.txt LatitudeWindowServerSample.txt.previous LatitudeWindowServerSample.stderr.txt LatitudeWindowServerSample.stderr.txt.previous LatitudeDesktopLive.log LatitudeDesktopLive.log.previous LatitudeDesktopRegistry.log LatitudeDesktopRegistry.log.previous LatitudePanelLoad.log; do
   if [ -f "/Library/Logs/$saved" ]; then
     if cp -p "/Library/Logs/$saved" "$OUT/retained-boot-files/$saved"; then
       stat -f '%Sm %z %N' "/Library/Logs/$saved" >> "$OUT/retained-files-status.txt"
@@ -50,6 +73,14 @@ for saved in LatitudeDesktopAttempt.trace LatitudeDesktopAttempt.trace.previous 
   else
     printf 'MISSING %s\n' "$saved" >> "$OUT/retained-files-status.txt"
   fi
+done
+# Identify the injected HID binary without assuming that disk identity proves
+# a failed boot's loaded image. Panic/showloaded UUIDs remain authoritative.
+for input_root in "$HERE/../EFI/OC/Kexts" "$HERE/../../EFI/OC/Kexts"; do
+  [ -f "$input_root/VoodooI2CHID.kext/Contents/MacOS/VoodooI2CHID" ] || continue
+  shasum -a 256 "$input_root/VoodooI2CHID.kext/Contents/MacOS/VoodooI2CHID" > "$OUT/usb-hid-sha256.txt" 2>&1
+  /usr/bin/plutil -p "$input_root/VoodooI2CHID.kext/Contents/Info.plist" > "$OUT/usb-hid-info.txt" 2>&1 || true
+  break
 done
 sysctl kern.bootargs > "$OUT/current-boot-arguments.txt" 2>&1
 if [ -f /Library/GPUBundles/NVMTLDriver.bundle/Contents/Info.plist ]; then
@@ -126,5 +157,9 @@ kill "$watcher" 2>/dev/null
 wait "$watcher" 2>/dev/null
 printf 'log search exit=%s\n' "$result" >> "$OUT/status.txt"
 wc -lc "$OUT/failed-boot.txt" | tee -a "$OUT/status.txt"
+grep -Ei 'GUC: (Crash dump|Exception) notification|Non-recoverable wedged on init|Engine (default-state initialization|workaround verification) failed|reserved stolen prefix|cannot bound firmware scanout' "$OUT/failed-boot.txt" > "$OUT/gpu-initialization-summary.txt" || true
+if [ -s "$OUT/gpu-initialization-summary.txt" ]; then
+  echo 'GPU initialization messages retained in gpu-initialization-summary.txt; review before downstream WindowServer errors.'
+fi
 printf 'Saved: %s\n' "$OUT"
 exit "$result"

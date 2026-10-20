@@ -1,0 +1,16 @@
+Ignoring CoreStorageLVF UUID Request for apfs snapshot: /
+/AppleInternal/Library/BuildRoots/4~CW9pugCYv_Ey-JicYN4txPoFikJbxrQvYVGlZBs/Library/Caches/com.apple.xbs/Sources/kext_tools/kc_staging.m.279: Encountered error while inspecting path: Error Domain=NSCocoaErrorDomain Code=260 "The folder “PrelinkedKernels” doesn’t exist." UserInfo={NSUserStringVariant=(
+    Folder
+), NSFilePath=/Library/Apple/System/Library/PrelinkedKernels, NSURL=file:///Library/Apple/System/Library/PrelinkedKernels, NSUnderlyingError=0x600002d94000 {Error Domain=NSOSStatusErrorDomain Code=-43 "fnfErr: File not found"}}
+/AppleInternal/Library/BuildRoots/4~CW9pugCYv_Ey-JicYN4txPoFikJbxrQvYVGlZBs/Library/Caches/com.apple.xbs/Sources/kext_tools/kc_staging.m.279: Encountered error while inspecting path: Error Domain=NSCocoaErrorDomain Code=260 "The folder “PrelinkedKernels” doesn’t exist." UserInfo={NSUserStringVariant=(
+    Folder
+), NSFilePath=/Library/Apple/System/Library/PrelinkedKernels, NSURL=file:///Library/Apple/System/Library/PrelinkedKernels, NSUnderlyingError=0x600002d989f0 {Error Domain=NSOSStatusErrorDomain Code=-43 "fnfErr: File not found"}}
+Ignoring CoreStorageLVF UUID Request for apfs snapshot: /
+Copying deferred prelinked kernels in /...
+Copying KCs in /...
+System Volume UUID: B4B52181-8BAC-4D74-9C5B-E6DF8FCBD4A0
+Volume Group UUID: 2C020F07-5256-4F4C-8544-FB9D5FFBB9FB
+Preboot disk: /dev/disk1s2
+Preboot volume: /System/Volumes/Preboot
+Copying: /System/Library/KernelCollections/BootKernelExtensions.kc.elides -> /System/Volumes/Preboot/2C020F07-5256-4F4C-8544-FB9D5FFBB9FB/boot/System/Library/KernelCollections
+Copying: /System/Library/KernelCollections/BootKernelExtensions.kc -> /System/Volumes/Preboot/2C020F07-5256-4F4C-8544-FB9D5FFBB9FB/boot/System/Library/KernelCollections

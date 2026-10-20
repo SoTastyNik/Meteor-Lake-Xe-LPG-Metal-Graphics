@@ -10,8 +10,28 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOMultiMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
+#include <sys/errno.h>
 #include <libkern/OSAtomic.h>
 #include "nmx_xnu.h"
+
+extern "C" int nmx_xnu_firmware_scanout(uint64_t *base, uint64_t *size)
+{
+    if (!base || !size) return EINVAL;
+    *base = *size = 0;
+    PE_Video v = {};
+    IOPlatformExpert *pe = IOService::getPlatform();
+    if (!pe || pe->getConsoleInfo(&v) != kIOReturnSuccess ||
+        !v.v_baseAddr || (v.v_baseAddr & 4095) || v.v_depth != 32 ||
+        v.v_width < 640 || v.v_width > 16384 ||
+        v.v_height < 480 || v.v_height > 16384 ||
+        v.v_rowBytes < v.v_width * 4 ||
+        (uint64_t)v.v_rowBytes > UINT64_MAX / v.v_height)
+        return EINVAL;
+    *base = v.v_baseAddr;
+    *size = (uint64_t)v.v_rowBytes * v.v_height;
+    return 0;
+}
 
 extern "C" {
 extern void *kernel_pmap;

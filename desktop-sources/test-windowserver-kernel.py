@@ -12,14 +12,14 @@ with tempfile.TemporaryDirectory(prefix='ws-kernel-') as d:
   # Absolute roots are fixture-only; no actual /Library or boot cache operation.
   f=root/'helper.sh';f.write_text(src)
   mocks={'codesign':'exit 0','chown':'exit 0','ditto':'exec /bin/cp -R "$1" "$2"','kmutil':'echo create >> "$CALLS"; [ "$MODE" != preflight-fail ] || exit 7; while [ "$#" -gt 0 ]; do if [ "$1" = -A ]; then shift; echo new-cache > "$1"; break; fi; shift; done','kcditto':'echo kcditto >> "$CALLS"; if [ "$MODE" = commit-fail ] && [ ! -f "$ONCE" ]; then touch "$ONCE"; exit 8; fi'}
-  (pkg/'WindowServerKernel/NMXGPU-VERSION.txt').write_text('1.0.14')
+  (pkg/'WindowServerKernel/NMXGPU-VERSION.txt').write_text('1.0.15')
   fb=pkg/'WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB';fb.parent.mkdir(parents=True);fb.write_text('new-framebuffer')
   (pkg/'WindowServerFramebuffer/LatitudeMTLFB-UUID.txt').write_text('11111111-2222-3333-4444-555555555555')
   (pkg/'WindowServerFramebuffer/LatitudeMTLFB-VERSION.txt').write_text('0.2.4')
   fb=lib/'Extensions/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB';fb.parent.mkdir(parents=True,exist_ok=True);fb.write_text('old-framebuffer')
   shutil.copy2(r/'latitude-desktop/validate-kernel-prelink',pkg/'validate-kernel-prelink')
   emitter=pkg/'emit-prelink';emitter.write_text('#!'+sys.executable+'\n'+"""import os,plistlib
-entry={'CFBundleIdentifier':'com.nullmoth.NMXGPU','CFBundleVersion':'1.0.14','OSBundleUUID':bytes.fromhex('e770b98514a43adea1ee63204c3a9996'),'_PrelinkBundlePath':os.environ['MOCK_KERNEL_DEST'],'_PrelinkExecutableRelativePath':'Contents/MacOS/NMXGPU','_PrelinkExecutableSize':3071690}
+entry={'CFBundleIdentifier':'com.nullmoth.NMXGPU','CFBundleVersion':'1.0.15','OSBundleUUID':bytes.fromhex('e770b98514a43adea1ee63204c3a9996'),'_PrelinkBundlePath':os.environ['MOCK_KERNEL_DEST'],'_PrelinkExecutableRelativePath':'Contents/MacOS/NMXGPU','_PrelinkExecutableSize':3071690}
 if os.environ['MODE']=='bad-path':entry['_PrelinkBundlePath']='/temporary/NMXGPU.kext'
 if os.environ['MODE']=='bad-uuid':entry['OSBundleUUID']=bytes(16)
 import sys

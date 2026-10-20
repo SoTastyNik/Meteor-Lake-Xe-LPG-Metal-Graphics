@@ -1,0 +1,145 @@
+--- a/drm-kmod/drivers/gpu/drm/i915/intel_memory_region.c
++++ b/drm-kmod/drivers/gpu/drm/i915/intel_memory_region.c
+@@ -337,20 +337,6 @@
+ 
+ 		type = intel_region_map[i].class;
+ 		instance = intel_region_map[i].instance;
+-#ifdef NMXKPI
+-		/* LatitudeMTLFB retains the firmware scanout in DSM. Display discovery
+-		 * is skipped on this device, so initial_plane_vma() never reserves its
+-		 * preallocated framebuffer in the stolen allocator. Do not offer that
+-		 * memory to i915 at all: ring/context objects must use system memory.
+-		 * The GGTT firmware scanout reservation remains independent of this.
+-		 */
+-		if (INTEL_DEVID(i915) == 0x7d45 &&
+-		    (type == INTEL_MEMORY_STOLEN_LOCAL ||
+-		     type == INTEL_MEMORY_STOLEN_SYSTEM)) {
+-			drm_info(&i915->drm, "Latitude MTL: stolen region withheld from i915; firmware panel retains DSM\n");
+-			continue;
+-		}
+-#endif
+ 		switch (type) {
+ 		case INTEL_MEMORY_SYSTEM:
+ 			if (IS_DGFX(i915))
+--- a/drm-kmod/drivers/gpu/drm/i915/gem/i915_gem_stolen.c
++++ b/drm-kmod/drivers/gpu/drm/i915/gem/i915_gem_stolen.c
+@@ -18,6 +18,24 @@
+ #include "gt/intel_region_lmem.h"
+ #include "i915_drv.h"
+ #include "i915_gem_stolen.h"
++
++#ifdef NMXKPI
++extern int nmx_xnu_firmware_scanout(u64 *base, u64 *size);
++
++static int latitude_stolen_start(u64 dsm, u64 usable, u64 base, u64 size,
++				u64 alignment, u64 *start)
++{
++	u64 end;
++	if (!dsm || !size || !alignment || (alignment & (alignment - 1)) ||
++	    base < dsm || size > usable || base - dsm > usable - size)
++		return -ENOSPC;
++	end = base - dsm + size;
++	if (end > U64_MAX - (alignment - 1))
++		return -ENOSPC;
++	*start = ALIGN(end, alignment);
++	return *start < usable ? 0 : -ENOSPC;
++}
++#endif
+ #include "i915_pci.h"
+ #include "i915_reg.h"
+ #include "i915_utils.h"
+@@ -515,6 +533,7 @@
+ static int i915_gem_init_stolen(struct intel_memory_region *mem)
+ {
+ 	struct drm_i915_private *i915 = mem->i915;
++	u64 allocator_start = 0;
+ 
+ 	mutex_init(&i915->mm.stolen_lock);
+ 
+@@ -560,7 +579,23 @@
+ 		return -ENOSPC;
+ 
+ 	/* Basic memrange allocator for stolen space. */
+-	drm_mm_init(&i915->mm.stolen, 0, i915->dsm.usable_size);
++#ifdef NMXKPI
++	if (INTEL_DEVID(i915) == 0x7d45) {
++		u64 base, size;
++		u64 dsm = intel_uncore_read64(&i915->uncore, GEN6_DSMBASE) & GEN11_BDSM_MASK;
++		if (nmx_xnu_firmware_scanout(&base, &size) ||
++		    latitude_stolen_start(dsm, i915->dsm.usable_size, base, size,
++					  max_t(u64, SZ_64K, mem->min_page_size),
++					  &allocator_start)) {
++			drm_err(&i915->drm, "Latitude MTL: cannot bound firmware scanout inside DSM; refusing stolen allocator\n");
++			return -ENOSPC;
++		}
++		drm_info(&i915->drm, "Latitude MTL: firmware scanout phys=0x%llx size=0x%llx reserved stolen prefix=0x%llx usable-end=0x%llx\n",
++			 base, size, allocator_start, (u64)i915->dsm.usable_size);
++	}
++#endif
++	drm_mm_init(&i915->mm.stolen, allocator_start,
++		    i915->dsm.usable_size - allocator_start);
+ 
+ 	/*
+ 	 * Access to stolen lmem beyond certain size for MTL A0 stepping
+--- a/drm-kmod/drivers/gpu/drm/i915/gt/intel_gt.c
++++ b/drm-kmod/drivers/gpu/drm/i915/gt/intel_gt.c
+@@ -746,12 +746,16 @@
+ 		gt_err(gt, "Failed to retrieve hwconfig table: %pe\n", ERR_PTR(err));
+ 
+ 	err = __engines_record_defaults(gt);
+-	if (err)
++	if (err) {
++		gt_err(gt, "Engine default-state initialization failed: %d\n", err);
+ 		goto err_gt;
++	}
+ 
+ 	err = __engines_verify_workarounds(gt);
+-	if (err)
++	if (err) {
++		gt_err(gt, "Engine workaround verification failed: %d\n", err);
+ 		goto err_gt;
++	}
+ 
+ 	err = i915_inject_probe_error(gt->i915, -EIO);
+ 	if (err)
+--- a/NullMoth/gpu-port/xkpi/xnu/nmx_vm.cpp
++++ b/NullMoth/gpu-port/xkpi/xnu/nmx_vm.cpp
+@@ -10,8 +10,28 @@
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <IOKit/IOMultiMemoryDescriptor.h>
+ #include <IOKit/IOLib.h>
++#include <IOKit/IOPlatformExpert.h>
++#include <sys/errno.h>
+ #include <libkern/OSAtomic.h>
+ #include "nmx_xnu.h"
++
++extern "C" int nmx_xnu_firmware_scanout(uint64_t *base, uint64_t *size)
++{
++    if (!base || !size) return EINVAL;
++    *base = *size = 0;
++    PE_Video v = {};
++    IOPlatformExpert *pe = IOService::getPlatform();
++    if (!pe || pe->getConsoleInfo(&v) != kIOReturnSuccess ||
++        !v.v_baseAddr || (v.v_baseAddr & 4095) || v.v_depth != 32 ||
++        v.v_width < 640 || v.v_width > 16384 ||
++        v.v_height < 480 || v.v_height > 16384 ||
++        v.v_rowBytes < v.v_width * 4 ||
++        (uint64_t)v.v_rowBytes > UINT64_MAX / v.v_height)
++        return EINVAL;
++    *base = v.v_baseAddr;
++    *size = (uint64_t)v.v_rowBytes * v.v_height;
++    return 0;
++}
+ 
+ extern "C" {
+ extern void *kernel_pmap;
+--- a/NullMoth/gpu-port/xkpi/bsdcompat/include/nmx_xnu.h
++++ b/NullMoth/gpu-port/xkpi/bsdcompat/include/nmx_xnu.h
+@@ -25,6 +25,7 @@
+  * Allocates 'size' bytes of wired kernel memory. contiguous != 0 asks for one physically contiguous range below
+  * 'max_phys' aligned to 'align'. Returns the kernel address and an opaque handle for nmx_xnu_mem_free, or NULL.
+  */
++int nmx_xnu_firmware_scanout(uint64_t *base, uint64_t *size);
+ void *nmx_xnu_mem_alloc(size_t size, int contiguous, uint64_t max_phys, size_t align, void **handle);
+ void nmx_xnu_mem_free(void *handle);
+ /* physical address of a kernel virtual address (0 if unmapped) */

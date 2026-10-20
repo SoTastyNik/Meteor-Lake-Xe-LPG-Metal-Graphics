@@ -1,0 +1,25 @@
+{
+  "candidate": "WindowServer IOKit transport correction",
+  "sha256": "2e0eb9f1cf0105aa22d24fc7368c78f30cda645ef9110c7dfeeed7baf3ca2c5f",
+  "baseline_sha256": "8053e30835b7dc065e594522e34531f46e14d8d0aa7f242b4e84c967c6a3fda1",
+  "architecture": "x86_64",
+  "hardware_verified": false,
+  "full_gpu_suite_rerun": false,
+  "full_windowserver_acceleration_verified": false,
+  "tests": [
+    "old actual functions reproduce mixed devfs/IOKit identity gap",
+    "corrected actual functions pass ASan/UBSan access-pattern and route/errno/identity fixtures",
+    "existing transport and enumeration fixtures pass",
+    "integrated installer replacement/known-current/signature-failure and later failure rollback fixtures pass",
+    "collector crash-preservation fixtures pass",
+    "x86_64 link; public exports and imports match baseline; codesign strict verification"
+  ],
+  "unchanged_gpu_payloads": {
+    "WindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU": "80c3fe8bfa639a1f6cd52a29ab485695d4f18ae289f70e39bbc4b021fb0ab0f6",
+    "WindowServerFramebuffer/LatitudeMTLFB.kext/Contents/MacOS/LatitudeMTLFB": "495ed4cce9ece3fda3fd038e82031ab11ca1b8167c56f7bf7f66d13b8f2ed3b7",
+    "Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/NVMTLDriver": "153afd4b5a34008b2c27307dee646798c2180ab68a5e536d0901445d34a7fc2c",
+    "Library/GPUBundles/nvmtl/libdrm.2.dylib": "8053e30835b7dc065e594522e34531f46e14d8d0aa7f242b4e84c967c6a3fda1"
+  },
+  "unchanged_usb_hid_sha256": "862fb5d5620b8e438572ce3e5e9aeca746af2f012340d2bb4e19bb39e560a36c",
+  "limits": "Target zero-device rejection not yet proven resolved; framebuffer warnings may be separate; earlier GPU failures remain unvalidated"
+}

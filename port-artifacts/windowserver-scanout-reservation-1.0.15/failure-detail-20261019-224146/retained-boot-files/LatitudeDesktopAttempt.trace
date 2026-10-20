@@ -1,0 +1,85 @@
+epoch=1792445842 mono=980842833330 boot=2D02EC04-1999-48DB-9E97-598092BA06D5 pid=1257 tid=15561 phase=prepared result=0 detail=candidate0.3.5
+epoch=1792445854 mono=992469157997 boot=2D02EC04-1999-48DB-9E97-598092BA06D5 pid=1303 tid=16519 phase=installer-ready result=0 detail=scanout-reservation-1.0.15
+epoch=1792445920 mono=8218907121 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=294 tid=1885 phase=loader-start result=0 detail=candidate0.3.5
+epoch=1792445920 mono=8228496942 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=0 detail=capture watcher
+epoch=1792445920 mono=8395475116 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=311 tid=1966 phase=early-capture-start result=0 detail=
+epoch=1792445920 mono=8401611565 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=313 tid=1971 phase=claim-query-begin result=0 detail=0
+epoch=1792445920 mono=8689414960 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=317 tid=2018 phase=claim-query-end result=0 detail=0
+epoch=1792445922 mono=9977890618 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=347 tid=2345 phase=claim-query-begin result=0 detail=1
+epoch=1792445922 mono=10229653364 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=351 tid=2363 phase=claim-query-end result=0 detail=1
+epoch=1792445922 mono=10341353153 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=353 tid=2369 phase=claim-active result=0 detail=
+epoch=1792445922 mono=10362734847 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=2 detail=capture watcher
+epoch=1792445922 mono=10720100635 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=362 tid=2387 phase=capture-begin result=0 detail=
+epoch=1792445922 mono=10728243972 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=366 tid=2397 phase=framebuffer-load-begin result=0 detail=
+epoch=1792445923 mono=11418618369 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=378 tid=2455 phase=framebuffer-load-end result=0 detail=
+epoch=1792445924 mono=12621136080 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=4 detail=capture watcher
+epoch=1792445924 mono=12829329054 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=390 tid=2560 phase=registry-query-begin result=0 detail=IOFramebuffer
+epoch=1792445925 mono=12956763957 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=396 tid=2579 phase=registry-query-end result=0 detail=IOFramebuffer
+epoch=1792445925 mono=13072299886 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=397 tid=2588 phase=registry-query-begin result=0 detail=NMXAccel
+epoch=1792445925 mono=13196197200 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=401 tid=2598 phase=registry-query-end result=0 detail=NMXAccel
+epoch=1792445925 mono=13242559445 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=402 tid=2600 phase=registry-query-begin result=0 detail=LatitudePanelClaim
+epoch=1792445925 mono=13267816216 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=406 tid=2610 phase=registry-query-end result=0 detail=LatitudePanelClaim
+epoch=1792445927 mono=15132876427 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=6 detail=capture watcher
+epoch=1792445929 mono=17213501857 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=8 detail=capture watcher
+epoch=1792445931 mono=18887607315 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=422 tid=2679 phase=sample-begin result=0 detail=163
+epoch=1792445931 mono=19219783426 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=10 detail=capture watcher
+epoch=1792445933 mono=21350953925 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=12 detail=capture watcher
+epoch=1792445933 mono=21569353185 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=442 tid=2836 phase=registry-query-begin result=0 detail=IOFramebuffer
+epoch=1792445933 mono=21595774057 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=446 tid=2843 phase=registry-query-end result=0 detail=IOFramebuffer
+epoch=1792445933 mono=21601549782 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=447 tid=2845 phase=registry-query-begin result=0 detail=NMXAccel
+epoch=1792445933 mono=21628583453 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=451 tid=2852 phase=registry-query-end result=0 detail=NMXAccel
+epoch=1792445933 mono=21633888385 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=452 tid=2854 phase=registry-query-begin result=0 detail=LatitudePanelClaim
+epoch=1792445933 mono=21658901758 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=456 tid=2861 phase=registry-query-end result=0 detail=LatitudePanelClaim
+epoch=1792445935 mono=23248622365 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=466 tid=2896 phase=sample-end result=0 detail=WindowServer
+epoch=1792445935 mono=23395465582 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=14 detail=capture watcher
+epoch=1792445937 mono=25498852735 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=16 detail=capture watcher
+epoch=1792445939 mono=27588017796 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=18 detail=capture watcher
+epoch=1792445941 mono=29673310487 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=20 detail=capture watcher
+epoch=1792445943 mono=31712594733 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=22 detail=capture watcher
+epoch=1792445945 mono=33838243717 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=24 detail=capture watcher
+epoch=1792445947 mono=35927121850 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=26 detail=capture watcher
+epoch=1792445950 mono=38315663634 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=28 detail=capture watcher
+epoch=1792445952 mono=40776130002 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=30 detail=capture watcher
+epoch=1792445953 mono=41712364337 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=605 tid=4159 phase=registry-query-begin result=0 detail=IOFramebuffer
+epoch=1792445954 mono=42423662898 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=612 tid=4254 phase=registry-query-end result=0 detail=IOFramebuffer
+epoch=1792445955 mono=43564810837 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=616 tid=4308 phase=registry-query-begin result=0 detail=NMXAccel
+epoch=1792445956 mono=44442626941 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=32 detail=capture watcher
+epoch=1792445958 mono=46581099475 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=655 tid=4631 phase=registry-query-end result=0 detail=NMXAccel
+epoch=1792445959 mono=47660948262 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=661 tid=4759 phase=registry-query-begin result=0 detail=LatitudePanelClaim
+epoch=1792445959 mono=47926663810 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=34 detail=capture watcher
+epoch=1792445961 mono=49295150019 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=688 tid=4984 phase=registry-query-end result=0 detail=LatitudePanelClaim
+epoch=1792445965 mono=53059665209 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=36 detail=capture watcher
+epoch=1792445969 mono=57083542851 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=38 detail=capture watcher
+epoch=1792445971 mono=59588877564 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=40 detail=capture watcher
+epoch=1792445974 mono=62806962361 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=42 detail=capture watcher
+epoch=1792445977 mono=65712674112 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=44 detail=capture watcher
+epoch=1792445980 mono=68064930524 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=46 detail=capture watcher
+epoch=1792445983 mono=71019846318 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=48 detail=capture watcher
+epoch=1792445985 mono=73141995017 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=50 detail=capture watcher
+epoch=1792445987 mono=75258107071 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=52 detail=capture watcher
+epoch=1792445990 mono=78027963270 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=54 detail=capture watcher
+epoch=1792445992 mono=80264154135 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=56 detail=capture watcher
+epoch=1792445994 mono=82411459206 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=58 detail=capture watcher
+epoch=1792445996 mono=84551910086 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=60 detail=capture watcher
+epoch=1792445998 mono=86696249299 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=62 detail=capture watcher
+epoch=1792446000 mono=88795882782 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=64 detail=capture watcher
+epoch=1792446002 mono=90841472758 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=66 detail=capture watcher
+epoch=1792446004 mono=92855458656 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=68 detail=capture watcher
+epoch=1792446006 mono=94963805618 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=70 detail=capture watcher
+epoch=1792446009 mono=97006544236 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=72 detail=capture watcher
+epoch=1792446011 mono=99151627000 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=74 detail=capture watcher
+epoch=1792446013 mono=101235033130 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=76 detail=capture watcher
+epoch=1792446015 mono=103271963064 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=78 detail=capture watcher
+epoch=1792446017 mono=105365610081 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=80 detail=capture watcher
+epoch=1792446019 mono=107423824938 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=82 detail=capture watcher
+epoch=1792446021 mono=109588673892 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=84 detail=capture watcher
+epoch=1792446023 mono=111810932749 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=86 detail=capture watcher
+epoch=1792446026 mono=114009065837 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=88 detail=capture watcher
+epoch=1792446028 mono=116131562724 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=90 detail=capture watcher
+epoch=1792446030 mono=118401710191 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=92 detail=capture watcher
+epoch=1792446032 mono=120713691122 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=94 detail=capture watcher
+epoch=1792446034 mono=122971309169 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=96 detail=capture watcher
+epoch=1792446037 mono=125137800233 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=98 detail=capture watcher
+epoch=1792446039 mono=127332149593 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=100 detail=capture watcher
+epoch=1792446041 mono=129340614584 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=298 tid=1918 phase=loader-heartbeat result=102 detail=capture watcher
+epoch=1792446042 mono=130002586688 boot=813B367C-1CA2-4A96-8621-6CD409C62295 pid=964 tid=8937 phase=capture-end result=0 detail=

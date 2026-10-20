@@ -1,0 +1,17 @@
+--- a/VoodooI2CHID/VoodooI2CTouchscreenHIDEventDriver.cpp
++++ b/VoodooI2CHID/VoodooI2CTouchscreenHIDEventDriver.cpp
+@@ -242,8 +242,12 @@
+ 
+     if (active_framebuffer) {
+         OSNumber* number = OSDynamicCast(OSNumber, active_framebuffer->getProperty(kIOFBTransformKey));
+-        current_rotation = number->unsigned8BitValue() / 0x10;
+-        multitouch_interface->setProperty(kIOFBTransformKey, current_rotation, 8);
++        // IOFramebuffer subclasses need not publish IOFBTransform. Preserve
++        // the prior rotation when the property is absent or is not a number.
++        if (number) {
++            current_rotation = number->unsigned8BitValue() / 0x10;
++            multitouch_interface->setProperty(kIOFBTransformKey, current_rotation, 8);
++        }
+     }
+     
+     if (event.contact_count) {

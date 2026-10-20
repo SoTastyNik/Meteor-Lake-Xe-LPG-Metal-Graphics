@@ -1,3 +1,29 @@
+# Current: queried GPU name and shared capacity in System Information
+
+LatitudeMTLFB0.2.5 and the new boot helper publish the actual ANV deviceName/shared heap to the matched PCI model/VRAM,totalMB registry fields. No fixed GPU name/2048MB injection; physical scanout mapping and GPU1.0.15 unchanged. Local build, sanitizer, installer/rollback and loader checks pass. Target label confirmation pending. Saved working checkpoint and EFI unchanged. See ../windowserver-registry-report-0.2.5.md.
+
+Dell fallback: install-windowserver.sh; after exit0 restart through USB once without ResetNVRAM. Collect on usable trial, or fallback after failure, before reinstalling. No full GPU suite rerun. Historical notes below are superseded by this candidate.
+
+---
+
+# Current: automatic Metal identity and shared-memory reporting0.3.6
+
+GPU name and heap capacity come from Vulkan queries. No fixed model or 2048MB injection; EFI unchanged. Unified-memory reporting corrected and unsupported host imports use existing copy fallback. System Information Display7MB registry reporting remains unresolved. GPU1.0.15/framebuffer0.2.4/transport retained and working checkpoint saved. Local builds/checks pass; this candidate requires target confirmation. No full GPU suite rerun. See ../windowserver-memory-report-0.3.6.md.
+
+---
+
+# Current: GPU startup / scanout reservation1.0.15
+
+Full boot log shows GuC crashed and i915 wedged during initialization before WindowServer reported zero devices.1.0.15 replaces blanket stolen-memory exclusion with a validated firmware framebuffer prefix reservation, restoring the remaining allocator. Local sanitizer/build/installer rollback checks pass; hardware recovery and accelerated composition remain unverified. Run install-windowserver.sh on Dell USB fallback; exit0 then restart USB once without ResetNVRAM. On failure collect-desktop-failure.sh before reinstall. No22-case rerun. See ../windowserver-scanout-reservation-1.0.15.md.
+
+---
+
+# Current WindowServer IOKit transport candidate
+
+Latest boot reaches CoreDisplay but Vulkan reports zero devices. This candidate corrects mixed devfs/IOKit identity handling after a denied writable render-node open and records bounded startup ioctl results. GPU1.0.14, framebuffer0.2.4 and HID1.0.1 are retained. Hardware success remains unverified. Use install-windowserver.sh on the Dell fallback, restart through USB once after exit0, and collect-desktop-failure.sh on failure before reinstalling. No22-case rerun. See ../windowserver-iokit-transport-220839.md.
+
+---
+
 # Installer retry correction for1.0.14
 
 The18:30collection shows the driver parked because nullmoth-gpu-attaching survived the earlier1.0.13panic.1.0.14loaded but did not attach, so that attempt did not validate the new completion fix. The installer now saves/clears/verifies only that stale marker before explicit one-shot arming; kernel boot guard stays enabled. If deletion fails, no trial is armed. No new driver binaries or full suite rerun. Research: ../windowserver-1.0.14-attach-guard.md.

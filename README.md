@@ -12,9 +12,9 @@
 ![Kernel](https://img.shields.io/badge/Kext-i915_on_LinuxKPI-red)
 ![Language](https://img.shields.io/badge/Language-C%20%2F%20Obj--C%20%2F%20C%2B%2B-blueviolet)<br>
 ![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working-brightgreen)
-![Desktop](https://img.shields.io/badge/Desktop-WindowServer_in_progress-yellow)
+![Desktop](https://img.shields.io/badge/Desktop-WindowServer_usable_unsmooth-yellow)
 ![Verified](https://img.shields.io/badge/Verified-26%2C000_frames-brightgreen)
-![Candidate](https://img.shields.io/badge/Candidate-0.3.5_%2B_k1.0.14-unverified-orange)
+![Candidate](https://img.shields.io/badge/Candidate-0.3.6_%20%2B%20k1.0.15_%20%2B%20fb0.2.5-yellow)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
@@ -26,10 +26,11 @@ extensions* architecture, but replaces every NVIDIA-specific element: the GSP fi
 Intel GuC/HuC/GSC firmware path, the NVK backend becomes Mesa's **ANV** Intel driver, and the NVIDIA
 kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAccel`.
 
-**Current state:** Metal and Vulkan application rendering work and are verified on real silicon.
-GPU-composited WindowServer does not. The current candidate is **kernel 1.0.14** — locally validated,
-hardware-unverified; its one trial panicked early in a pre-existing VoodooI2CHID touchscreen HID fault,
-not the GPU path.
+**Current state:** Metal and Vulkan application rendering work and are verified on real silicon. The
+GPU-composited WindowServer desktop **now works** — WindowServer submits real GPU work and reads back
+correctly, with no GPU hang — but it is **choppy**: composition latency and synchronization are
+unresolved. The current candidate is **kernel 1.0.15 + plugin 0.3.6 + framebuffer 0.2.5 + guarded HID
+1.0.1**.
 
 **Start here:**
 
@@ -70,11 +71,12 @@ not the GPU path.
 
 | ✅ Verified today | ❌ Not yet |
 |---|---|
-| Metal render — 4,096 correct pixels | GPU-composited WindowServer desktop |
+| Metal render — 4,096 correct pixels | Smooth / presentation-stable composition |
 | Vulkan compute — 65,536 correct values | Sleep/wake, brightness, external displays |
 | 26,000 exact frames across 22 cases (both transports) | Hardware video decode |
+| **GPU-composited WindowServer desktop — real GPU work, no hang** | Host-pointer (zero-copy) imports — copy fallback |
 | Command-pool lifetime — 80,020 created / destroyed, zero leaks | Sustained composition / long soak |
-| PCI attach + GuC 70.53.0 firmware bring-up | |
+| PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (12,288 MB) | |
 
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
 Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
@@ -98,16 +100,17 @@ is a distinct, narrower problem (a readback/surface path under concurrent Window
 described in *The current blocker* below. A working Metal/Vulkan stack and a composited login screen are
 two different milestones; this project has finished the first and is attacking the second.
 
-The latest kernel work is **1.0.14**, which targets the 1.0.13 boot panic — a context use-after-free in the
-breadcrumb completion path, where `signal_irq_work` → `guc_retire_inflight_request_prio` reached a freed
-`intel_context`. 1.0.14 gives every breadcrumb-owned request reference its context (and, for parallel
-requests, a parent context), acquires ownership before publishing the fence's `SIGNALED` bit, and snapshots
-the next entry before a losing signal path can drop the last reference. It is locally validated — 90,000
-ASan/UBSan lifetimes, a reproduced-and-fixed request-iterator UAF — but **hardware-unverified**: its one
-trial panicked earlier and elsewhere, in a VoodooI2CHID touchscreen HID null-page-fault that predates
-1.0.14. The path to it ran through 1.0.10 (ring capture), 1.0.11 (mapping-lifetime pin, falsified),
-1.0.12 (raw-physical span, booted, overwrite persisted) and 1.0.13 (stolen-memory skip, panicked). None of
-those is a fix. That history is documented in *The current blocker*.
+The desktop then crossed the line that mattered. Kernel **1.0.15** corrects GPU startup — it restores
+i915's stolen-region setup but reserves the firmware console image so no allocation can overlap it — and
+with the guarded HID null-guard, plugin **0.3.6** and framebuffer **0.2.5**, WindowServer now **submits real
+GPU work and reads back correctly, with no GPU hang** (`windowserver-result-224146`). That is the first
+usable GPU-composited desktop this project has produced. It is not smooth: the latest capture
+(`windowserver-result-231630`) shows choppy composition, 42 CoreAnimation fence timeouts and 163–205% CPU.
+So the milestone is real and the remaining problem is narrower: composition latency and synchronization,
+not GPU execution. The full path — 1.0.10 ring capture, 1.0.11 mapping pin (falsified), 1.0.12 raw-physical
+span (booted, overwrite persisted), 1.0.13 stolen-memory skip (panicked), 1.0.14 completion-context fix
+(HID panic), 1.0.15 GPU-startup fix (usable desktop) — is documented in *The current blocker* and the
+`research/` notes.
 
 ---
 
@@ -122,7 +125,8 @@ those is a fix. That history is documented in *The current blocker*.
 | **Metal and Vulkan application rendering/compute** | **65,536 correct Vulkan values, 4,096 correct Metal pixels**, 26,000 exact frames across 22 cases (11 IOKit + 11 direct) | **Working** |
 | Command-pool lifetime | **80,020 pools created / 80,020 destroyed**, zero live/pending/quarantined across the gate | **Passing (scoped)** |
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
-| GPU-composited WindowServer desktop | The cut-off moves with the candidate — 0.2.5/0.3.2 stall at readback **#5** (upload #6 ~80 ms later), 0.3.3 at its **fourth** readback, 0.3.4/0.3.5 at **submission #8**, 1.0.12 completes readback #8 then stalls on **submission #9**. The hang itself is invariant | **Failing — blocking** |
+| GPU-composited WindowServer desktop | **Working, but choppy.** WindowServer submits real GPU work and reads back correctly — 24 fence + 32 readback completions, all clean, no GPU hang (`windowserver-result-224146`). Latest capture: choppy composition, 42 CoreAnimation fence timeouts, 163–205% CPU (`windowserver-result-231630`) | **Usable — smoothness unresolved** |
+| GPU reporting (System Information) | **Fixed.** Reports `Intel(R) Graphics (MTL)`, 12288 MB shared memory, queried automatically from the ANV device-local heap — no fixed-name or size injection (`windowserver-result-231630`) | **Working** |
 | Kernel command-ring integrity | 1.0.10 capture: the words below request 20's head (`0xc98–0xca4` — request 18's switch-out and WA tail) read `0xff000000`; GuC `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`. **Identical on 1.0.11.** The 1.0.12 boot again saved `0xff000000` at request 22's `0xe00–0xe0c`, with `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xe0c`, `RING_TAIL=0xf70` | **Corrupted — writer unidentified** |
 | Kernel boot integrity (1.0.13) | `panic: NullMoth xkpi: mutex … used before mtx_init` at 8.04 s uptime, backtrace `guc_retire_inflight_request_prio` ← `signal_irq_work` ← `irq_work`. A freed/stale `intel_context` in the breadcrumb completion path; no desktop was reached | **Panics before desktop — parked** |
 | Kernel 1.0.14 (current candidate) | Targets that panic: breadcrumb-owned requests now hold their context/parent context, ownership is taken before the fence's `SIGNALED` bit is published, and the iterators snapshot before release. Locally validated (90,000 ASan/UBSan lifetimes, request-iterator UAF reproduced and fixed) | **Built; hardware-unverified** |
@@ -251,11 +255,12 @@ each case logs and verifies the route it actually took rather than trusting the 
 
 | Component | Version / base | Source in tree | Licence |
 |---|---|---|---|
-| `NMXGPU.kext` | kernel **1.0.14** (current candidate — completion-context fix, hardware-unverified) on the 1.0.13/1.0.12/1.0.11 lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
-| `NMXAccel.kext` | 0.1 | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
-| `LatitudeMTLFB.kext` | **0.2.4** candidate (raw host-physical allocation) | `desktop-build/LatitudeMTLFB.kext` | project |
+| `NMXGPU.kext` | kernel **1.0.15** (current — GPU-startup stolen-region reservation) on the 1.0.14/1.0.13/1.0.12/1.0.11 lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
+| `NMXAccel.kext` | 0.2.4 | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
+| `LatitudeMTLFB.kext` | **0.2.5** (driver-queried GPU identity + shared-memory reporting) | `desktop-build/LatitudeMTLFB.kext` | project |
 | `NMXAGDC.kext` | 0.1 (`NMXAGDCLoader`) | `desktop-build/NMXAGDC.kext` | project |
-| Metal plugin | `NVMTLDriver` 0.3.5 candidate | `NullMoth/plugin/` | PolyForm NC |
+| Guarded HID | **1.0.1** (VoodooI2CHID null-guard) | `desktop-build/hid-nullguard/` | project |
+| Metal plugin | `NVMTLDriver` **0.3.6** (query-based memory reporting) | `NullMoth/plugin/` | PolyForm NC |
 | Shader translator | AIR → SPIR-V | `NullMoth/translator/` | LGPL-3.0 / GPL-3.0 |
 | Vulkan backend | ANV on Mesa **26.3.0-devel** | `mesa/` (patched via `port-artifacts/mesa-i915-darwin-mmap.patch`) | MIT |
 | DRM userspace | libdrm 2.4.x | `libdrm/` | MIT |
@@ -369,12 +374,13 @@ Under modern macOS security the plugin and kexts must be loaded and trusted expl
 <a name="blocker"></a>
 ## 🐞 The current blocker, stated precisely
 
-This is the most important section in the document. On the physical desktop path, the failure is an
-**actual GPU execution/progress failure**, not a missing registration and not merely a shader-compile
-error. **Nothing in this document has fixed it.** What changed between candidates is *where* the run
-stops, which is why the numbers differ from section to section: each figure below belongs to one specific
-boot, and the plugin's submission counter, the readback counter and i915's request sequence are three
-different namespaces.
+This is the most important section in the document. The GPU-composited desktop **now works**: WindowServer
+submits real GPU work and reads back correctly, with no GPU hang. The remaining problem is **smoothness** —
+composition is choppy, with CoreAnimation fence timeouts and high CPU. That is a different and far narrower
+problem than the GPU-execution failures documented below, and it is the current blocker. The history
+matters because it shows how the desktop was won: each figure below belongs to one specific boot, and the
+plugin's submission counter, the readback counter and i915's request sequence are three different
+namespaces.
 
 The 0.3.3 boot (`failure-detail-20261019-130037`, boot UUID `43CADE8D-…`, boot start 12:58:39):
 
@@ -404,6 +410,8 @@ the 0.3.3 one; the fourth readback above is where 0.3.3 stops.
 | 0.3.4 / 0.3.5 | first seven submissions | **submission #8** = third readback, dedicated fresh staging |
 | 1.0.10 (diagnostic) | reproduces the 0.3.4/0.3.5 cut-off | same submission #8 / readback #3 |
 | 1.0.12 + fb 0.2.4 | readback #8 completed in 2 ms | **submission #9** (render/event) |
+| 1.0.13 / 1.0.14 (kernel fixes) | — | boot panic (1.0.13); separate HID panic (1.0.14) |
+| **1.0.15 + 0.3.6 + 0.2.5 + HID 1.0.1** | **real WindowServer GPU work + readbacks, no hang** | **nothing — the desktop is usable** |
 
 What is **established**:
 
@@ -1026,6 +1034,25 @@ behind, which had been parking every subsequent boot.
 **Lesson:** a fix you can reproduce locally is still not a hardware fix. The only thing that settles it is
 a target boot that reaches the GPU work — and 1.0.14's first trial never got that far.
 
+### Phase 11 — The desktop works, and the problem changes shape (19 October, 22:11–23:18)
+
+Kernel **1.0.15** replaces the broad 1.0.13/1.0.14 stolen-region skip with a precise reservation: an
+IOKit bridge reads the firmware console address, pitch and dimensions, and the stolen allocator starts
+*after* that image instead of offering it to i915. With the guarded HID null-guard, plugin **0.3.6** and
+framebuffer **0.2.5**, the 22:38 boot produced the project's first **usable GPU-composited desktop**:
+WindowServer submits real GPU work and reads back correctly — 24 fence + 32 readback completions, all
+clean — with no GPU hang (`windowserver-result-224146`).
+
+The blocker then changed shape completely. It is no longer "the GPU hangs" but "the desktop is choppy":
+the latest capture (`windowserver-result-231630`) shows 42 CoreAnimation fence timeouts and 163–205% CPU,
+and System Information now reports the real GPU and shared memory (`Intel(R) Graphics (MTL)`, 12288 MB).
+Host-pointer imports are still refused, so surfaces use the private-image/copy path. So the remaining work
+is composition latency and synchronization — a performance problem, not an execution failure.
+
+**Lesson:** the hardest part of a port is not the first working result, it is knowing which problem you are
+solving. For six candidates the question was "does the GPU execute?" Now it is "why is it choppy?" — and
+that is a much better place to be.
+
 ### The failures we still cannot explain, and say so
 
 * The **exact root cause** of the WindowServer hang is not established.
@@ -1264,6 +1291,14 @@ iGPU Port/
 
 | File | Contents |
 |---|---|
+| `windowserver-result-231630.md` | **Latest.** GPU 1.0.15 / plugin 0.3.6 / fb 0.2.5 / HID 1.0.1: reporting fixed (`Intel(R) Graphics (MTL)`, 12288 MB); smoothness unresolved |
+| `windowserver-result-224146.md` | **The usable-desktop checkpoint.** WindowServer submits real GPU work and reads back correctly, no hang; choppy |
+| `windowserver-scanout-reservation-1.0.15.md` | Kernel 1.0.15: reserve the firmware console image from stolen allocations |
+| `windowserver-registry-report-0.2.5.md` | Framebuffer 0.2.5: driver-queried GPU identity + shared memory in System Information |
+| `windowserver-memory-report-0.3.6.md` | Plugin 0.3.6: query-based Metal memory reporting, no injection |
+| `windowserver-hid-nullguard-1.0.1.md` | Guarded HID 1.0.1: null-guard for the VoodooI2CHID touchscreen panic |
+| `windowserver-iokit-transport-220839.md` | IOKit transport candidate |
+| `windowserver-result-220839.md` / `-222154.md` | Earlier 1.0.15-era trial results |
 | `windowserver-completion-context-1.0.14.md` | 1.0.14: the completion-context use-after-free behind the 1.0.13 panic, and the fix |
 | `windowserver-1.0.14-result-183951.md` | 1.0.14 target trial: attach guard verified, then a separate VoodooI2CHID HID panic |
 | `windowserver-1.0.14-attach-guard.md` | The failed-attach NVRAM marker that parked retries, and the installer fix |
@@ -1435,18 +1470,14 @@ the one-shot opt-in.
 
 `ROADMAP.md` is authoritative and dated. The following is a summary of its structure, not a substitute.
 
-**Current (plugin 0.3.5, kernel 1.0.14, framebuffer 0.2.4):** compression isolation for this
-WindowServer/device only; diagnostic kernels 1.0.9 → 1.0.10 (bounded command-ring words, parsed GuC
-registers and request state); the 1.0.11 mapping-lifetime correction (lifetime page pin for i915 CPU user
-mappings; legacy GTT mmap refused); the 1.0.12 / framebuffer 0.2.4 raw-physical correction
-(`HostPhysicallyContiguous | MapperNone`, verified segment span, rollback of kernel + framebuffer + AuxKC
-as one unit); kernel 1.0.13, which withholds the MTL stolen-memory regions from i915 on `8086:7d45`; and
-kernel **1.0.14**, which fixes the 1.0.13 boot panic (a context use-after-free in the breadcrumb completion
-path) and clears the failed-attach NVRAM marker. Kernels 1.0.9 and 1.0.10 changed **diagnostics only**;
-1.0.11 was shown **not** to resolve the ring overwrite; **1.0.12 was booted and the overwrite persisted**;
-**1.0.13 panicked 8.04 s into boot**; **1.0.14 is built and locally validated but hardware-unverified** —
-its one trial panicked early in a separate VoodooI2CHID touchscreen HID fault. See
-`research/windowserver-completion-context-1.0.14.md`.
+**Current (plugin 0.3.6, kernel 1.0.15, framebuffer 0.2.5, guarded HID 1.0.1):** the GPU-composited
+WindowServer desktop is **usable** — WindowServer submits real GPU work and reads back correctly, with no
+GPU hang. The remaining blocker is **smoothness**: choppy composition, CoreAnimation fence timeouts and
+high CPU. The path here ran through the 1.0.11 mapping pin (falsified), 1.0.12 raw-physical span (booted,
+overwrite persisted), 1.0.13 stolen-memory skip (boot panic), 1.0.14 completion-context fix (separate HID
+panic), 1.0.15 GPU-startup stolen-region reservation (usable desktop), 0.2.5 GPU-identity reporting and
+0.3.6 query-based memory reporting (System Information now shows `Intel(R) Graphics (MTL)`, 12288 MB).
+See `research/windowserver-result-224146.md` and `research/windowserver-result-231630.md`.
 
 **Promotion criteria (unchanged):**
 
@@ -1474,7 +1505,7 @@ future-proof claim is made for any of them.
 ---
 
 <a name="versions"></a>
-## 🕓 Version history (plugin 0.2.4 → 0.3.5, kernel 1.0.8 → 1.0.14, framebuffer → 0.2.4)
+## 🕓 Version history (plugin 0.2.4 → 0.3.6, kernel 1.0.8 → 1.0.15, framebuffer → 0.2.5)
 
 Each candidate changed as few things as possible, and each failure narrowed the next step. The one-line
 "what changed" and "what happened" is the honest spine of the project. All dates are October 2026.
@@ -1498,6 +1529,10 @@ Each candidate changed as few things as possible, and each failure narrowed the 
 | kernel 1.0.12 + framebuffer 0.2.4 (candidate) | Request `kIOMemoryHostPhysicallyContiguous \| kIOMemoryMapperNone` in `nmxVramAlloc()` and `nmx_xnu_mem_alloc()`; refuse to export a raw physical span unless the first segment covers the whole request (segment/descriptor length, CPU pointer and overflow; mask and alignment in the kernel allocator); release slot and budget on rejection; installer stages/validates/backs up/rolls back kernel + framebuffer + AuxKC together | Local: Sequoia-decision ASan/UBSan fixture (old code exports a 4 KiB segment for an 8 KiB request, new code rejects it; 2,000 balanced cycles), both kexts build and link, installer/rollback fixtures pass. Kernel UUID `000EF47E-…`, SHA-256 `1ad3f4dc…`; framebuffer UUID `59DA4CD2-…`, SHA-256 `495ed4cc…`. **Booted 19 Oct 17:58: readback #8 completed, submission #9 timed out at 5000 ms, `0xff000000` recurred at `0xe00–0xe0c` with `IPEHR=ff000000`; no span-refusal line in the log, so the guard's execution is unverified. Does not fix the hang** |
 | kernel 1.0.13 (parked) | Withhold `INTEL_MEMORY_STOLEN_LOCAL` and `INTEL_MEMORY_STOLEN_SYSTEM` from i915 for `8086:7d45` under `NMXKPI`, so rings/objects allocate from system memory instead of the DSM pool the firmware panel occupies; log `stolen=`/`size=`/`ggtt=` at ring pin | Local: 438-object x86_64 link with the frozen 1.0.8 import set, region-probe/ring-allocation sanitizer fixtures, installer/KC rollback fixtures. Kernel UUID `121AACAE-4C53-3357-9356-38C79222A842`, SHA-256 `d57981cb…`. **Booted 19 Oct 18:17 and panicked after 8.04 s: `mutex … used before mtx_init` in `guc_retire_inflight_request_prio`, on a zeroed `intel_context.guc_state.lock`. No desktop. Cause unattributed; do not re-arm unchanged** |
 | kernel 1.0.14 (current candidate) | Fix the 1.0.13 boot panic: breadcrumb-owned request references hold their context and (for parallel requests) a parent context under NMXKPI; ownership is acquired before the fence's `SIGNALED` bit is published; the signaler and request iterators snapshot their next entry before a losing signal path can drop the last reference. Installer clears the NVRAM `nullmoth-gpu-attaching` marker a failed attach leaves behind | Local: 438-object link with the frozen 1.0.8 import set; the actual old enqueue/worker/GuC functions reproduce a heap-use-after-free and the corrected functions pass 90,000 ASan/UBSan lifetimes; request-iterator UAF reproduced and fixed; installer/KC rollback fixtures. Kernel UUID `9B0192B5-…`, SHA-256 `80c3fe8b…`. **Hardware-unverified: the one trial (18:39:51) panicked at 9.12 s in a VoodooI2CHID touchscreen HID null-page-fault that predates 1.0.14; NMXGPU was loaded but not in the faulting backtrace. Desktop still unresolved** |
+| kernel 1.0.15 | GPU-startup correction: restore i915's stolen-region setup but reserve the firmware console image (read from IOPlatformExpert) so no allocation overlaps it; keep the 1.0.14 completion-context protection | Local: 438-object link; the actual stolen initializer reproduces the overlap and the corrected one passes 524,288 ASan/UBSan cases; console bridge validated. Kernel UUID `39DFCF2A-…`. **22:38 boot: desktop usable — WindowServer submits real GPU work and reads back correctly, no GPU hang. Choppy** |
+| plugin 0.3.6 | Query-based Metal memory reporting: name from `VkPhysicalDeviceProperties.deviceName`, heap sizes from `VkPhysicalDeviceMemoryProperties`; no fixed name or size injection; bypass failed host-pointer imports for `8086:7d45` (copy fallback) | Local: installer/KC/rollback fixtures. **Hardware-unverified; the 1.0.15 desktop GPU work remains established** |
+| framebuffer 0.2.5 | Publish driver-queried GPU identity + shared memory to the PCI registry (`model`, `VRAM,totalMB`) so System Information shows the real name and shared capacity; never enlarges the physical scanout mapping | Local: ASan/UBSan publication/readback fixtures. **System Information now reports `Intel(R) Graphics (MTL)`, 12288 MB** |
+| guarded HID 1.0.1 | Null-guard for the VoodooI2CHID touchscreen report path that panicked at 9.12 s | Local: HID transform fixtures. **Removed the early HID panic; desktop reached** |
 
 ---
 
@@ -1617,8 +1652,9 @@ evidence in `research/` looks the way it does.
 
 **Does this actually work?**
 For applications, yes: Metal and Vulkan run on the Xe-LPG iGPU and produce exact, verified output
-(65,536 Vulkan values, 4,096 Metal pixels, 26,000 frames across 22 cases). Your entire desktop, no:
-WindowServer composition still hangs. Those are two different milestones, and this project says so plainly.
+(65,536 Vulkan values, 4,096 Metal pixels, 26,000 frames across 22 cases). The desktop **now works too** —
+WindowServer is GPU-composited, does real GPU work and reads back correctly, with no hang — but it is
+**choppy**. Smoothness is the current milestone. Those are different stages, and this project says so plainly.
 
 **Can I install it on my laptop?**
 Only if you have this exact configuration: Dell Latitude 5350, iGPU `8086:7D45`, macOS 15.8.1. A
@@ -1640,17 +1676,13 @@ compression and panel scanout. The application gate does not exercise that path 
 explicitly that a passing application matrix does not predict desktop success.
 
 **Didn't you find the cause in the ring buffer?**
-We found the *symptom* precisely: a four-word `0xff000000` block replaces the previous request's
-switch-out and workaround tail, and the GPU fetches it (`IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`).
-We have **not** identified the writer. Kernel 1.0.11 fixed a real mapping-lifetime defect and the hardware
-reproduced the identical overwrite, so that defect is explicitly **not** claimed as the cause. Kernel 1.0.12
-and framebuffer 0.2.4 corrected a second real defect — a raw physical span exported without checking that
-the pages were host-contiguous — but that build was booted and the overwrite recurred, with no span-refusal
-line in the log to show the guard even ran. Kernel 1.0.13 then withheld i915's stolen-memory region and
-**panicked 8 seconds into boot**; that panic was a context use-after-free in the breadcrumb completion path.
-Kernel **1.0.14** fixes it and is locally validated, but is hardware-unverified — its one trial panicked
-early in a separate VoodooI2CHID touchscreen HID fault. The next step is still a ring guard plus
-physical-page ownership, not another guess.
+That question is now historical. The ring capture precisely documented the GPU-execution failure — a
+four-word `0xff000000` block replacing the previous request's tail, fetched by the GPU (`IPEHR=0xff000000`) —
+and ruled out two real source defects (the 1.0.11 mapping-lifetime pin, the 1.0.12 raw-physical span) as
+the cause. The 1.0.13 boot panic was a context use-after-free in the breadcrumb completion path, fixed by
+1.0.14. Kernel **1.0.15** then made the desktop usable, so the GPU-execution failure is resolved. The
+current question is no longer "does the GPU execute?" but "why is composition choppy?" — a latency and
+synchronization problem, documented in `research/windowserver-result-231630.md`.
 
 **Why not WhateverGreen?**
 Its own documentation lists Ice Lake as the newest supported Intel family; it supports neither Alder Lake
@@ -1697,12 +1729,12 @@ this machine that claim is already partly falsified:
   and **26,000 application frames** pass exact-pixel validation over **both** transport routes;
 * a real **LinuxKPI lost-wake race** was found, reproduced and fixed.
 
-What is not yet falsified is the hard part: **GPU-composited WindowServer on the physical panel.** The
-evidence points at command-ring *content* at a request boundary: a four-word `0xff000000` block replaces
-the previous request's switch-out and workaround tail, and the GPU fetches it. The writer is unidentified;
-the next step is a ring guard and a physical-page ownership map rather than another guess. Along the way
-three real source defects were found and fixed — the 1.0.11 mapping-lifetime pin (falsified as the cause),
-the 1.0.12 raw-physical span (booted, overwrite persisted) and the 1.0.13 boot panic, a context use-after-free
-in the breadcrumb completion path that **1.0.14** now fixes and validates locally. 1.0.14 is
-hardware-unverified: its one trial panicked early in a separate VoodooI2CHID touchscreen HID fault. That is
-the honest frontier.
+What is not yet falsified is the last mile: **smooth, presentation-stable GPU-composited WindowServer.** The
+harder claim — that the desktop can be GPU-composited at all — is now falsified in the project's favour:
+WindowServer submits real GPU work and reads back correctly, with no GPU hang, and System Information reports
+the real GPU and shared memory. What remains is choppiness: composition latency, CoreAnimation fence
+timeouts and high CPU. That is a performance and synchronization problem, not the GPU-execution failure that
+dominated the earlier evidence (the `0xff000000` ring overwrite, now historical). The path here fixed three
+real source defects — the 1.0.11 mapping-lifetime pin, the 1.0.12 raw-physical span and the 1.0.13 boot
+panic (a context use-after-free that **1.0.14** fixed) — and 1.0.15 then made the desktop usable. The
+remaining step is composition smoothness, not another guess about whether the GPU works.

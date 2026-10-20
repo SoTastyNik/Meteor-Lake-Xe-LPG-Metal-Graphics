@@ -337,20 +337,6 @@ int intel_memory_regions_hw_probe(struct drm_i915_private *i915)
 
 		type = intel_region_map[i].class;
 		instance = intel_region_map[i].instance;
-#ifdef NMXKPI
-		/* LatitudeMTLFB retains the firmware scanout in DSM. Display discovery
-		 * is skipped on this device, so initial_plane_vma() never reserves its
-		 * preallocated framebuffer in the stolen allocator. Do not offer that
-		 * memory to i915 at all: ring/context objects must use system memory.
-		 * The GGTT firmware scanout reservation remains independent of this.
-		 */
-		if (INTEL_DEVID(i915) == 0x7d45 &&
-		    (type == INTEL_MEMORY_STOLEN_LOCAL ||
-		     type == INTEL_MEMORY_STOLEN_SYSTEM)) {
-			drm_info(&i915->drm, "Latitude MTL: stolen region withheld from i915; firmware panel retains DSM\n");
-			continue;
-		}
-#endif
 		switch (type) {
 		case INTEL_MEMORY_SYSTEM:
 			if (IS_DGFX(i915))

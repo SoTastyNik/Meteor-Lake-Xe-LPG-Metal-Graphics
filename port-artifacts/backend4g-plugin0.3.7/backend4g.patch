@@ -1,0 +1,34 @@
+--- a/src/intel/vulkan/anv_physical_device.c
++++ b/src/intel/vulkan/anv_physical_device.c
+@@ -3,6 +3,7 @@
+  */
+ 
+ #include "anv_private.h"
++#include "anv_latitude_heap.h"
+ #include "anv_api_version.h"
+ #include "anv_measure.h"
+ 
+@@ -2560,6 +2561,11 @@
+    device->sys.region = &devinfo->mem.sram.mem;
+    device->sys.size =
+       anv_restrict_sys_heap_size(device, devinfo->mem.sram.mappable.size);
++#ifdef __APPLE__
++   device->sys.size = anv_latitude_heap_limit(devinfo->pci_device_id,
++                                            devinfo->has_local_mem, true,
++                                            device->sys.size);
++#endif
+    device->sys.available = devinfo->mem.sram.mappable.free;
+ 
+    device->vram_mappable.region = &devinfo->mem.vram.mem;
+--- a/src/intel/vulkan/anv_device.c
++++ b/src/intel/vulkan/anv_device.c
+@@ -1758,7 +1758,8 @@
+    struct anv_memory_heap *mem_heap =
+       &pdevice->memory.heaps[mem_type->heapIndex];
+ 
+-   if (aligned_alloc_size > mem_heap->size)
++   if (pAllocateInfo->allocationSize > mem_heap->size ||
++       aligned_alloc_size > mem_heap->size)
+       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+ 
+    uint64_t mem_heap_used = p_atomic_read(

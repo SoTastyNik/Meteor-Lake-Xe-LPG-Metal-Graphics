@@ -23,6 +23,8 @@
 #include <mach/mach_time.h>
 #ifdef LATITUDE_MTL_PANEL
 #include "latitude_scanout.h"
+#include "latitude_gpu_identity.h"
+#include <IOKit/IOUserClient.h>
 #endif
 #include <sys/sysctl.h>
 #include <sys/proc.h>
@@ -33,7 +35,7 @@
 #include <mach/kmod.h>
 extern "C" kern_return_t _start(kmod_info_t *ki, void *d); extern "C" kern_return_t _stop(kmod_info_t *ki, void *d);
 #ifdef LATITUDE_MTL_PANEL
-extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.LatitudeMTLFB, "0.2.4", _start, _stop) }
+extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.LatitudeMTLFB, "0.2.5", _start, _stop) }
 #else
 extern "C" { KMOD_EXPLICIT_DECL(com.nullmoth.NMXVGAFB, "0.1", _start, _stop) }
 #endif
@@ -229,6 +231,9 @@ private:
 public:
     IOService *probe(IOService *provider, SInt32 *score) override;
     bool start(IOService *provider) override;
+#ifdef LATITUDE_MTL_PANEL
+    IOReturn setProperties(OSObject *properties) override;
+#endif
     void stop(IOService *provider) override;
 
     IOReturn enableController() override { return kIOReturnSuccess; }
@@ -693,6 +698,8 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
 }
 #endif
 
+#include "latitude_gpu_identity_kernel.inc"
+
 bool NMXVGAFB::start(IOService *provider)
 {
     // the mode the firmware lit (GOP): base, size and pitch of the linear framebuffer
@@ -789,7 +796,9 @@ bool NMXVGAFB::start(IOService *provider)
         setProperty("IOFBDependentID", 0x4E4D58560000001ull, 64);
         setProperty("IOFBDependentIndex", 0ull, 32);
         // what WindowServer may place its flip surfaces in (NVRMFB reports its VRAM here); system memory backs them
+#ifndef LATITUDE_MTL_PANEL
         setProperty("IOFBMemorySize", (unsigned long long)(1ull << 30), 64);
+#endif
     } else VFBLOG("the framebuffer would not map write-combined: no accelerated frames for it");
     setProperty("built-in", kOSBooleanTrue);
     // the timing AGDC link-config answers read (NMXAGDC, from NVRMAGDC: NVRMFB publishes the same record); the same

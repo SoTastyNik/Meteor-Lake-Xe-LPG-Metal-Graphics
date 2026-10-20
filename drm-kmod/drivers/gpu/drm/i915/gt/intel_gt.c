@@ -746,12 +746,16 @@ int intel_gt_init(struct intel_gt *gt)
 		gt_err(gt, "Failed to retrieve hwconfig table: %pe\n", ERR_PTR(err));
 
 	err = __engines_record_defaults(gt);
-	if (err)
+	if (err) {
+		gt_err(gt, "Engine default-state initialization failed: %d\n", err);
 		goto err_gt;
+	}
 
 	err = __engines_verify_workarounds(gt);
-	if (err)
+	if (err) {
+		gt_err(gt, "Engine workaround verification failed: %d\n", err);
 		goto err_gt;
+	}
 
 	err = i915_inject_probe_error(gt->i915, -EIO);
 	if (err)

@@ -1,0 +1,26 @@
+{
+  "source_sha256": "42d65940f44de1482427a022f254e86c9f5c5b40b360418c4aefbc33facec063",
+  "patched_sha256": "0ec22912c7393a60532960ed04dacfb0662f85cf4b453848091c400849548ace",
+  "table_length_unchanged": true,
+  "checksum_zero": true,
+  "scoped_device": "_SB.PC00.I2C3.TPD0",
+  "method_renames": [
+    {
+      "offset": 541559,
+      "old": "_DSM",
+      "new": "XDSM"
+    },
+    {
+      "offset": 541675,
+      "old": "_CRS",
+      "new": "XCRS"
+    }
+  ],
+  "changed_offsets": [
+    9,
+    541559,
+    541675
+  ],
+  "new_methods": "_DSM returns firmware TPDH directly for HID descriptor; _CRS concatenates firmware SBFB and SBFI, polling controller avoids GPIO routing; _STA and _INI untouched",
+  "hardware_verified": false
+}

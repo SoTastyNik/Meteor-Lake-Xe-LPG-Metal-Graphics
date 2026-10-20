@@ -25,6 +25,7 @@ extern "C" {
  * Allocates 'size' bytes of wired kernel memory. contiguous != 0 asks for one physically contiguous range below
  * 'max_phys' aligned to 'align'. Returns the kernel address and an opaque handle for nmx_xnu_mem_free, or NULL.
  */
+int nmx_xnu_firmware_scanout(uint64_t *base, uint64_t *size);
 void *nmx_xnu_mem_alloc(size_t size, int contiguous, uint64_t max_phys, size_t align, void **handle);
 void nmx_xnu_mem_free(void *handle);
 /* physical address of a kernel virtual address (0 if unmapped) */

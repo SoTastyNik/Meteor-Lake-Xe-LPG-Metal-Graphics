@@ -1,0 +1,28 @@
+{
+  "report": "failure-detail-20261019-231630",
+  "boot_local": "2026-10-19 23:14:31 BST",
+  "target_build": "24H32",
+  "gpu_name": "Intel(R) Graphics (MTL)",
+  "shared_heap_bytes": 12884901888,
+  "shared_heap_mib": 12288,
+  "physical_ram_bytes": 17179869184,
+  "registry_publication_readback_verified": true,
+  "system_profiler_name_and_shared_memory_verified": true,
+  "framebuffer_version": "0.2.5",
+  "metal_plugin": "0.3.6",
+  "kernel_version": "1.0.15",
+  "logged_initial_fence_completions": 24,
+  "logged_initial_fence_nonzero": 0,
+  "logged_initial_readback_completions": 32,
+  "logged_initial_readback_nonzero": 0,
+  "counts_are_capped_startup_traces_not_total_frames": true,
+  "coreanimation_timeout_lines": 42,
+  "windowserver_cpu_snapshots_percent": [
+    163.4,
+    205.5,
+    127.8
+  ],
+  "new_gpu_hang_or_device_lost_in_capture": false,
+  "new_windowserver_crash_or_kernel_panic_in_report_for_this_boot": false,
+  "limits": "No FPS measurement or long-term smoothness certification. Early sample contains pipeline/shader compilation; current private-image/copy surface path remains. Input-specific cause not established."
+}

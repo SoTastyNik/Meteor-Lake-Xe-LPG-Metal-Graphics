@@ -18,10 +18,10 @@ with tempfile.TemporaryDirectory(prefix='desktop-crash-collector-') as tmp:
    (panics/'OtherApp.ips').write_text('unrelated')
   retained=p/'retained-source';retained.mkdir();(retained/'LatitudeDesktopLive.log').write_text('failed boot live evidence');(retained/'LatitudeDesktopRegistry.log.previous').write_text('previous registry evidence')
   for name in ['LatitudeDesktopAttempt.trace','LatitudeDesktopAttempt.trace.previous','LatitudeWindowServerSample.txt','LatitudeWindowServerSample.stderr.txt']:(retained/name).write_text('captured '+name)
-  script=(r/'desktop-sources/collect-desktop-failure.sh').read_text().replace('crash_root=/Library/Logs/DiagnosticReports','crash_root="'+str(system)+'"',1).replace('user_home=${HOME:-/var/root}','user_home="'+str(user)+'"').replace('/usr/bin/log show','log show').replace('/Library/Logs/$saved',str(retained)+'/$saved').replace('/Library/GPUBundles',str(p/'missing-runtime'))
+  script=(r/'desktop-sources/collect-desktop-failure.sh').read_text().replace('crash_root=/Library/Logs/DiagnosticReports','crash_root="'+str(system)+'"',1).replace('user_home=${HOME:-/var/root}','user_home="'+str(user)+'"').replace('/usr/bin/log show','log show').replace('/usr/sbin/system_profiler','system_profiler').replace('/usr/sbin/ioreg','ioreg').replace('/Library/Logs/$saved',str(retained)+'/$saved').replace('/Library/GPUBundles',str(p/'missing-runtime'))
   script=script.replace('for panic_root in /Library/Logs/DiagnosticReports /Library/Logs/PanicReporter; do','for panic_root in "'+str(panics)+'"; do').replace('/Library/Logs/panic.log',str(p/'missing-legacy-panic.log'))
   (p/'collect-desktop-failure.sh').write_text(script)
-  for name,body in {'uname':'echo x86_64','sysctl':'echo boot-fixture','sw_vers':'echo version-fixture','log':'echo "fixture history"; exit "${MOCK_LOG_RESULT:-0}"','sleep':'exec /bin/sleep 3'}.items():
+  for name,body in {'ioreg':'echo fixture-input-chain','system_profiler':'echo \'{"SPDisplaysDataType":[]}\'', 'uname':'echo x86_64','sysctl':'echo boot-fixture','sw_vers':'echo version-fixture','log':'echo "fixture history"; exit "${MOCK_LOG_RESULT:-0}"','sleep':'exec /bin/sleep 3'}.items():
    f=p/'bin'/name;f.write_text('#!/bin/bash\n'+body+'\n');f.chmod(0o755)
   (p/'Desktop/reports').mkdir(parents=True)
   env=os.environ.copy();env.update(PATH=str(p/'bin')+':/usr/bin:/bin',SUDO_USER='',MOCK_LOG_RESULT='1' if mode=='history-fails' else '0')

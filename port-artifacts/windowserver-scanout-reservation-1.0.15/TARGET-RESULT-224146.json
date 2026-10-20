@@ -1,0 +1,14 @@
+{
+  "report": "failure-detail-20261019-224146",
+  "same_boot_desktop": true,
+  "kernel": "1.0.15",
+  "windowserver_vk_init_success": true,
+  "logged_fence_completions": 24,
+  "all_logged_fences_success": true,
+  "logged_readback_completions": 32,
+  "all_logged_readbacks_success": true,
+  "trace_is_bounded": true,
+  "coreanimation_timeouts": 35,
+  "full_acceleration_certified": false,
+  "hardware_observed": "usable desktop and actual WindowServer GPU work; presentation/performance unresolved"
+}

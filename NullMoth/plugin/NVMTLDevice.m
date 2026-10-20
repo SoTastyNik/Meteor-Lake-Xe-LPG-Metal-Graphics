@@ -549,7 +549,9 @@ static void nvmtl_amgl_caps(const void *caller)
     static int vk = 0; if (!vk) { vk = 1; nvmtl_vk_init(); }
     nvmtl_amgl_caps(__builtin_return_address(0));
     const char *vkname = nvmtl_vk_device_name();
-    NSString *full = [NSString stringWithUTF8String:(vkname ? vkname : "NVIDIA GPU")];
+    NSString *full = [NSString stringWithUTF8String:(vkname ? vkname : "(GPU identity unavailable)")];
+    /* UMA identity comes from the selected Vulkan device, not OpenCore branding. */
+    if (nvmtl_vk_has_unified_memory()) return full;
     NSRange cut = [full rangeOfString:@" (NVK "];
     NSString *marketing = (cut.location != NSNotFound) ? [full substringToIndex:cut.location] : full;
     return [NSString stringWithFormat:@"%@ (NVMTL over %@)", marketing, full];
@@ -1979,8 +1981,8 @@ static void nvmtl_log_compute_descriptor(MTLComputePipelineDescriptor *d) {
     nvlog("recommendedMaxWorkingSetSize -> %llu MB", (unsigned long long)(ws >> 20));
     return ws;
 }
-- (BOOL)hasUnifiedMemory { return NO; }
-- (uint64_t)dedicatedMemorySize { return nvmtl_vk_vram_bytes(); }
+- (BOOL)hasUnifiedMemory { return nvmtl_vk_has_unified_memory() ? YES : NO; }
+- (uint64_t)dedicatedMemorySize { return nvmtl_vk_has_unified_memory() ? 0 : nvmtl_vk_vram_bytes(); }
 
 - (BOOL)nvmtlSampleCountOK:(NSUInteger)n {
     if (n == 0 || (n & (n - 1)) != 0 || n > 64) return NO;
