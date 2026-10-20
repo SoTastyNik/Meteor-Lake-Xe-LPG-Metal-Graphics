@@ -1623,6 +1623,11 @@ This project is a **retargeting**, not original work. It stands on:
 * The AIR→SPIR-V translator (based on `metal2vulkan`) — **LGPL-3.0** with **GPL-3.0** components; see
   `NullMoth/translator/LICENSE` and `COPYING`.
 * `ogkm610` — NVIDIA open kernel modules, MIT except where noted.
+* **AirportItlwm** (the custom laobamac Sequoia build, `d695c97`, `com.zxystd.AirportItlwm` 2.4.0) — the
+  macOS port of Intel's Linux `iwlwifi` driver, which is **GPL-2.0**. The Meteor Lake PCI match, the
+  fragmented-PNVM loading and the `itlwm_mtl_internal_aux` path are this project's additions on that base.
+* The **VoodooI2C** touch stack (VoodooI2C, VoodooI2CHID, VoodooGPIO) and the LegionI2CArrowLake adaptation —
+  **GPL-2.0**, with the Legion kext under ISC; see the pinned licences under `research/voodooi2c-core/`.
 * AMFIPass 1.4.1, Lilu and VirtualSMC — by their respective authors, under their own terms. No licence
   text ships inside `AMFIPass/AMFIPass.kext` in this tree; confirm it upstream before redistribution.
 
