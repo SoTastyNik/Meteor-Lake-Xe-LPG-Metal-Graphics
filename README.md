@@ -79,6 +79,8 @@ unresolved. The current candidate is **kernel 1.0.15 + plugin 0.3.6 + framebuffe
 | **Touchscreen multitouch + gestures (VoodooI2CHID)** | Touchpad (ELAN04F3:328E) — **work in progress** |
 | PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (12,288 MB) | |
 
+![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL), 12288 MB shared memory, queried automatically.](IMG_6508.jpg)
+
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
 Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
 
