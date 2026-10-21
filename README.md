@@ -87,7 +87,7 @@ also work. The remaining gap is **smoothness** — the CoreAnimation fence timeo
 | Command-pool lifetime — 80,020 created / destroyed, zero leaks | |
 | PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (4096 MB under the 4 GiB backend cap) | |
 
-![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL) — with shared memory queried automatically (this photo shows 12288 MB, before the 4 GiB backend cap was applied; the current cap reports 4096 MB)](IMG_608.jpg)
+![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL) — with shared memory queried automatically (this photo shows 12288 MB, before the 4 GiB backend cap was applied; the current cap reports 4096 MB)](IMG_6508.jpg)
 
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
 Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
