@@ -1867,10 +1867,12 @@ this machine that claim is already partly falsified:
 
 What is not yet falsified is the last mile: **smooth, presentation-stable GPU-composited WindowServer.** The
 harder claim — that the desktop can be GPU-composited at all — is now falsified in the project's favour:
-WindowServer submits real GPU work and reads back correctly, with no GPU hang, and System Information reports
-the real GPU and shared memory. What remains is choppiness: composition latency, CoreAnimation fence
-timeouts and high CPU. That is a performance and synchronization problem, not the GPU-execution failure that
-dominated the earlier evidence (the `0xff000000` ring overwrite, now historical). The path here fixed three
-real source defects — the 1.0.11 mapping-lifetime pin, the 1.0.12 raw-physical span and the 1.0.13 boot
-panic (a context use-after-free that **1.0.14** fixed) — and 1.0.15 then made the desktop usable. The
+WindowServer submits real GPU work and reads back correctly, with no GPU hang, the readback dropped to
+**5.0 ms**, and System Information reports the real GPU and shared memory. The same machine now also runs
+brightness, sound (ALC295/AppleALC), Night Shift, Bluetooth, Wi-Fi and a multitouch touchscreen — so the
+"dead end" claim is falsified well beyond the GPU. What remains is smoothness (a few CoreAnimation fence
+timeouts), the touchpad (WIP), and two undiagnosed cosmetic issues. That is a far narrower frontier than
+the earlier GPU-execution failure (the `0xff000000` ring overwrite, now historical). The path here fixed
+three real source defects — the 1.0.11 mapping-lifetime pin, the 1.0.12 raw-physical span and the 1.0.13
+boot panic (a context use-after-free that **1.0.14** fixed) — and 1.0.15 then made the desktop usable. The
 remaining step is composition smoothness, not another guess about whether the GPU works.
