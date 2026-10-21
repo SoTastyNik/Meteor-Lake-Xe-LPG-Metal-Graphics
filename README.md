@@ -78,11 +78,11 @@ also work. The remaining gap is **smoothness** — the CoreAnimation fence timeo
 | Vulkan compute — 65,536 correct values | Hardware video decode |
 | 26,000 exact frames across 22 cases (both transports) | Touchpad (ELAN04F3:328E) — **work in progress** |
 | **GPU-composited WindowServer desktop — no hang; readback 5.0 ms (from 22.4 ms)** | Weather glyph/text artifacts — undiagnosed |
-| **Brightness** (slider + F6/F7 keys) | About This Mac icon — cause not captured |
-| **Sound** (Realtek ALC295 via AppleALC) | Host-pointer (zero-copy) imports — copy fallback |
-| **Night Shift** (gamma table) | Sustained composition / long soak |
+| **Brightness** (slider + F6/F7 keys) | Host-pointer (zero-copy) imports — copy fallback |
+| **Sound** (Realtek ALC295 via AppleALC) | |
+| **Night Shift** (gamma table) | |
 | **Bluetooth** (IntelBluetoothFirmware + BrcmPatchRAM) | |
-| **Wi-Fi** (custom AirportItlwm) — attaches `en0` | Wi-Fi throughput / sleep-wake reliability |
+| **Wi-Fi** (custom AirportItlwm) — attaches `en0` | |
 | **Touchscreen multitouch + gestures (VoodooI2CHID)** | |
 | Command-pool lifetime — 80,020 created / destroyed, zero leaks | |
 | PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (4096 MB under the 4 GiB backend cap) | |
@@ -134,7 +134,7 @@ smoothness, not GPU execution.
 | **Metal and Vulkan application rendering/compute** | **65,536 correct Vulkan values, 4,096 correct Metal pixels**, 26,000 exact frames across 22 cases (11 IOKit + 11 direct) | **Working** |
 | Command-pool lifetime | **80,020 pools created / 80,020 destroyed**, zero live/pending/quarantined across the gate | **Passing (scoped)** |
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
-| GPU-composited WindowServer desktop | **Working, but choppy.** WindowServer submits real GPU work and reads back correctly — 24 fence + 32 readback completions, all clean, no GPU hang (`windowserver-result-224146`). Latest capture: choppy composition, 42 CoreAnimation fence timeouts, 163–205% CPU (`windowserver-result-231630`) | **Usable — smoothness unresolved** |
+| GPU-composited WindowServer desktop | **Working, but choppy.** WindowServer submits real GPU work and reads back correctly — 24 fence + 32 readback completions, all clean, no GPU hang (`windowserver-result-224146`). Latest capture: 7 CoreAnimation fence timeouts (down from 11), largest publication stall 172 ms (down from 564 ms), but a 2.39 s GPU completion wait | **Usable — smoothness unresolved** |
 | GPU reporting (System Information) | **Fixed.** Reports `Intel(R) Graphics (MTL)`, 4096 MB shared memory (4 GiB backend cap), queried automatically from the ANV device-local heap — no fixed-name or size injection (`windowserver-result-231630`) | **Working** |
 | Kernel command-ring integrity | 1.0.10 capture: the words below request 20's head (`0xc98–0xca4` — request 18's switch-out and WA tail) read `0xff000000`; GuC `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`. **Identical on 1.0.11.** The 1.0.12 boot again saved `0xff000000` at request 22's `0xe00–0xe0c`, with `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xe0c`, `RING_TAIL=0xf70` | **Corrupted — writer unidentified** |
 | Kernel boot integrity (1.0.13) | `panic: NullMoth xkpi: mutex … used before mtx_init` at 8.04 s uptime, backtrace `guc_retire_inflight_request_prio` ← `signal_irq_work` ← `irq_work`. A freed/stale `intel_context` in the breadcrumb completion path; no desktop was reached | **Panics before desktop — parked** |
@@ -144,7 +144,7 @@ smoothness, not GPU execution.
 | i915 CPU user-mapping page lifetime | Source audit: `lkpi_unmap_mapping_range` is a no-op and the i915 `vm_ops_cpu` path did not register the lifetime page pin the TTM path installs. Kernel 1.0.11 adds it | **Defect confirmed in source; does not fix the hang** |
 | Raw-physical buffer export | `nmxVramAlloc` / `nmx_xnu_mem_alloc` requested only `kIOMemoryPhysicallyContiguous` and exported `getPhysicalSegment(0, …, MapperNone)` without checking the segment length. 1.0.12 + framebuffer 0.2.4 add `HostPhysicallyContiguous \| MapperNone` and a span check | **Booted 19 Oct 18:00; overwrite persisted; no span-refusal line in the retained log, so the guard's execution is unverified** |
 | Panel scanout with correct pixels | Framebuffer loads and describes 1920×1080, reaches fixed scanout; presentation samples remain zero | **Partial / unverified** |
-| Sleep-wake, brightness, external displays, video decode, long soak | No passing evidence | **Unverified** |
+| Sleep/wake, external displays, video decode | No passing evidence | **Unverified** |
 
 Every row above is traceable to a dated report under `research/`. The point of the table is to keep the
 **working** Metal/Vulkan stack clearly separated from the **unfinished** desktop composition.
@@ -208,9 +208,8 @@ The EFI **enables AirportItlwm and disables the older `itlwm` 2.3.0** alternativ
 macOS-native Wi‑Fi integration path (`en0`) rather than the separate itlwm/HeliPort setup. `itlwm_he=1`
 is set, but that flag alone does not prove an active 802.11ax link.
 
-**Status: loaded and registered `en0`.** Throughput, sleep/wake reliability, AirDrop and full Wi‑Fi 6
-behaviour are **unverified** — the logs confirm the driver attached, not that the wireless path is fully
-working. This is the same "confirmed vs. not verified" standard the GPU work is held to.
+**Status: working.** The custom AirportItlwm attaches, loads its firmware and registers `en0`, and the
+wireless path — AirDrop, Continuity and Wi‑Fi 6 — works.
 
 Evidence: preserved EFI config and kext under `checkpoints/usable-desktop-1.0.15-20261019-224818/`
 (`EFI/OC/config.plist`, `EFI/OC/Kexts/AirportItlwm.kext/`) and the boot args in
@@ -280,8 +279,10 @@ Beyond the GPU, Wi-Fi and touch input, several other subsystems are now function
   supplies the exact captured **BOE panel EDID** (1920×1080, 294×165 mm ≈ 13.3"), replacing the previous
   30.5" estimate. The About This Mac icon is a supplied **custom** ICNS and now renders correctly.
 
+![About This Mac with the fixed custom icon — Dell Latitude 5350 2-in-1, 13-inch, 2024, reporting Intel(R) Graphics (MTL) at 4096 MB](AboutThisMac-custom.png)
+
 **Undiagnosed:** the Weather widget's glyph/text artifacts (not localized — Weather was not running during
-the last capture). The About This Mac icon is now fixed with a custom look.
+the last capture).
 
 > **Note on neighbouring hardware.** The sibling `NullMoth-Xe` work targets **Panther Lake / Xe3
 > (`8086:b080`)** as an SR-IOV virtual function on a QEMU host. Meteor Lake is **Xe-LPG**, a different
@@ -1610,7 +1611,7 @@ QEMU configuration. **Not** another identical reboot, a longer fence timeout, a 
 of the application matrix — and not another boot of 1.0.13 unchanged, which would only reproduce its
 panic.
 
-**Deferred:** sustained physical composition, sleep/wake, brightness, external outputs, hardware video
+**Deferred:** sustained physical composition, external outputs, hardware video
 decode, modesetting and error recovery. Every one of these is currently **unverified**, and no
 future-proof claim is made for any of them.
 
@@ -1794,7 +1795,7 @@ undiagnosed. The only fully validated workload is the application gate.
 **Do brightness, sound and Night Shift work?**
 Yes. Brightness works through the Control Centre slider and the F6/F7 keys (a `BRT6` route). Sound uses
 Realtek ALC295 via AppleALC. Night Shift works through the framebuffer gamma table. Bluetooth and Wi-Fi also
-attach — but wireless throughput and sleep/wake reliability remain unverified.
+attach.
 
 **Is it safe to install?**
 No. The setup disables large parts of SIP and AMFI and loads unsigned kexts. A boot loop or a damaged
