@@ -1398,14 +1398,16 @@ iGPU Port/
 
 | File | Contents |
 |---|---|
-| `windowserver-result-231630.md` | **Latest.** GPU 1.0.15 / plugin 0.3.6 / fb 0.2.5 / HID 1.0.1: reporting fixed (`Intel(R) Graphics (MTL)`, 12288 MB); smoothness unresolved |
-| `windowserver-result-224146.md` | **The usable-desktop checkpoint.** WindowServer submits real GPU work and reads back correctly, no hang; choppy |
+| `brightness-ps2-route.md` / `brightness-xps-reference.md` | Brightness: the F6/F7 keyboard route (BRTKEYS revision 4) and reference assessment |
+| `nightshift-and-audio-0.3.16.md` | Gamma/Night Shift path (framebuffer 0.2.8) and ALC295 audio (AppleALC 1.9.8) |
+| `panel-and-icon-0.3.14.md` | Captured BOE panel EDID (13.3") and About This Mac icon refresh |
+| `smoothness-0.3.12.md` | Plugin 0.3.11 optimized cache path: readback **5.0 ms** (from 22.4 ms) |
+| `touchpad-result-20261021-002150.md` | Latest input result (touchpad attaches; gestures unverified) |
+| `windowserver-result-231630.md` | GPU reporting fixed (`Intel(R) Graphics (MTL)`, 12288 MB); smoothness unresolved |
+| `windowserver-result-224146.md` | **The usable-desktop checkpoint.** WindowServer submits real GPU work and reads back correctly, no hang |
 | `windowserver-scanout-reservation-1.0.15.md` | Kernel 1.0.15: reserve the firmware console image from stolen allocations |
-| `windowserver-registry-report-0.2.5.md` | Framebuffer 0.2.5: driver-queried GPU identity + shared memory in System Information |
-| `windowserver-memory-report-0.3.6.md` | Plugin 0.3.6: query-based Metal memory reporting, no injection |
+| `windowserver-registry-report-0.2.5.md` | Framebuffer 0.2.5: driver-queried GPU identity + shared memory |
 | `windowserver-hid-nullguard-1.0.1.md` | Guarded HID 1.0.1: null-guard for the VoodooI2CHID touchscreen panic |
-| `windowserver-iokit-transport-220839.md` | IOKit transport candidate |
-| `windowserver-result-220839.md` / `-222154.md` | Earlier 1.0.15-era trial results |
 | `windowserver-completion-context-1.0.14.md` | 1.0.14: the completion-context use-after-free behind the 1.0.13 panic, and the fix |
 | `windowserver-1.0.14-result-183951.md` | 1.0.14 target trial: attach guard verified, then a separate VoodooI2CHID HID panic |
 | `windowserver-1.0.14-attach-guard.md` | The failed-attach NVRAM marker that parked retries, and the installer fix |
