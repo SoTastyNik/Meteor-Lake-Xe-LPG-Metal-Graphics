@@ -29,10 +29,11 @@ kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAcc
 **Current state:** Metal and Vulkan application rendering work and are verified on real silicon. The
 GPU-composited WindowServer desktop **now works** — WindowServer submits real GPU work and reads back
 correctly, with no GPU hang — and plugin 0.3.11's cache path cut the recorded readback from 22.4 ms to
-**5.0 ms**. Brightness, sound, Night Shift, Bluetooth, Wi-Fi and the multitouch touchscreen also work. The
-remaining gap is **smoothness** (a few CoreAnimation fence timeouts) plus the touchpad. The current
-candidate is **kernel 1.0.15 + plugin 0.3.19 + framebuffer 0.2.10 + accelerator 0.2.9 + guarded HID
-1.0.1**.
+**5.0 ms**. Brightness, sound, Night Shift, Bluetooth, Wi-Fi, Apple services and the multitouch touchscreen
+also work. The remaining gap is **smoothness** — the CoreAnimation fence timeouts are down from 11 to
+**7** and the largest publication stall from 564 ms to **172 ms**, but a GPU completion wait still reached
+**2.39 s** — plus the touchpad. The current candidate is **kernel 1.0.15 + plugin 0.3.19 + framebuffer
+0.2.10 + accelerator 0.2.9 + guarded HID 1.0.1**.
 
 **Start here:**
 
@@ -73,7 +74,7 @@ candidate is **kernel 1.0.15 + plugin 0.3.19 + framebuffer 0.2.10 + accelerator 
 
 | ✅ Verified today | ❌ Not yet |
 |---|---|
-| Metal render — 4,096 correct pixels | Smooth / presentation-stable composition (a few fence timeouts remain) |
+| Metal render — 4,096 correct pixels | Smooth / presentation-stable composition (7 fence timeouts remain, down from 11; a 2.39 s GPU completion wait) |
 | Vulkan compute — 65,536 correct values | Hardware video decode |
 | 26,000 exact frames across 22 cases (both transports) | Touchpad (ELAN04F3:328E) — **work in progress** |
 | **GPU-composited WindowServer desktop — no hang; readback 5.0 ms (from 22.4 ms)** | Weather glyph/text artifacts — undiagnosed |
@@ -84,9 +85,9 @@ candidate is **kernel 1.0.15 + plugin 0.3.19 + framebuffer 0.2.10 + accelerator 
 | **Wi-Fi** (custom AirportItlwm) — attaches `en0` | Wi-Fi throughput / sleep-wake reliability |
 | **Touchscreen multitouch + gestures (VoodooI2CHID)** | |
 | Command-pool lifetime — 80,020 created / destroyed, zero leaks | |
-| PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (12,288 MB) | |
+| PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (4096 MB under the 4 GiB backend cap) | |
 
-![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL), 12288 MB shared memory, queried automatically.](IMG_6508.jpg)
+![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL) — with shared memory queried automatically (this photo shows 12288 MB, before the 4 GiB backend cap was applied; the current cap reports 4096 MB)](IMG_6508.jpg)
 
 **Metal and Vulkan run on the Xe-LPG iGPU.** This is not aspirational — it is measured on the physical
 Dell Latitude 5350, under macOS 15.8.1, with exact-pixel validation:
@@ -134,7 +135,7 @@ smoothness, not GPU execution.
 | Command-pool lifetime | **80,020 pools created / 80,020 destroyed**, zero live/pending/quarantined across the gate | **Passing (scoped)** |
 | Accelerator + display-pipe registration | 0.2.4 / 0.2.5 reports: pipe 0 verified, phase-2 power-on complete, pipe active | **Init confirmed** |
 | GPU-composited WindowServer desktop | **Working, but choppy.** WindowServer submits real GPU work and reads back correctly — 24 fence + 32 readback completions, all clean, no GPU hang (`windowserver-result-224146`). Latest capture: choppy composition, 42 CoreAnimation fence timeouts, 163–205% CPU (`windowserver-result-231630`) | **Usable — smoothness unresolved** |
-| GPU reporting (System Information) | **Fixed.** Reports `Intel(R) Graphics (MTL)`, 12288 MB shared memory, queried automatically from the ANV device-local heap — no fixed-name or size injection (`windowserver-result-231630`) | **Working** |
+| GPU reporting (System Information) | **Fixed.** Reports `Intel(R) Graphics (MTL)`, 4096 MB shared memory (4 GiB backend cap), queried automatically from the ANV device-local heap — no fixed-name or size injection (`windowserver-result-231630`) | **Working** |
 | Kernel command-ring integrity | 1.0.10 capture: the words below request 20's head (`0xc98–0xca4` — request 18's switch-out and WA tail) read `0xff000000`; GuC `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xca4`. **Identical on 1.0.11.** The 1.0.12 boot again saved `0xff000000` at request 22's `0xe00–0xe0c`, with `IPEHR=0xff000000`, `RING_HEAD=ACTHD=0xe0c`, `RING_TAIL=0xf70` | **Corrupted — writer unidentified** |
 | Kernel boot integrity (1.0.13) | `panic: NullMoth xkpi: mutex … used before mtx_init` at 8.04 s uptime, backtrace `guc_retire_inflight_request_prio` ← `signal_irq_work` ← `irq_work`. A freed/stale `intel_context` in the breadcrumb completion path; no desktop was reached | **Panics before desktop — parked** |
 | Kernel 1.0.14 (current candidate) | Targets that panic: breadcrumb-owned requests now hold their context/parent context, ownership is taken before the fence's `SIGNALED` bit is published, and the iterators snapshot before release. Locally validated (90,000 ASan/UBSan lifetimes, request-iterator UAF reproduced and fixed) | **Built; hardware-unverified** |
@@ -269,17 +270,18 @@ Beyond the GPU, Wi-Fi and touch input, several other subsystems are now function
   macOS table, converts it to a 256-entry RGB table, and applies it in the physical BGRA8 scanout copy
   (preserving alpha and padding). Identity gamma keeps the bulk copy; a generation number drives refresh.
   No PWM, timing or Intel LUT registers are touched.
-* **Bluetooth** — **IntelBluetoothFirmware** (with BrcmPatchRAM) uploads Intel wireless-Bluetooth firmware
-  for native Bluetooth in macOS. The fork's LE Data Length Change fix clears the
-  `LE_READY_WAIT_FOR_LENGTH` stall so BLE HID devices bind.
+* **Bluetooth** — fully functional. **IntelBluetoothFirmware** (with BrcmPatchRAM) uploads Intel
+  wireless-Bluetooth firmware for native Bluetooth in macOS; the fork's LE Data Length Change fix clears
+  the `LE_READY_WAIT_FOR_LENGTH` stall so BLE HID devices bind. Confirmed working with AirPods Pro 2 and
+  Logitech MX Keys / MX Mechanical Mini, including their **Continuity features** (e.g. reflecting whether
+  another Mac has apps open).
+* **Apple services** — iMessage and the Apple service stack work.
 * **Branding** — About This Mac shows **Dell Latitude 5350 2-in-1 (13-inch, 2024)**, and the framebuffer
   supplies the exact captured **BOE panel EDID** (1920×1080, 294×165 mm ≈ 13.3"), replacing the previous
-  30.5" estimate. The About This Mac icon is a supplied ICNS; its missing-image cause is **not yet
-  captured**.
+  30.5" estimate. The About This Mac icon is a supplied **custom** ICNS and now renders correctly.
 
 **Undiagnosed:** the Weather widget's glyph/text artifacts (not localized — Weather was not running during
-the last capture) and the missing About This Mac icon (the branding cache refresh runs, but the cause is
-unproven). Neither is called fixed.
+the last capture). The About This Mac icon is now fixed with a custom look.
 
 > **Note on neighbouring hardware.** The sibling `NullMoth-Xe` work targets **Panther Lake / Xe3
 > (`8086:b080`)** as an SR-IOV virtual function on a QEMU host. Meteor Lake is **Xe-LPG**, a different
@@ -1152,7 +1154,7 @@ clean — with no GPU hang (`windowserver-result-224146`).
 
 The blocker then changed shape completely. It is no longer "the GPU hangs" but "the desktop is choppy":
 the latest capture (`windowserver-result-231630`) shows 42 CoreAnimation fence timeouts and 163–205% CPU,
-and System Information now reports the real GPU and shared memory (`Intel(R) Graphics (MTL)`, 12288 MB).
+and System Information now reports the real GPU and shared memory (`Intel(R) Graphics (MTL)`, 4096 MB under the 4 GiB backend cap).
 Host-pointer imports are still refused, so surfaces use the private-image/copy path. So the remaining work
 is composition latency and synchronization — a performance problem, not an execution failure.
 
@@ -1403,7 +1405,7 @@ iGPU Port/
 | `panel-and-icon-0.3.14.md` | Captured BOE panel EDID (13.3") and About This Mac icon refresh |
 | `smoothness-0.3.12.md` | Plugin 0.3.11 optimized cache path: readback **5.0 ms** (from 22.4 ms) |
 | `touchpad-result-20261021-002150.md` | Latest input result (touchpad attaches; gestures unverified) |
-| `windowserver-result-231630.md` | GPU reporting fixed (`Intel(R) Graphics (MTL)`, 12288 MB); smoothness unresolved |
+| `windowserver-result-231630.md` | GPU reporting fixed (`Intel(R) Graphics (MTL)`, 4096 MB under the 4 GiB backend cap); smoothness unresolved |
 | `windowserver-result-224146.md` | **The usable-desktop checkpoint.** WindowServer submits real GPU work and reads back correctly, no hang |
 | `windowserver-scanout-reservation-1.0.15.md` | Kernel 1.0.15: reserve the firmware console image from stolen allocations |
 | `windowserver-registry-report-0.2.5.md` | Framebuffer 0.2.5: driver-queried GPU identity + shared memory |
@@ -1583,8 +1585,8 @@ the one-shot opt-in.
 GPU-composited WindowServer desktop is **usable** — WindowServer submits real GPU work and reads back
 correctly, with no GPU hang, and 0.3.11's cache path cut the recorded readback to **5.0 ms**. Brightness,
 sound (ALC295/AppleALC), Night Shift (gamma), Bluetooth, Wi-Fi (custom AirportItlwm) and the multitouch
-touchscreen also work. The remaining blocker is **smoothness** (a few CoreAnimation fence timeouts), plus
-the touchpad (WIP), the Weather glyph artifacts and the About This Mac icon (both undiagnosed). The path
+touchscreen also work. The remaining blocker is **smoothness** (7 CoreAnimation fence timeouts, down from
+11; a 2.39 s GPU completion wait), plus the touchpad (WIP) and the Weather glyph artifacts. The path here
 here ran through 1.0.11 (falsified), 1.0.12, 1.0.13 (boot panic), 1.0.14, 1.0.15 (usable desktop),
 0.3.11 (cache path), 0.3.14 (panel EDID/icon), 0.3.16 (Night Shift + audio) and 0.3.19. See
 `research/windowserver-result-224146.md` and `research/smoothness-0.3.12.md`.
@@ -1641,7 +1643,7 @@ Each candidate changed as few things as possible, and each failure narrowed the 
 | kernel 1.0.14 (current candidate) | Fix the 1.0.13 boot panic: breadcrumb-owned request references hold their context and (for parallel requests) a parent context under NMXKPI; ownership is acquired before the fence's `SIGNALED` bit is published; the signaler and request iterators snapshot their next entry before a losing signal path can drop the last reference. Installer clears the NVRAM `nullmoth-gpu-attaching` marker a failed attach leaves behind | Local: 438-object link with the frozen 1.0.8 import set; the actual old enqueue/worker/GuC functions reproduce a heap-use-after-free and the corrected functions pass 90,000 ASan/UBSan lifetimes; request-iterator UAF reproduced and fixed; installer/KC rollback fixtures. Kernel UUID `9B0192B5-…`, SHA-256 `80c3fe8b…`. **Hardware-unverified: the one trial (18:39:51) panicked at 9.12 s in a VoodooI2CHID touchscreen HID null-page-fault that predates 1.0.14; NMXGPU was loaded but not in the faulting backtrace. Desktop still unresolved** |
 | kernel 1.0.15 | GPU-startup correction: restore i915's stolen-region setup but reserve the firmware console image (read from IOPlatformExpert) so no allocation overlaps it; keep the 1.0.14 completion-context protection | Local: 438-object link; the actual stolen initializer reproduces the overlap and the corrected one passes 524,288 ASan/UBSan cases; console bridge validated. Kernel UUID `39DFCF2A-…`. **22:38 boot: desktop usable — WindowServer submits real GPU work and reads back correctly, no GPU hang. Choppy** |
 | plugin 0.3.6 | Query-based Metal memory reporting: name from `VkPhysicalDeviceProperties.deviceName`, heap sizes from `VkPhysicalDeviceMemoryProperties`; no fixed name or size injection; bypass failed host-pointer imports for `8086:7d45` (copy fallback) | Local: installer/KC/rollback fixtures. **Hardware-unverified; the 1.0.15 desktop GPU work remains established** |
-| framebuffer 0.2.5 | Publish driver-queried GPU identity + shared memory to the PCI registry (`model`, `VRAM,totalMB`) so System Information shows the real name and shared capacity; never enlarges the physical scanout mapping | Local: ASan/UBSan publication/readback fixtures. **System Information now reports `Intel(R) Graphics (MTL)`, 12288 MB** |
+| framebuffer 0.2.5 | Publish driver-queried GPU identity + shared memory to the PCI registry (`model`, `VRAM,totalMB`) so System Information shows the real name and shared capacity; never enlarges the physical scanout mapping | Local: ASan/UBSan publication/readback fixtures. **System Information now reports `Intel(R) Graphics (MTL)` (then 12288 MB; the later 4 GiB backend cap reports 4096 MB)** |
 | guarded HID 1.0.1 | Null-guard for the VoodooI2CHID touchscreen report path that panicked at 9.12 s | Local: HID transform fixtures. **Removed the early HID panic; desktop reached** |
 | plugin 0.3.11 | Optimized cache path: CPUID-gated CLFLUSHOPT batching with before/after MFENCE boundaries, targeting the measured serial cache-maintenance cost | Target result `135231`: recorded total readback **5.0 ms**, down from 22.4 ms; no new crash/panic; a few CoreAnimation fence timeouts remain |
 | plugin 0.3.14 | Supply the captured 128-byte BOE panel EDID (1920×1080, 294×165 mm ≈ 13.3") and refresh the About This Mac icon cache | Panel size should round to 13.3"; the missing icon's cause is not yet captured |
@@ -1871,10 +1873,12 @@ What is not yet falsified is the last mile: **smooth, presentation-stable GPU-co
 harder claim — that the desktop can be GPU-composited at all — is now falsified in the project's favour:
 WindowServer submits real GPU work and reads back correctly, with no GPU hang, the readback dropped to
 **5.0 ms**, and System Information reports the real GPU and shared memory. The same machine now also runs
-brightness, sound (ALC295/AppleALC), Night Shift, Bluetooth, Wi-Fi and a multitouch touchscreen — so the
-"dead end" claim is falsified well beyond the GPU. What remains is smoothness (a few CoreAnimation fence
-timeouts), the touchpad (WIP), and two undiagnosed cosmetic issues. That is a far narrower frontier than
-the earlier GPU-execution failure (the `0xff000000` ring overwrite, now historical). The path here fixed
+brightness, sound (ALC295/AppleALC), Night Shift, Bluetooth, Wi-Fi, Apple services and a multitouch
+touchscreen — so the "dead end" claim is falsified well beyond the GPU. What remains is smoothness
+(CoreAnimation fence timeouts down from 11 to 7 and the largest publication stall from 564 ms to 172 ms,
+but a 2.39 s GPU completion wait), the touchpad (WIP), and the Weather glyph artifacts. That is a far
+narrower frontier than the earlier GPU-execution failure (the `0xff000000` ring overwrite, now
+historical). The path here fixed
 three real source defects — the 1.0.11 mapping-lifetime pin, the 1.0.12 raw-physical span and the 1.0.13
 boot panic (a context use-after-free that **1.0.14** fixed) — and 1.0.15 then made the desktop usable. The
 remaining step is composition smoothness, not another guess about whether the GPU works.
