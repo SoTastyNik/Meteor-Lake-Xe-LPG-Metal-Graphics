@@ -8,6 +8,8 @@ latitude-desktop/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtim
 latitude-runtime/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
 backups/desktop-0.2.6-before/package/Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib
 toolchain/rustup/toolchains/stable-aarch64-apple-darwin/lib/libLLVM.dylib
+# Any libLLVM.dylib is a build product; backups of the full runtime also carry it.
+libLLVM.dylib
 nullmoth-nvidia-2.0.2.tar.gz
 
 # Regenerable installed runtime and distribution snapshots. These contain build

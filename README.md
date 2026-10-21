@@ -14,7 +14,7 @@
 ![Status](https://img.shields.io/badge/Status-Metal%20%2B%20Vulkan%20working-brightgreen)
 ![Desktop](https://img.shields.io/badge/Desktop-WindowServer_usable_unsmooth-yellow)
 ![Verified](https://img.shields.io/badge/Verified-26%2C000_frames-brightgreen)
-![Candidate](https://img.shields.io/badge/Candidate-0.3.6_%20%2B%20k1.0.15_%20%2B%20fb0.2.5-yellow)
+![Candidate](https://img.shields.io/badge/Candidate-0.3.19_%20%2B%20k1.0.15_%20%2B%20fb0.2.10-yellow)
 
 A hardware-acceleration port that brings **Metal and Vulkan** to the **Intel Core Ultra (Meteor Lake-P)
 Xe-LPG iGPU (`8086:7D45`)** on a **Dell Latitude 5350** running **macOS 15 Sequoia**, using the
@@ -28,8 +28,10 @@ kernel extensions become an i915-derived `NMXGPU` plus a DRM-user-client `NMXAcc
 
 **Current state:** Metal and Vulkan application rendering work and are verified on real silicon. The
 GPU-composited WindowServer desktop **now works** — WindowServer submits real GPU work and reads back
-correctly, with no GPU hang — but it is **choppy**: composition latency and synchronization are
-unresolved. The current candidate is **kernel 1.0.15 + plugin 0.3.6 + framebuffer 0.2.5 + guarded HID
+correctly, with no GPU hang — and plugin 0.3.11's cache path cut the recorded readback from 22.4 ms to
+**5.0 ms**. Brightness, sound, Night Shift, Bluetooth, Wi-Fi and the multitouch touchscreen also work. The
+remaining gap is **smoothness** (a few CoreAnimation fence timeouts) plus the touchpad. The current
+candidate is **kernel 1.0.15 + plugin 0.3.19 + framebuffer 0.2.10 + accelerator 0.2.9 + guarded HID
 1.0.1**.
 
 **Start here:**
@@ -71,12 +73,17 @@ unresolved. The current candidate is **kernel 1.0.15 + plugin 0.3.6 + framebuffe
 
 | ✅ Verified today | ❌ Not yet |
 |---|---|
-| Metal render — 4,096 correct pixels | Smooth / presentation-stable composition |
-| Vulkan compute — 65,536 correct values | Sleep/wake, brightness, external displays |
-| 26,000 exact frames across 22 cases (both transports) | Hardware video decode |
-| **GPU-composited WindowServer desktop — real GPU work, no hang** | Host-pointer (zero-copy) imports — copy fallback |
-| Command-pool lifetime — 80,020 created / destroyed, zero leaks | Sustained composition / long soak |
-| **Touchscreen multitouch + gestures (VoodooI2CHID)** | Touchpad (ELAN04F3:328E) — **work in progress** |
+| Metal render — 4,096 correct pixels | Smooth / presentation-stable composition (a few fence timeouts remain) |
+| Vulkan compute — 65,536 correct values | Hardware video decode |
+| 26,000 exact frames across 22 cases (both transports) | Touchpad (ELAN04F3:328E) — **work in progress** |
+| **GPU-composited WindowServer desktop — no hang; readback 5.0 ms (from 22.4 ms)** | Weather glyph/text artifacts — undiagnosed |
+| **Brightness** (slider + F6/F7 keys) | About This Mac icon — cause not captured |
+| **Sound** (Realtek ALC295 via AppleALC) | Host-pointer (zero-copy) imports — copy fallback |
+| **Night Shift** (gamma table) | Sustained composition / long soak |
+| **Bluetooth** (IntelBluetoothFirmware + BrcmPatchRAM) | |
+| **Wi-Fi** (custom AirportItlwm) — attaches `en0` | Wi-Fi throughput / sleep-wake reliability |
+| **Touchscreen multitouch + gestures (VoodooI2CHID)** | |
+| Command-pool lifetime — 80,020 created / destroyed, zero leaks | |
 | PCI attach + GuC 70.53.0 firmware bring-up + GPU reporting (12,288 MB) | |
 
 ![The Dell Latitude 5350 running the GPU-composited desktop. The About This Mac window reports the real GPU — Intel(R) Graphics (MTL), 12288 MB shared memory, queried automatically.](IMG_6508.jpg)
@@ -105,15 +112,13 @@ two different milestones; this project has finished the first and is attacking t
 
 The desktop then crossed the line that mattered. Kernel **1.0.15** corrects GPU startup — it restores
 i915's stolen-region setup but reserves the firmware console image so no allocation can overlap it — and
-with the guarded HID null-guard, plugin **0.3.6** and framebuffer **0.2.5**, WindowServer now **submits real
-GPU work and reads back correctly, with no GPU hang** (`windowserver-result-224146`). That is the first
-usable GPU-composited desktop this project has produced. It is not smooth: the latest capture
-(`windowserver-result-231630`) shows choppy composition, 42 CoreAnimation fence timeouts and 163–205% CPU.
-So the milestone is real and the remaining problem is narrower: composition latency and synchronization,
-not GPU execution. The full path — 1.0.10 ring capture, 1.0.11 mapping pin (falsified), 1.0.12 raw-physical
-span (booted, overwrite persisted), 1.0.13 stolen-memory skip (panicked), 1.0.14 completion-context fix
-(HID panic), 1.0.15 GPU-startup fix (usable desktop) — is documented in *The current blocker* and the
-`research/` notes.
+with the guarded HID null-guard, WindowServer now **submits real GPU work and reads back correctly, with
+no GPU hang** (`windowserver-result-224146`). That is the first usable GPU-composited desktop this
+project has produced. The plugin work then drove the readback cost down: 0.3.11's optimized cache path
+cut the recorded total from 22.4 ms to **5.0 ms** (`windowserver-result-135231`). It is still not fully
+smooth — a few CoreAnimation fence timeouts remain (`windowserver-result-231630`) — and the Weather
+glyphs and the About This Mac icon are undiagnosed. So the remaining problem is narrower: composition
+smoothness, not GPU execution.
 
 ---
 
@@ -248,6 +253,34 @@ Evidence: `touchpad-candidate/` (`LatitudeI2CMeteorLake.kext`, `Legion-README.md
 `touchpad-sources/` (`SSDT-LAT-TPD0.dsl`, `LatitudeI2CMeteorLake.cpp`), and
 `research/touchpad-result-20261020-121643.md`.
 
+### Other peripherals that work
+
+Beyond the GPU, Wi-Fi and touch input, several other subsystems are now functional:
+
+* **Brightness** — the Control Centre slider works, and F6/F7 are delivered through a `BRTKEYS`-style
+  route (revision 4) that sends `BRT6` up/down requests directly to `PC00.LPCB.PS2K` (`0x0366` /
+  `0x0365`), replacing the LCD-notification route rather than doubling brightness steps. No global
+  F6/F7 remap and no keyboard/touchpad kext replacement.
+* **Sound** — Realtek **ALC295** via upstream **AppleALC 1.9.8** with Lilu 1.7.3. The controller
+  (`8086:7e28` at `00:1f.3`) gets a compatibility device-id (`ca510000`) and `layout-id` 33
+  (ALC295/ALC3254 profile). This is a routing candidate, not a verified final pin map — jack detection
+  and capture are unverified; Intel SST/DMIC and HDMI/DP audio are not claimed.
+* **Night Shift** — framebuffer **0.2.8+** implements the gamma table path: it validates and stores the
+  macOS table, converts it to a 256-entry RGB table, and applies it in the physical BGRA8 scanout copy
+  (preserving alpha and padding). Identity gamma keeps the bulk copy; a generation number drives refresh.
+  No PWM, timing or Intel LUT registers are touched.
+* **Bluetooth** — **IntelBluetoothFirmware** (with BrcmPatchRAM) uploads Intel wireless-Bluetooth firmware
+  for native Bluetooth in macOS. The fork's LE Data Length Change fix clears the
+  `LE_READY_WAIT_FOR_LENGTH` stall so BLE HID devices bind.
+* **Branding** — About This Mac shows **Dell Latitude 5350 2-in-1 (13-inch, 2024)**, and the framebuffer
+  supplies the exact captured **BOE panel EDID** (1920×1080, 294×165 mm ≈ 13.3"), replacing the previous
+  30.5" estimate. The About This Mac icon is a supplied ICNS; its missing-image cause is **not yet
+  captured**.
+
+**Undiagnosed:** the Weather widget's glyph/text artifacts (not localized — Weather was not running during
+the last capture) and the missing About This Mac icon (the branding cache refresh runs, but the cause is
+unproven). Neither is called fixed.
+
 > **Note on neighbouring hardware.** The sibling `NullMoth-Xe` work targets **Panther Lake / Xe3
 > (`8086:b080`)** as an SR-IOV virtual function on a QEMU host. Meteor Lake is **Xe-LPG**, a different
 > generation with different memory and firmware behaviour (`has_flat_ccs=no` here, flat-CCS remedies
@@ -324,12 +357,17 @@ each case logs and verifies the route it actually took rather than trusting the 
 
 | Component | Version / base | Source in tree | Licence |
 |---|---|---|---|
-| `NMXGPU.kext` | kernel **1.0.15** (current — GPU-startup stolen-region reservation) on the 1.0.14/1.0.13/1.0.12/1.0.11 lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
-| `NMXAccel.kext` | 0.2.4 | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
-| `LatitudeMTLFB.kext` | **0.2.5** (driver-queried GPU identity + shared-memory reporting) | `desktop-build/LatitudeMTLFB.kext` | project |
+| `NMXGPU.kext` | kernel **1.0.15** (GPU-startup stolen-region reservation) on the 1.0.14/1.0.13/1.0.12/1.0.11 lineage | `latitude-desktop`, `drm-kmod`, `freebsd-src` | i915/Linux → GPL-2.0; NullMoth wrapper PolyForm NC |
+| `NMXAccel.kext` | **0.2.9** (gamma tile, bulk transfer, copy-time counter) | `accel-build/NMXAccel.kext` | NullMoth PolyForm NC |
+| `LatitudeMTLFB.kext` | **0.2.10** (driver-queried GPU identity, shared-memory reporting, gamma table, captured EDID) | `desktop-build/LatitudeMTLFB.kext` | project |
 | `NMXAGDC.kext` | 0.1 (`NMXAGDCLoader`) | `desktop-build/NMXAGDC.kext` | project |
 | Guarded HID | **1.0.1** (VoodooI2CHID null-guard) | `desktop-build/hid-nullguard/` | project |
-| Metal plugin | `NVMTLDriver` **0.3.6** (query-based memory reporting) | `NullMoth/plugin/` | PolyForm NC |
+| Metal plugin | `NVMTLDriver` **0.3.19** (bounded phase measurements, pipeline cache, 4 GiB backend cap) | `NullMoth/plugin/` | PolyForm NC |
+| Wi-Fi | **AirportItlwm 2.4.0** (custom laobamac Sequoia build, `com.zxystd.AirportItlwm`) | preserved EFI `EFI/OC/Kexts/AirportItlwm.kext` | iwlwifi → GPL-2.0 |
+| Audio | **AppleALC 1.9.8** + Lilu 1.7.3 (Realtek ALC295, layout-id 33) | upstream bundles | GPL-2.0 |
+| Bluetooth | **IntelBluetoothFirmware** + BrcmPatchRAM | `research/bluetooth-i2c-a16/` | GPL-2.0 |
+| Brightness keys | BrightnessKeys + `SSDT-LAT-BRT` | `research/BrightnessKeys/` | GPL-2.0 |
+| Touch input | VoodooI2C 2.9.1 + VoodooI2CHID + VoodooGPIO + LegionI2CArrowLake adaptation | `research/voodooi2c-core/`, `touchpad-sources/` | GPL-2.0 |
 | Shader translator | AIR → SPIR-V | `NullMoth/translator/` | LGPL-3.0 / GPL-3.0 |
 | Vulkan backend | ANV on Mesa **26.3.0-devel** | `mesa/` (patched via `port-artifacts/mesa-i915-darwin-mmap.patch`) | MIT |
 | DRM userspace | libdrm 2.4.x | `libdrm/` | MIT |
@@ -1539,14 +1577,15 @@ the one-shot opt-in.
 
 `ROADMAP.md` is authoritative and dated. The following is a summary of its structure, not a substitute.
 
-**Current (plugin 0.3.6, kernel 1.0.15, framebuffer 0.2.5, guarded HID 1.0.1):** the GPU-composited
-WindowServer desktop is **usable** — WindowServer submits real GPU work and reads back correctly, with no
-GPU hang. The remaining blocker is **smoothness**: choppy composition, CoreAnimation fence timeouts and
-high CPU. The path here ran through the 1.0.11 mapping pin (falsified), 1.0.12 raw-physical span (booted,
-overwrite persisted), 1.0.13 stolen-memory skip (boot panic), 1.0.14 completion-context fix (separate HID
-panic), 1.0.15 GPU-startup stolen-region reservation (usable desktop), 0.2.5 GPU-identity reporting and
-0.3.6 query-based memory reporting (System Information now shows `Intel(R) Graphics (MTL)`, 12288 MB).
-See `research/windowserver-result-224146.md` and `research/windowserver-result-231630.md`.
+**Current (plugin 0.3.19, kernel 1.0.15, framebuffer 0.2.10, accelerator 0.2.9, guarded HID 1.0.1):** the
+GPU-composited WindowServer desktop is **usable** — WindowServer submits real GPU work and reads back
+correctly, with no GPU hang, and 0.3.11's cache path cut the recorded readback to **5.0 ms**. Brightness,
+sound (ALC295/AppleALC), Night Shift (gamma), Bluetooth, Wi-Fi (custom AirportItlwm) and the multitouch
+touchscreen also work. The remaining blocker is **smoothness** (a few CoreAnimation fence timeouts), plus
+the touchpad (WIP), the Weather glyph artifacts and the About This Mac icon (both undiagnosed). The path
+here ran through 1.0.11 (falsified), 1.0.12, 1.0.13 (boot panic), 1.0.14, 1.0.15 (usable desktop),
+0.3.11 (cache path), 0.3.14 (panel EDID/icon), 0.3.16 (Night Shift + audio) and 0.3.19. See
+`research/windowserver-result-224146.md` and `research/smoothness-0.3.12.md`.
 
 **Promotion criteria (unchanged):**
 
@@ -1574,7 +1613,7 @@ future-proof claim is made for any of them.
 ---
 
 <a name="versions"></a>
-## 🕓 Version history (plugin 0.2.4 → 0.3.6, kernel 1.0.8 → 1.0.15, framebuffer → 0.2.5)
+## 🕓 Version history (plugin 0.2.4 → 0.3.19, kernel 1.0.8 → 1.0.15, framebuffer → 0.2.10)
 
 Each candidate changed as few things as possible, and each failure narrowed the next step. The one-line
 "what changed" and "what happened" is the honest spine of the project. All dates are October 2026.
@@ -1602,6 +1641,11 @@ Each candidate changed as few things as possible, and each failure narrowed the 
 | plugin 0.3.6 | Query-based Metal memory reporting: name from `VkPhysicalDeviceProperties.deviceName`, heap sizes from `VkPhysicalDeviceMemoryProperties`; no fixed name or size injection; bypass failed host-pointer imports for `8086:7d45` (copy fallback) | Local: installer/KC/rollback fixtures. **Hardware-unverified; the 1.0.15 desktop GPU work remains established** |
 | framebuffer 0.2.5 | Publish driver-queried GPU identity + shared memory to the PCI registry (`model`, `VRAM,totalMB`) so System Information shows the real name and shared capacity; never enlarges the physical scanout mapping | Local: ASan/UBSan publication/readback fixtures. **System Information now reports `Intel(R) Graphics (MTL)`, 12288 MB** |
 | guarded HID 1.0.1 | Null-guard for the VoodooI2CHID touchscreen report path that panicked at 9.12 s | Local: HID transform fixtures. **Removed the early HID panic; desktop reached** |
+| plugin 0.3.11 | Optimized cache path: CPUID-gated CLFLUSHOPT batching with before/after MFENCE boundaries, targeting the measured serial cache-maintenance cost | Target result `135231`: recorded total readback **5.0 ms**, down from 22.4 ms; no new crash/panic; a few CoreAnimation fence timeouts remain |
+| plugin 0.3.14 | Supply the captured 128-byte BOE panel EDID (1920×1080, 294×165 mm ≈ 13.3") and refresh the About This Mac icon cache | Panel size should round to 13.3"; the missing icon's cause is not yet captured |
+| plugin 0.3.16 | Gamma/Night Shift path (framebuffer 0.2.8) and ALC295 audio (AppleALC 1.9.8, layout-id 33) | Gamma table validates/applies in the scanout copy; sound attaches; jack detection and capture unverified |
+| plugin 0.3.19 (current) | Bounded submission/import/surface/buffer phase measurements, one device-lifetime pipeline cache, 4 GiB ANV backend cap | Built; target smoothness and Weather/icon still pending |
+| Bluetooth | IntelBluetoothFirmware + BrcmPatchRAM | Uploads Intel BT firmware; LE Data Length Change fix clears the BLE bind stall |
 
 ---
 
@@ -1738,9 +1782,15 @@ different device ID needs `IOPCIPrimaryMatch` changes and a fresh evidence run; 
 There is no generic installer.
 
 **Can I use it as a daily driver, for games or video editing?**
-No. The desktop is GPU-composited but choppy, and sustained stability, sleep/wake, brightness and external
-displays are all unverified. Wireless attaches (`en0`) but its throughput and sleep/wake are unverified. The
-only fully validated workload is the application gate.
+No. The desktop is GPU-composited and most peripherals work (brightness, sound, Night Shift, Bluetooth,
+Wi-Fi, touchscreen), but it is still choppy, and sustained stability, sleep/wake and external displays are
+unverified. The touchpad is a work in progress, and the Weather glyphs and About This Mac icon are
+undiagnosed. The only fully validated workload is the application gate.
+
+**Do brightness, sound and Night Shift work?**
+Yes. Brightness works through the Control Centre slider and the F6/F7 keys (a `BRT6` route). Sound uses
+Realtek ALC295 via AppleALC. Night Shift works through the framebuffer gamma table. Bluetooth and Wi-Fi also
+attach — but wireless throughput and sleep/wake reliability remain unverified.
 
 **Is it safe to install?**
 No. The setup disables large parts of SIP and AMFI and loads unsigned kexts. A boot loop or a damaged
