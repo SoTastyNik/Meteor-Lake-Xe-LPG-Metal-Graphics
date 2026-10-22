@@ -136,17 +136,52 @@ invariants that must survive every rebuild are in `AGENTS.md`.
 | **Subpixel LCD text** | Filtered FreeType 2.14.3 renderer (RGB/RGB_V/BGR/BGR_V), a bounded coverage atlas, linear-light per-channel blending, a CoreText-shaped frontend, and a native `CTLineDraw`/AppKit/CA interposer | **System-app deployment open** |
 | **Brightness, hotkeys, GPIO, power** | Brightness-keys route (`BRT6` to `PC00.LPCB.PS2K`), a latitude hotkey driver, a Linux-style GPIO map, a sleep/power snapshot | **Target validation pending** |
 
-### Moving to macOS 27 "Golden Gate"
+### macOS 27 "Golden Gate" — the standalone boot program
 
-The next target is **macOS 27 "Golden Gate"** — Apple's twenty-third major macOS release, released
-14 September 2026. It is the **first macOS that is Apple Silicon only** (no Intel Macs) and the **last to
-ship Rosetta 2**. The native-integration work therefore re-anchors on the Golden Gate frameworks rather
-than the 24H32 (Sequoia) ones this project has been reverse-engineering so far: the AWDL/IO80211Family
-ABI, the CoreText/FreeType text path and the ISH tablet sensors are all versioned against the running OS.
-The Dell keeps running the 24H32 build for the graphics and peripheral work, so **macOS 27 is a target
-direction, not a claim that the Intel machine runs it.** `research/iwlwifi-api83/` holds the Linux
-`iwlwifi` API-83 source and `research/airportitlwm-tahoe/` a qualified upstream reference (Tahoe 26.6.2 /
-26.7 with AppleVTD, AWDL/P2P, AirPlay and Screen Mirroring) — the blueprint for that move.
+**macOS 27 "Golden Gate"** is Apple's twenty-third major macOS release, released 14 September 2026. It is
+the **first macOS that is Apple Silicon only** (no Intel Macs) and the **last to ship Rosetta 2**.
+
+The ambition is **Snapintosh for the Dell**: boot macOS 27 on the Intel Meteor Lake machine *directly from
+firmware*, with no Linux host and no Sequoia loader — which on this hardware means an **ARM-to-x86
+translation layer beneath the kernel**, the piece Snapintosh gets for free on a Snapdragon.
+
+That program lives in [`macos27-standalone/`](macos27-standalone/) and is at version **0.0.3**.
+
+* **What exists.** `EFI/Tools/Dell27Preflight.efi` — an x86_64 UEFI application that runs with no Linux
+  and no Sequoia. It admits exactly four hash-pinned macOS 27.0 build 26A428 / Mac14,3 inputs (`bootkc`,
+  `dtree`, `sptm`, `txm`), inventories firmware RAM and GOP dimensions, validates ARM64 MH_FILESET
+  load-command bounds, and then executes a bounded A64 program through a portable interpreter compiled into
+  the binary: scalar move-wide, ADD/SUB, logical shifted-register operations, NZCV, ADR/ADRP, direct,
+  conditional and register branches, calls/returns, integer loads/stores, NOP and BRK, with permission and
+  overflow-checked private buffers. Version 0.0.3 adds a checked ARM64 MH_EXECUTE loader (813 boundary
+  checks), selected non-trapping EL2 state (OSLAR, DAIF masks, CurrentEL, VBAR, reset HCR read) and an
+  independent 19-instruction privileged probe.
+* **How it is verified.** ASan/UBSan with 85 execution and fault checks; a 69-instruction ARM payload
+  produces the same 80 bytes as independently executed pinned QEMU TCG; the exact x86 EFI binary runs inside
+  OVMF and is compared byte-for-byte against that oracle; a separate OVMF run rejects a one-byte altered
+  device tree. After admission the probe rereads and rehashes SPTM, maps it into private memory, executes
+  its first branch and four setup instructions, then **intentionally stops at the first boot-argument
+  read**. Unsupported instructions, bad maps, faults and instruction budgets terminate execution — an
+  unsupported system instruction is never treated as a successful no-op.
+* **What is not there.** A complete privileged ARM runtime, the MMU and monitor memory management, exception
+  delivery, SIMD/FP, atomics and PAC, the Apple interrupt/timer/device models, SPTM initialisation to
+  completion, TXM, the Apple kernel, and the desktop. The console **explicitly stops** at that boundary
+  rather than reporting success. Intel's broader `unicorn-for-efi` engine has been compiled on the build
+  volume (80 source files, 28 unresolved firmware helpers) but is not runtime-qualified and is separate from
+  the tested binary.
+* **Hardware status.** The Dell has **not** been tested on either execution path. The USB now holds
+  macOS 27: the small FAT volume carries the preflight tool and the pinned inputs, and the main exFAT
+  volume holds the source, the evidence and an older *hosted* QEMU shell reference. Both original SanDisk
+  partitions were erased after a full backup was verified, and **no Sequoia EFI was restored** — the two
+  tracks are separate, and the Sequoia graphics track keeps its own verified state rather than being
+  rewritten to fit the new one.
+
+The native-integration work on the 24H32 build (the AWDL/`IO80211Family` ABI, the CoreText/FreeType text
+path, the ISH tablet sensors) re-anchors on the Golden Gate frameworks when the runtime gets there: each
+framework's ABI is versioned against the running OS, so that is a re-derivation per framework, not a version
+bump. `research/iwlwifi-api83/` holds the Linux `iwlwifi` API-83 source and `research/airportitlwm-tahoe/`
+a qualified upstream reference (Tahoe 26.6.2 / 26.7 with AppleVTD, AWDL/P2P, AirPlay and Screen
+Mirroring) — the blueprint for that move.
 
 <a name="wip"></a>
 ## 🧭 What is in progress
@@ -162,12 +197,14 @@ direction, not a claim that the Intel machine runs it.** `research/iwlwifi-api83
 | **Brightness, hotkeys, GPIO, power** | Target validation on the Dell |
 | **Weather glyph artefacts** | Reproducible, but not localized — the last capture ran without Weather |
 | **Boot chime** | Actual UEFI playback on the Dell |
+| **macOS 27 standalone runtime** | A complete privileged ARM runtime, the MMU and monitor memory management, exception delivery, SPTM initialisation, TXM, the Apple kernel and the desktop. The Dell has not been tested on either execution path |
 
 ### Next
 
-- **macOS 27 "Golden Gate"** — re-anchor the native-integration work on the Golden Gate frameworks.
-- **Complete the Apple-side subsystems** — AWDL radio qualification, a live ISH publisher, system-wide
-  subpixel text deployment.
+- **The macOS 27 standalone runtime** — privileged ARM execution, the MMU, SPTM initialisation and the
+  Apple kernel, then the desktop. See *macOS 27 "Golden Gate" — the standalone boot program*.
+- **Complete the Apple-side subsystems on 24H32** — AWDL radio qualification, a live ISH publisher,
+  system-wide subpixel text deployment.
 - **Qualify the remaining peripherals on the Dell** — touchpad, brightness keys, hotkeys, sleep/wake.
 - **Sustained use** — longer soak, sleep/wake cycles and external displays are still unverified.
 
@@ -456,6 +493,7 @@ iGPU Port/
 ├── boot-ui-sources/  brightness-sources/  copilot-sources/  gpio-sources/
 ├── graphics-mode-sources/  hotkey-sources/  power-sources/  subpixel-sources/
 ├── tablet-sources/  touchpad-sources/  wireless-sources/  linux-live-media/
+├── macos27-standalone/    # macOS 27 "Golden Gate" standalone-UEFI ARM-to-x86 program (0.0.3)
 ├── PORT-STATUS.md  ROADMAP.md  SHA256SUMS-upstream.txt
 ```
 
@@ -530,6 +568,15 @@ sudo /bin/bash latitude-runtime/rollback-runtime.sh
 > still contain absolute paths from the original build machine (`/Volumes/MiniData/build/gpu-src/...` and
 > `/Users/ved/igpu-build/...`). They must be repointed at this tree (`NullMoth/gpu-port/xkpi`,
 > `drm-kmod`, `freebsd-src`) before they will run.
+
+The **macOS 27 standalone track** builds separately, on the Corsair-backed build volume:
+
+```sh
+cd macos27-standalone/Standalone-UEFI-Source
+python3 test-runtime.py     # scalar/EL2 execution and fault checks
+python3 build.py            # reruns the scalar tests, then compiles the x86_64 EFI binary
+python3 test-uefi.py        # runs it inside virtual OVMF and compares against the QEMU oracle
+```
 
 **Never bypass a failed kernel-collection validation. Bring the report back instead.**
 
