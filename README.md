@@ -463,6 +463,7 @@ iGPU Port/
 
 | File | Contents |
 |---|---|
+| `ROADMAP.md` (repo root) | **The complete dated history, 8 – 22 October 2026** — sixteen phases from the first injection failure to macOS 27 "Golden Gate" |
 | `UNIFIED-CANDIDATE-WORK.md` (repo root) | **Authoritative combined status** across every subsystem |
 | `iwlwifi-api83/` | Linux `iwlwifi` API-83 source — the reference for the native AWDL and radio work |
 | `airportitlwm-tahoe/` | Qualified upstream reference (Tahoe 26.6.2/26.7, AppleVTD, AWDL/P2P, AirPlay) |
@@ -535,12 +536,28 @@ sudo /bin/bash latitude-runtime/rollback-runtime.sh
 <a name="roadmap"></a>
 ## 🗺️ Roadmap
 
-`ROADMAP.md` is authoritative and dated; this is a summary of its structure, not a substitute.
+[`ROADMAP.md`](ROADMAP.md) is the authoritative, fully dated record — **8 to 22 October 2026, oldest
+first** — and it is the document to read for the history. It has four parts:
+
+1. **Where we are now** — the working state, the open items and the macOS 27 direction.
+2. **How to read this document** — the four evidence rules: what worked needs its measurement, negative
+   results stay negative, counts are exact and scoped, and plugin submission IDs and i915 request
+   sequence numbers are never equated without correlation.
+3. **Timeline** — sixteen phases, each with what happened, what it proved, the lesson and the evidence
+   pointer: injection (`_kmod_info`), `EXITBS:START`, the pivot to NullMoth, first submissions and the
+   first hang, the lost-wake race, the gate that finally meant something, the WindowServer
+   variable-by-variable work, the ring capture and the falsified defect, the raw-physical span, the
+   stolen-memory skip, the panic named, the desktop working, reporting/smoothness/the peripherals, the
+   unified candidate, the AWDL radio and native backend, and the move to macOS 27 "Golden Gate".
+4. **Method** — the evidence table, what the research changed, the implementation sequence with its
+   promotion criteria, and the immediate deliverables with their boundaries.
+
+The current position in short:
 
 - **Now:** a usable, smooth GPU-composited desktop on kernel 1.0.15 / plugin 0.3.19 / framebuffer 0.2.12 /
   accelerator 0.2.9, with Wi-Fi, Bluetooth, audio, Night Shift, brightness and the touchscreen working.
 - **Next:** the touchpad, the AWDL radio data plane, tablet-mode publication, system-wide subpixel text,
-  and the move to macOS 27 "Golden Gate".
+  and the macOS 27 "Golden Gate" re-anchoring.
 - **Later:** sustained soak, sleep/wake, external displays, hardware video decode.
 
 **Promotion criteria (unchanged):** a desktop pass requires evidence that the candidate activated, the
