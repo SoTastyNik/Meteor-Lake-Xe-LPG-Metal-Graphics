@@ -169,6 +169,10 @@ That program lives in [`macos27-standalone/`](macos27-standalone/) and is at ver
   rather than reporting success. Intel's broader `unicorn-for-efi` engine has been compiled on the build
   volume (80 source files, 28 unresolved firmware helpers) but is not runtime-qualified and is separate from
   the tested binary.
+* **Kernel progress.** The kernel has now printed its own **Darwin 27 / ARM64_VMAPLE banner** through the
+  UEFI runtime. It passed the previous memory, UART and GIC stops. The run reached its instruction budget
+  during early initialization without an unhandled memory fault; work continues to extend the run and find
+  the next stop.
 * **Hardware status.** The Dell has **not** been tested on either execution path. The USB now holds
   macOS 27: the small FAT volume carries the preflight tool and the pinned inputs, and the main exFAT
   volume holds the source, the evidence and an older *hosted* QEMU shell reference. Both original SanDisk
@@ -197,7 +201,7 @@ Mirroring) — the blueprint for that move.
 | **Brightness, hotkeys, GPIO, power** | Target validation on the Dell |
 | **Weather glyph artefacts** | Reproducible, but not localized — the last capture ran without Weather |
 | **Boot chime** | Actual UEFI playback on the Dell |
-| **macOS 27 standalone runtime** | A complete privileged ARM runtime, the MMU and monitor memory management, exception delivery, SPTM initialisation, TXM, the Apple kernel and the desktop. The Dell has not been tested on either execution path |
+| **macOS 27 standalone runtime** | A complete privileged ARM runtime, the MMU and monitor memory management, exception delivery, SPTM initialisation, TXM, the Apple kernel and the desktop. The kernel has printed its Darwin 27 / ARM64_VMAPLE banner through UEFI runtime and passed the memory, UART and GIC stops; the run reached its instruction budget during early initialization without an unhandled memory fault. The Dell has not been tested on either execution path |
 
 ### Next
 
@@ -602,9 +606,13 @@ first** — and it is the document to read for the history. It has four parts:
 The current position in short:
 
 - **Now:** a usable, smooth GPU-composited desktop on kernel 1.0.15 / plugin 0.3.19 / framebuffer 0.2.12 /
-  accelerator 0.2.9, with Wi-Fi, Bluetooth, audio, Night Shift, brightness and the touchscreen working.
+  accelerator 0.2.9, with Wi-Fi, Bluetooth, audio, Night Shift, brightness and the touchscreen working. The
+  macOS 27 standalone kernel has printed its Darwin 27 / ARM64_VMAPLE banner through the UEFI runtime and
+  passed the memory, UART and GIC stops, reaching its instruction budget during early initialization without
+  an unhandled memory fault.
 - **Next:** the touchpad, the AWDL radio data plane, tablet-mode publication, system-wide subpixel text,
-  and the macOS 27 "Golden Gate" re-anchoring.
+  extending the macOS 27 standalone run past its instruction budget, and the macOS 27 "Golden Gate"
+  re-anchoring.
 - **Later:** sustained soak, sleep/wake, external displays, hardware video decode.
 
 **Promotion criteria (unchanged):** a desktop pass requires evidence that the candidate activated, the
