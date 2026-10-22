@@ -100,6 +100,30 @@ case "$weather_pid" in ''|*[!0-9]*) echo 'Weather is not running: its text fault
       echo "PID=$weather_pid exit=$weather_result" > "$OUT/weather-sample.status.txt"
     else echo 'Invalid or duplicate Weather PID; sample skipped.' > "$OUT/weather-sample.status.txt"; fi;;
 esac
+# Power measurements are snapshots, not an inferred Windows-runtime comparison.
+mkdir -p "$OUT/power"
+power_helper="$HERE/Peripherals/Power/latitude-power-snapshot"
+run_power_snapshot() {
+  [ -f "$power_helper" ] || return 0
+  "$power_helper" > "$OUT/power/$1.json" 2>&1 & power_child=$!
+  ( sleep 5; kill -TERM "$power_child" 2>/dev/null; sleep 1; kill -KILL "$power_child" 2>/dev/null ) >/dev/null 2>&1 & power_watch=$!
+  wait "$power_child"; power_result=$?; kill "$power_watch" 2>/dev/null; wait "$power_watch" 2>/dev/null
+  printf '%s exit=%s\n' "$1" "$power_result" >> "$OUT/power/status.txt"
+}
+run_power_snapshot battery-before
+/bin/ps -A -o %cpu,pid,comm | /usr/bin/sort -nr | /usr/bin/head -20 > "$OUT/power/top-cpu.txt" 2>&1
+if [ "$(/usr/bin/id -u)" = 0 ]; then
+  /usr/bin/powermetrics --samplers cpu_power -i 1000 -n 3 > "$OUT/power/cpu-power.txt" 2>&1 & power_child=$!
+  ( sleep 6; kill -TERM "$power_child" 2>/dev/null; sleep 1; kill -KILL "$power_child" 2>/dev/null ) >/dev/null 2>&1 & power_watch=$!
+  wait "$power_child"; power_result=$?; kill "$power_watch" 2>/dev/null; wait "$power_watch" 2>/dev/null
+  printf 'cpu-power exit=%s; unsupported samplers are retained as errors, not zero watts\n' "$power_result" >> "$OUT/power/status.txt"
+fi
+for power_query in custom assertions batt cap sched; do
+  /usr/bin/pmset -g "$power_query" > "$OUT/power/pmset-$power_query.txt" 2>&1 & power_child=$!
+  ( sleep 5; kill -TERM "$power_child" 2>/dev/null; sleep 1; kill -KILL "$power_child" 2>/dev/null ) >/dev/null 2>&1 & power_watch=$!
+  wait "$power_child"; power_result=$?; kill "$power_watch" 2>/dev/null; wait "$power_watch" 2>/dev/null
+  printf 'pmset-%s exit=%s\n' "$power_query" "$power_result" >> "$OUT/power/status.txt"
+done
 # Observe delivered desktop update timestamps; no pixels are saved and no
 # screen-recording permission is requested. Missing permission is an explicit skip.
 pacing_helper="$HERE/Desktop/latitude-frame-pacing"
@@ -108,7 +132,7 @@ if [ -f "$pacing_helper" ]; then
   pacing_uid=$(/usr/bin/id -u "$pacing_user" 2>/dev/null || true)
   case "$pacing_uid" in ''|*[!0-9]*) echo 'No desktop user for frame observation' > "$OUT/frame-pacing.status.txt";;
    *) if [ "$pacing_uid" -ge 501 ]; then
-      echo 'FRAME PACING: keep moving/resizing Weather for the next 8 seconds while timing is observed.'
+      echo 'FRAME PACING: if input is responsive, move a window for the next 8 seconds. Stop if it slows down.'
       { date; sysctl debug.nmxfb_front_copies debug.nmxfb_front_copy_ns debug.nmxfb_front_copy_max_ns debug.nmxfb_front_timer_skipped debug.nmxfb_front_late_refresh debug.nmxfb_front_incomplete_held debug.nmxfb_gamma_copies debug.nmxfb_gamma_refused debug.nmxfb_gamma_ns; } > "$OUT/front-copy-before.txt" 2>&1
       /bin/ps -p "$current_ws_pid" -o pid,etime,%cpu,rss,time,comm > "$OUT/frame-cpu-before.txt" 2>&1
       /bin/launchctl asuser "$pacing_uid" /usr/bin/sudo -H -u "$pacing_user" "$pacing_helper" > "$OUT/frame-pacing.json" 2> "$OUT/frame-pacing.stderr.txt" &
@@ -123,6 +147,48 @@ if [ -f "$pacing_helper" ]; then
     else echo 'No desktop user for frame observation' > "$OUT/frame-pacing.status.txt"; fi;;
   esac
 fi
+run_power_snapshot battery-after
+# Tablet/sensor inventory is read-only; absent sensor transport is explicit.
+tablet_helper="$HERE/Peripherals/Tablet/latitude-tablet-state"
+if [ -x "$tablet_helper" ]; then
+ "$tablet_helper" > "$OUT/tablet-state.json" 2> "$OUT/tablet-state.stderr.txt" & tablet_child=$!
+ ( sleep 5; kill -TERM "$tablet_child" 2>/dev/null; sleep 1; kill -KILL "$tablet_child" 2>/dev/null ) >/dev/null 2>&1 & tablet_watch=$!
+ wait "$tablet_child"; tablet_result=$?; kill "$tablet_watch" 2>/dev/null; wait "$tablet_watch" 2>/dev/null
+ echo "tablet inventory exit=$tablet_result; this does not prove rotation or tablet state" > "$OUT/tablet-state.status.txt"
+fi
+# Rotation inventory only; this collector never requests a rotation.
+/usr/sbin/ioreg -r -c LatitudeISHTransport -l -w0 > "$OUT/ish-transport-registry.txt" 2>&1
+# Record candidate identity separately from loaded/runtime evidence. Do not run
+# the LCD fixture or inject libraries as part of this collector.
+mkdir -p "$OUT/text-rendering"
+for text_info in NATIVE-VALIDATION.json NATIVE-SHA256SUMS.txt NATIVE-RUNTIME.md; do
+ if [ -f "$HERE/Desktop/TextRendering/$text_info" ]; then
+  /usr/bin/head -c 65536 "$HERE/Desktop/TextRendering/$text_info" > "$OUT/text-rendering/$text_info"
+ fi
+done
+text_reports=0
+for text_report in "$HERE"/Desktop/TextRendering/reports/native-text-*.txt; do
+ [ -f "$text_report" ] || continue
+ text_reports=$((text_reports+1))
+ [ "$text_reports" -le 32 ] || break
+ /usr/bin/head -c 65536 "$text_report" > "$OUT/text-rendering/$(basename "$text_report")"
+done
+echo 'Candidate files and explicit fixture reports only; presence does not prove Apple system-app LCD rendering.' > "$OUT/text-rendering/status.txt"
+rotation_helper="$HERE/Peripherals/Tablet/latitude-rotate"
+if [ -x "$rotation_helper" ]; then
+ "$rotation_helper" --diagnose > "$OUT/rotation-readiness.json" 2> "$OUT/rotation-readiness.stderr.txt" & tablet_child=$!
+ ( sleep 5; kill -TERM "$tablet_child" 2>/dev/null; sleep 1; kill -KILL "$tablet_child" 2>/dev/null ) >/dev/null 2>&1 & tablet_watch=$!
+ wait "$tablet_child"; tablet_result=$?; kill "$tablet_watch" 2>/dev/null; wait "$tablet_watch" 2>/dev/null
+ echo "rotation inventory exit=$tablet_result" >> "$OUT/tablet-state.status.txt"
+fi
+# Bounded radio readiness; no pairing, transfers or configuration changes.
+echo 'Collecting Bluetooth/Wi-Fi capabilities (20-second limit).'
+/usr/sbin/system_profiler SPBluetoothDataType SPAirPortDataType -json > "$OUT/continuity-radio.json" 2> "$OUT/continuity-radio.stderr.txt" & radio_child=$!
+( sleep 20; kill -TERM "$radio_child" 2>/dev/null; sleep 1; kill -KILL "$radio_child" 2>/dev/null ) >/dev/null 2>&1 & radio_watch=$!
+wait "$radio_child"; radio_result=$?; kill "$radio_watch" 2>/dev/null; wait "$radio_watch" 2>/dev/null
+printf 'radio profile exit=%s; advertised support is not a completed AirDrop test\n' "$radio_result" > "$OUT/continuity-radio.status.txt"
+/sbin/ifconfig awdl0 > "$OUT/continuity-awdl0.txt" 2>&1
+/sbin/ifconfig llw0 > "$OUT/continuity-llw0.txt" 2>&1
 /usr/sbin/ioreg -r -c LatitudeBacklightHandler -l -w0 > "$OUT/brightness-registry.txt" 2>&1
 /usr/sbin/ioreg -r -c AppleBacklightDisplay -l -w0 > "$OUT/brightness-display-registry.txt" 2>&1
 /usr/sbin/ioreg -r -c NMXIntelVGAFB -l -w0 > "$OUT/gamma-registry.txt" 2>&1
@@ -181,7 +247,7 @@ if [ -f "$key_helper" ]; then
   wait "$key_child";key_result=$?;kill "$key_watch" 2>/dev/null;wait "$key_watch" 2>/dev/null
   echo "Firmware key counter snapshot exit=$key_result" > "$OUT/input/firmware-key-counters.status.txt"
 fi
-for input_class in ApplePS2Controller VoodooI2CControllerDriver LatitudeI2CMeteorLakeController VoodooI2CHIDDevice VoodooI2CPrecisionTouchpadHIDEventDriver VoodooInput BrightnessKeys ApplePS2Keyboard; do
+for input_class in LatitudeGPIO ApplePS2Controller VoodooI2CControllerDriver LatitudeI2CMeteorLakeController VoodooI2CHIDDevice VoodooI2CPrecisionTouchpadHIDEventDriver VoodooInput BrightnessKeys ApplePS2Keyboard; do
   /usr/sbin/ioreg -r -c "$input_class" -l -w0 > "$OUT/input/$input_class.txt" 2>&1 &
   input_child=$!
   ( sleep 5; kill -TERM "$input_child" 2>/dev/null; sleep 1; kill -KILL "$input_child" 2>/dev/null ) >/dev/null 2>&1 & input_watch=$!
@@ -201,7 +267,7 @@ for bt_class in IOUSBHostDevice IntelBluetoothFirmware IntelBTPatcher IOBluetoot
   wait "$bt_child"; bt_result=$?; kill "$bt_watch" 2>/dev/null; wait "$bt_watch" 2>/dev/null
   printf '%s exit=%s\n' "$bt_class" "$bt_result" >> "$OUT/bluetooth/status.txt"
 done
-for acpi_device in I2C3 TPD0; do
+for acpi_device in GPI0 I2C3 TPD0; do
   /usr/sbin/ioreg -p IOACPIPlane -r -n "$acpi_device" -l -w0 > "$OUT/input/$acpi_device-acpi.txt" 2>&1 & bt_child=$!
   ( sleep 5; kill -TERM "$bt_child" 2>/dev/null; sleep 1; kill -KILL "$bt_child" 2>/dev/null ) >/dev/null 2>&1 & bt_watch=$!
   wait "$bt_child"; bt_result=$?; kill "$bt_watch" 2>/dev/null; wait "$bt_watch" 2>/dev/null
@@ -260,6 +326,33 @@ user_home=${HOME:-/var/root}
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
   resolved_home=$(/usr/bin/dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')
   [ -z "$resolved_home" ] || user_home=$resolved_home
+fi
+# Query the installed keyboard in its actual login session, not the root or USB
+# copy, so the Accessibility result applies to the executable being tested.
+tablet_user=${SUDO_USER:-$(/usr/bin/stat -f %Su /dev/console)}
+tablet_uid=$(/usr/bin/id -u "$tablet_user" 2>/dev/null || true)
+tablet_home=$(/usr/bin/dscl . -read "/Users/$tablet_user" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')
+tablet_keyboard="$tablet_home/Applications/Latitude Tablet Keyboard.app/Contents/MacOS/latitude-tablet-keyboard"
+if [ -x "$tablet_keyboard" ] && [ -n "$tablet_uid" ] && [ "$tablet_uid" -ge 501 ] 2>/dev/null; then
+ /bin/launchctl asuser "$tablet_uid" /usr/bin/sudo -H -u "$tablet_user" "$tablet_keyboard" --diagnose > "$OUT/tablet-keyboard-readiness.json" 2> "$OUT/tablet-keyboard-readiness.stderr.txt" & tablet_child=$!
+ ( sleep 5; kill -TERM "$tablet_child" 2>/dev/null; sleep 1; kill -KILL "$tablet_child" 2>/dev/null ) >/dev/null 2>&1 & tablet_watch=$!
+ wait "$tablet_child"; tablet_result=$?; kill "$tablet_watch" 2>/dev/null; wait "$tablet_watch" 2>/dev/null
+ echo "installed keyboard readiness exit=$tablet_result" >> "$OUT/tablet-state.status.txt"
+ [ ! -f "$tablet_home/Library/Logs/LatitudeTablet/keyboard-errors.log" ] || tail -60 "$tablet_home/Library/Logs/LatitudeTablet/keyboard-errors.log" > "$OUT/tablet-keyboard-errors.txt"
+else echo 'Tablet keyboard is not installed for a valid desktop user' > "$OUT/tablet-keyboard-readiness.status.txt"; fi
+# Read-only helper diagnostics in the logged-in user's display session.
+brightness_helper="$user_home/Library/Application Support/LatitudeInput/latitude-brightness"
+brightness_user=${SUDO_USER:-$(/usr/bin/stat -f %Su /dev/console)}
+brightness_uid=$(/usr/bin/id -u "$brightness_user" 2>/dev/null || true)
+if [ -x "$brightness_helper" ] && [ -n "$brightness_uid" ] && [ "$brightness_uid" -ge 501 ] 2>/dev/null; then
+  /bin/launchctl asuser "$brightness_uid" /usr/bin/sudo -H -u "$brightness_user" "$brightness_helper" diagnose > "$OUT/brightness-system-state.json" 2> "$OUT/brightness-system-state.stderr.txt" & brightness_child=$!
+  ( sleep 5; kill -TERM "$brightness_child" 2>/dev/null; sleep 1; kill -KILL "$brightness_child" 2>/dev/null ) >/dev/null 2>&1 & brightness_watch=$!
+  wait "$brightness_child"; brightness_result=$?
+  kill "$brightness_watch" 2>/dev/null; wait "$brightness_watch" 2>/dev/null
+  echo "brightness diagnose exit=$brightness_result" > "$OUT/brightness-system-state.status.txt"
+  [ ! -f "$user_home/Library/Application Support/LatitudeInput/brightness-errors.log" ] || tail -100 "$user_home/Library/Application Support/LatitudeInput/brightness-errors.log" > "$OUT/brightness-helper-errors.txt"
+else
+  echo 'Installed brightness helper or desktop session unavailable' > "$OUT/brightness-system-state.status.txt"
 fi
 for source in system user; do
   if [ "$source" = system ]; then crash_root=/Library/Logs/DiagnosticReports; else crash_root="$user_home/Library/Logs/DiagnosticReports"; fi
