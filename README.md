@@ -171,11 +171,12 @@ That program lives in [`macos27-standalone/`](macos27-standalone/) and is at ver
   volume (80 source files, 28 unresolved firmware helpers) but is not runtime-qualified and is separate from
   the tested binary.
 * **Kernel progress.** The kernel has now printed its own **Darwin 27 / ARM64_VMAPLE banner** through the
-  UEFI runtime. It passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops and completed
-  pmap startup, reaching ~1.23e9 scheduled block slots during early initialization with a clean
-  UC_ERR_OK stop (instruction budget, not a fault). A zeroed-NVRAM case panics with "NVRAM size is 0 bytes";
-  the candidate carries an 8 KB CHRP NVRAM proxy. The next stop is the NVRAM proxy handling; host memory
-  currently bounds run length on this build host.
+  UEFI runtime, passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops, completed
+  pmap startup, and **reached userspace: launchd started and reports "BaseSystem environment starting."**
+  The AES startup barriers are cleared and recovery boot tasks are running. The run reached ~1.23e9
+  scheduled block slots during early initialization with a clean UC_ERR_OK stop (instruction budget, not a
+  fault). A zeroed-NVRAM case panics with "NVRAM size is 0 bytes"; the candidate carries an 8 KB CHRP
+  NVRAM proxy. Work continues toward the graphical installer; it is not visible yet.
 * **Hardware status.** The Dell has **not** been tested on either execution path. The USB now holds
   macOS 27: the small FAT volume carries the preflight tool and the pinned inputs, and the main exFAT
   volume holds the source, the evidence and an older *hosted* QEMU shell reference. Both original SanDisk
@@ -204,12 +205,12 @@ Mirroring) — the blueprint for that move.
 | **Brightness, hotkeys, GPIO, power** | Target validation on the Dell |
 | **Weather glyph artefacts** | Reproducible, but not localized — the last capture ran without Weather |
 | **Boot chime** | Actual UEFI playback on the Dell |
-| **macOS 27 standalone runtime** | A complete privileged ARM runtime, the MMU and monitor memory management, exception delivery, SPTM initialisation, TXM, the Apple kernel and the desktop. The kernel has printed its Darwin 27 / ARM64_VMAPLE banner through UEFI runtime and passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops, completed pmap startup, and reached ~1.23e9 scheduled block slots during early initialization with a clean UC_ERR_OK stop (instruction budget, not a fault). A zeroed-NVRAM case panics with "NVRAM size is 0 bytes"; the candidate carries an 8 KB CHRP NVRAM proxy. The Dell has not been tested on either execution path |
+| **macOS 27 standalone runtime** | The kernel has printed its Darwin 27 / ARM64_VMAPLE banner through UEFI runtime, passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops, completed pmap startup, and **reached userspace: launchd started and reports "BaseSystem environment starting."** The AES startup barriers are cleared and recovery boot tasks are running. ~1.23e9 scheduled block slots during early initialization with a clean UC_ERR_OK stop (instruction budget). A zeroed-NVRAM case panics with "NVRAM size is 0 bytes"; the candidate carries an 8 KB CHRP NVRAM proxy. Work continues toward the graphical installer (not visible yet). The Dell has not been tested on either execution path |
 
 ### Next
 
-- **The macOS 27 standalone runtime** — privileged ARM execution, the MMU, SPTM initialisation and the
-  Apple kernel, then the desktop. See *macOS 27 "Golden Gate" — the standalone boot program*.
+- **The macOS 27 standalone runtime** — continue from userspace (launchd, BaseSystem, recovery boot tasks)
+  toward the graphical installer. See *macOS 27 "Golden Gate" — the standalone boot program*.
 - **Complete the Apple-side subsystems on 24H32** — AWDL radio qualification, a live ISH publisher,
   system-wide subpixel text deployment.
 - **Qualify the remaining peripherals on the Dell** — touchpad, brightness keys, hotkeys, sleep/wake.
@@ -610,11 +611,13 @@ The current position in short:
 
 - **Now:** a usable, smooth GPU-composited desktop on kernel 1.0.15 / plugin 0.3.19 / framebuffer 0.2.12 /
   accelerator 0.2.9, with Wi-Fi, Bluetooth, audio, Night Shift, brightness and the touchscreen working. The
-  macOS 27 standalone kernel has printed its Darwin 27 / ARM64_VMAPLE banner through the UEFI runtime and
-  passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops, completed pmap startup and
-  reached ~1.23e9 scheduled block slots during early initialization with a clean UC_ERR_OK stop (instruction
-  budget); a zeroed-NVRAM case panics with "NVRAM size is 0 bytes" and the candidate carries an 8 KB CHRP
-  NVRAM proxy.
+  macOS 27 standalone kernel has printed its Darwin 27 / ARM64_VMAPLE banner through the UEFI runtime,
+  passed the memory, UART, GIC, PCI, GPIO, AES, RTC, IOSFC and GFX stops, completed pmap startup, and
+  **reached userspace: launchd started and reports "BaseSystem environment starting."** The AES startup
+  barriers are cleared and recovery boot tasks are running. ~1.23e9 scheduled block slots during early
+  initialization with a clean UC_ERR_OK stop (instruction budget); a zeroed-NVRAM case panics with "NVRAM
+  size is 0 bytes" and the candidate carries an 8 KB CHRP NVRAM proxy. Work continues toward the graphical
+  installer (not visible yet).
 - **Next:** the touchpad, the AWDL radio data plane, tablet-mode publication, system-wide subpixel text,
   extending the macOS 27 standalone run past its instruction budget, and the macOS 27 "Golden Gate"
   re-anchoring.
