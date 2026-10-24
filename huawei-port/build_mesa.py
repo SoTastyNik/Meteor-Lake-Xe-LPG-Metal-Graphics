@@ -48,12 +48,14 @@ def main():
     (LOGS / 'tool-deps.txt').write_text(subprocess.run(['otool', '-L', str(TOOLS / 'bin/mesa_clc'), str(TOOLS / 'bin/vtn_bindgen2')],
                                                        capture_output=True, text=True).stdout)
 
+    # Apple ar cannot write the empty archives Mesa declares (libintel_decoder_gen.a); llvm-ar can
+    assert (brew / 'opt/llvm@20/bin/llvm-ar').is_file()
     cross = WORK / 'x86_64-macos.ini'
     cross.write_text(f"""[binaries]
 c = ['clang', '-arch', 'x86_64', '-mmacosx-version-min=15.0']
 cpp = ['clang++', '-arch', 'x86_64', '-mmacosx-version-min=15.0']
 objc = ['clang', '-arch', 'x86_64', '-mmacosx-version-min=15.0']
-ar = 'ar'
+ar = '{brew / 'opt/llvm@20/bin/llvm-ar'}'
 strip = 'strip'
 pkg-config = '{shutil.which('pkg-config', path=env['PATH'])}'
 [host_machine]
