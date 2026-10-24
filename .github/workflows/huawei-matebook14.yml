@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 huawei-port/apply_identity.py --check
-      - run: brew install meson ninja pkgconf bison flex llvm@20
+      - run: brew install meson ninja pkgconf bison flex llvm@20 spirv-tools
       - run: python3 -m venv .venv && .venv/bin/pip install mako pyyaml packaging
       - run: .venv/bin/python huawei-port/build_mesa.py out/mesa
       - uses: actions/upload-artifact@v4

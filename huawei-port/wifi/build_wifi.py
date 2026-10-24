@@ -19,6 +19,7 @@ R = Path(__file__).resolve().parents[2]
 OUT = Path(sys.argv[1]).resolve()
 SRC = OUT / 'itlwm'
 BASE = 'd695c971420cc8af0daa286dcd3297e8236c0a63'
+SDK = '3f750085caa17ec3a7880f11c11bf4f48cd6a164'  # acidanthera/MacKernelSDK, pinned by laobamac's own CI
 DELL = R / 'port-artifacts/awdl-radio-0.1.2-20261021/iGPU-Port/Peripherals/Continuity/Candidate-0.1.2/Source'
 FW_URL = 'https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git/+/refs/tags/20251011/intel/iwlwifi/'
 FIRMWARE = {
@@ -45,6 +46,8 @@ def main():
         shutil.rmtree(SRC)
     sh('git', 'clone', '--quiet', 'https://github.com/laobamac/itlwm.git', str(SRC))
     sh('git', 'checkout', '--quiet', BASE, cwd=SRC)
+    sh('git', 'clone', '--quiet', 'https://github.com/acidanthera/MacKernelSDK.git', str(SRC / 'MacKernelSDK'))
+    sh('git', 'checkout', '--quiet', SDK, cwd=SRC / 'MacKernelSDK')
     for f in (DELL / 'Modified').rglob('*'):
         if f.is_file():
             dst = SRC / f.relative_to(DELL / 'Modified')
@@ -80,7 +83,8 @@ def main():
     build = OUT / 'build'
     with (OUT / 'xcodebuild.log').open('w') as log:
         r = subprocess.run(['xcodebuild', '-project', 'itlwm.xcodeproj', '-scheme', 'AirportItlwm-Sequoia',
-                            '-configuration', 'Release', 'ARCHS=x86_64', 'ONLY_ACTIVE_ARCH=NO',
+                            '-configuration', 'Release', '-jobs', '3', 'ARCHS=x86_64', 'ONLY_ACTIVE_ARCH=NO',
+                            'GIT_COMMIT=_' + BASE[:7] + '-huawei-hr',
                             'SYMROOT=' + str(build / 'products'), 'OBJROOT=' + str(build / 'obj'),
                             'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'build'],
                            cwd=SRC, stdout=log, stderr=subprocess.STDOUT)
