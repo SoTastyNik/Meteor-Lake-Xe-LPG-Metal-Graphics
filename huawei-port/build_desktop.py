@@ -94,7 +94,9 @@ def main():
     # Small hardware tests from the upstream runtime, rebuilt for this machine's identity
     for name, src, extra in [('latitude-vulkan-test', 'latitude-runtime/tools/latitude-vulkan-test.c', ['-I', 'Vulkan-Headers/include']),
                              ('latitude-metal-test', 'latitude-runtime/tools/latitude-metal-test.m', ['-fobjc-arc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOKit']),
-                             ('latitude-i915-info', 'latitude-runtime/tools/latitude-i915-info.c', [])]:
+                             ('latitude-i915-info', 'latitude-runtime/tools/latitude-i915-info.c',
+                              ['-I', 'build-tree/sysroot/include', '-I', 'build-tree/sysroot/include/libdrm',
+                               'build-tree/sysroot/lib/libdrm.2.dylib'])]:
         run(name, ['xcrun', 'clang', *X86, '-O2', *extra, src, '-o', str(OUT / 'tools' / name)])
         sign(OUT / 'tools' / name)
     shutil.copy2(R / 'latitude-runtime/tools/check.spv', OUT / 'tools/check.spv')

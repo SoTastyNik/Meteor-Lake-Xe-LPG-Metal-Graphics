@@ -42,6 +42,10 @@ def repoint_scripts():
         for old in ['K=/Users/ved/igpu-build/kpi', 'K=/Volumes/MiniData/build/gpu-src/kpi']:
             s = s.replace(old, f'K="{R}"')
         assert f'X="{X}"' in s and f'K="{R}"' in s, name
+        # Intel-only build: drops the fb bridge's amdgpu_sg_display reference (unresolvable without amdgpu)
+        if '-DNMX_I915_ONLY=1' not in s:
+            s = s.replace('-DNMXKPI=1', '-DNMXKPI=1 -DNMX_I915_ONLY=1', 1)
+        assert '-DNMX_I915_ONLY=1' in s, name
         p.write_text(s)
     # fbroot/ holds symlinks into the author's FreeBSD tree
     for rel in ['compat', 'contrib/ck', 'contrib/dev']:
@@ -147,6 +151,10 @@ def main():
     # Imports must stay within what the upstream 1.0.15 link resolved against (checked against its 1.0.8 baseline)
     undefined = subprocess.check_output(['xcrun', 'nm', '-uj', str(kext / 'MacOS/NMXGPU')], text=True).split()
     (OUT / 'NMXGPU-imports.txt').write_text('\n'.join(undefined) + '\n')
+    reference = R / 'latitude-desktop/WindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU'
+    upstream = set(subprocess.check_output(['xcrun', 'nm', '-uj', str(reference)], text=True).split())
+    extra = sorted(set(undefined) - upstream)
+    assert not extra, f'imports the upstream 1.0.15 kernel does not have: {extra}'
     subprocess.run(['codesign', '--force', '--sign', '-', str(OUT / 'NMXGPU.kext')], check=True)
     subprocess.run(['codesign', '--verify', '--strict', str(OUT / 'NMXGPU.kext')], check=True)
     uuid = subprocess.check_output(['xcrun', 'dwarfdump', '--uuid', str(kext / 'MacOS/NMXGPU')], text=True).split()[1]
