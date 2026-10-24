@@ -134,7 +134,7 @@ def main():
         if p.is_file() and not p.is_symlink() and p.read_bytes()[:4] == bytes.fromhex('cffaedfe'):
             assert subprocess.check_output(['lipo', '-archs', str(p)], text=True).strip() == 'x86_64', p
             p.chmod(0o755)
-            if '.kext/' not in str(p) and '.bundle/' not in str(p):
+            if '.kext/' not in str(p):  # nested bundle code must be signed before its bundle is sealed
                 sign(p)
     for p in [bundle, *ext.iterdir(), *(PKG / 'EFI-Kexts').iterdir()]:
         sign(p)
