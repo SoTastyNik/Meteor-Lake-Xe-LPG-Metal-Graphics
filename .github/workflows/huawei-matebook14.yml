@@ -1,17 +1,24 @@
 name: HUAWEI MateBook 14 graphics (8086:7D55)
 on:
   workflow_dispatch:
+    inputs:
+      artifacts_run:
+        description: 'Package only, from the build artifacts of this run id'
+        required: false
+        default: ''
   push:
     branches: [huawei-matebook14-7d55]
     paths-ignore: ['**.md', 'huawei-port/README-RU.txt']
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: huawei-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   kernel:
+    if: ${{ !inputs.artifacts_run }}
     runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
@@ -26,6 +33,7 @@ jobs:
           retention-days: 14
 
   desktop:
+    if: ${{ !inputs.artifacts_run }}
     runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
@@ -43,6 +51,7 @@ jobs:
           retention-days: 14
 
   mesa:
+    if: ${{ !inputs.artifacts_run }}
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -61,6 +70,7 @@ jobs:
           retention-days: 14
 
   wifi:
+    if: ${{ !inputs.artifacts_run }}
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -81,6 +91,7 @@ jobs:
 
   package:
     needs: [kernel, desktop, mesa]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
@@ -93,6 +104,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+          run-id: ${{ inputs.artifacts_run || github.run_id }}
+          github-token: ${{ github.token }}
       - run: python3 huawei-port/package.py out/kernel out/desktop out/mesa out/Huawei-MateBook14-Graphics
       - uses: actions/upload-artifact@v4
         with:

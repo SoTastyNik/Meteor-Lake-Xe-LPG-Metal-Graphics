@@ -134,7 +134,9 @@ def main():
         if p.is_file() and not p.is_symlink() and p.read_bytes()[:4] == bytes.fromhex('cffaedfe'):
             assert subprocess.check_output(['lipo', '-archs', str(p)], text=True).strip() == 'x86_64', p
             p.chmod(0o755)
-            if '.kext/' not in str(p):  # nested bundle code must be signed before its bundle is sealed
+            main_exe = (p.parent.name == 'MacOS' and p.parent.parent.parent.suffix == '.bundle'
+                        and p.name == p.parent.parent.parent.stem)
+            if '.kext/' not in str(p) and not main_exe:  # nested code first; the bundle seal covers its executable
                 sign(p)
     for p in [bundle, *ext.iterdir(), *(PKG / 'EFI-Kexts').iterdir()]:
         sign(p)
