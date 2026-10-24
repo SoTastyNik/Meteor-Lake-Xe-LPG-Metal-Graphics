@@ -11,7 +11,7 @@ for name,subdir,objects in [('LatitudeMTLFB','Library/Extensions',['nmxvgafb','n
  subprocess.run(['xcrun','clang++','-arch','x86_64','-mmacosx-version-min=15.0','-fapple-kext','-nostdlib','-Xlinker','-kext','-lkmodc++','-lkmod','-lcc_kext',*[str(out/(o+'.o')) for o in objects],'-o',str(kext/'Contents/MacOS'/name)],check=True)
  m={'CFBundleExecutable':name,'CFBundleIdentifier':'com.nullmoth.'+name,'CFBundleName':name,'CFBundlePackageType':'KEXT','CFBundleVersion':'0.2.3','CFBundleShortVersionString':'0.2.3','CFBundleInfoDictionaryVersion':'6.0','OSBundleLibraries':{'com.apple.kpi.iokit':'8.0','com.apple.kpi.libkern':'8.0','com.apple.kpi.mach':'8.0','com.apple.iokit.IOPCIFamily':'1.0.0'}}
  person={'CFBundleIdentifier':m['CFBundleIdentifier'],'IOClass':'NMXIntelVGAFB' if name=='LatitudeMTLFB' else name,'IOProviderClass':'LatitudePanelClaim' if name=='LatitudeMTLFB' else 'IOPCIDevice','IOMatchCategory':'IOFramebuffer','IOProbeScore':60000}
- if name=='LatitudePanelClaim':person.update(IOPCIMatch='0x7d458086');m['OSBundleRequired']='Root'
+ if name=='LatitudePanelClaim':person.update(IOPCIMatch='0x7d558086');m['OSBundleRequired']='Root'
  else:m['OSBundleLibraries'].update({'com.apple.iokit.IOGraphicsFamily':'1.0.0','com.apple.kpi.bsd':'8.0'})
  m['IOKitPersonalities']={name:person};(kext/'Contents/Info.plist').write_bytes(plistlib.dumps(m))
  subprocess.run(['codesign','--force','--sign','-',str(kext)],check=True);subprocess.run(['codesign','--verify','--strict',str(kext)],check=True)

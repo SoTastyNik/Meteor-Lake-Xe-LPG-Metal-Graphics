@@ -74,7 +74,7 @@ int intel_ring_pin(struct intel_ring *ring, struct i915_gem_ww_ctx *ww)
 
 	ring->vaddr = addr;
 #ifdef NMXKPI
-	if (INTEL_DEVID(vma->vm->i915) == 0x7d45)
+	if (INTEL_DEVID(vma->vm->i915) == 0x7d55)
 		drm_info(&vma->vm->i915->drm,
 			 "Latitude MTL ring pinned: stolen=%u size=%u ggtt=0x%llx\n",
 			 i915_gem_object_is_stolen(vma->obj), ring->size,

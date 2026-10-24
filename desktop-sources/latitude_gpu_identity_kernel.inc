@@ -55,12 +55,12 @@ IOReturn NMXVGAFB::setProperties(OSObject *properties)
              *heap=number("sharedHeapBytes"), *ram=number("physicalRAMBytes");
     OSString *name=OSDynamicCast(OSString, report->getObject("name"));
     if (!ver || !vendor || !device || !heap || !ram || !name ||
-        ver->unsigned64BitValue()!=1 || vendor->unsigned64BitValue()!=0x8086 || device->unsigned64BitValue()!=0x7d45 ||
-        !latitudeGPUIdentityValid(1,0x8086,0x7d45,name->getCStringNoCopy(),name->getLength(),
+        ver->unsigned64BitValue()!=1 || vendor->unsigned64BitValue()!=0x8086 || device->unsigned64BitValue()!=0x7d55 ||
+        !latitudeGPUIdentityValid(1,0x8086,0x7d55,name->getCStringNoCopy(),name->getLength(),
                                  heap->unsigned64BitValue(),ram->unsigned64BitValue())) return kIOReturnBadArgument;
     IOService *claim=getProvider();
     IOPCIDevice *pci=claim ? OSDynamicCast(IOPCIDevice,claim->getProvider()) : nullptr;
-    if (!fPanelMemoryValidated || !pci || pci->configRead16(0)!=0x8086 || pci->configRead16(2)!=0x7d45 ||
+    if (!fPanelMemoryValidated || !pci || pci->configRead16(0)!=0x8086 || pci->configRead16(2)!=0x7d55 ||
         pci->getProperty("nmxgpu-claimed")!=kOSBooleanTrue) return kIOReturnNotReady;
     OSData *model=OSData::withBytes(name->getCStringNoCopy(),name->getLength()+1);
     OSNumber *mb=OSNumber::withNumber(heap->unsigned64BitValue() >> 20,32);

@@ -758,7 +758,7 @@ i915_driver_create(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/* Device parameters start as a copy of module parameters. */
 	i915_params_copy(&i915->params, &i915_modparams);
 #ifdef NMXKPI
-	if (pdev->vendor == 0x8086 && pdev->device == 0x7d45) {
+	if (pdev->vendor == 0x8086 && pdev->device == 0x7d55) {
 		i915->params.enable_guc = ENABLE_GUC_SUBMISSION | ENABLE_GUC_LOAD_HUC;
 		drm_info(&i915->drm, "Latitude MTL: enable_guc=%d (Linux report profile)\n",
 			 i915->params.enable_guc);

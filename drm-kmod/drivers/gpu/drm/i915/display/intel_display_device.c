@@ -1620,7 +1620,7 @@ struct intel_display *intel_display_device_probe(struct pci_dev *pdev)
 
 #ifdef NMXKPI
 	/* Render-only Latitude bring-up: leave the firmware-owned panel alone. */
-	if (pdev->vendor == 0x8086 && pdev->device == 0x7d45) {
+	if (pdev->vendor == 0x8086 && pdev->device == 0x7d55) {
 		drm_info(display->drm, "Latitude MTL render-only: skipping display discovery\n");
 		goto no_display;
 	}

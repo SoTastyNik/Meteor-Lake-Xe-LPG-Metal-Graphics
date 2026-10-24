@@ -644,9 +644,9 @@ IOService *NMXVGAFB::probe(IOService *provider, SInt32 *score)
     if (!matchedPCI) return nullptr;
 #ifdef LATITUDE_MTL_PANEL
     if (matchedPCI->configRead16(kIOPCIConfigVendorID) != 0x8086 ||
-        matchedPCI->configRead16(kIOPCIConfigDeviceID) != 0x7d45 ||
-        matchedPCI->configRead16(kIOPCIConfigSubSystemVendorID) != 0x1028 ||
-        matchedPCI->configRead16(kIOPCIConfigSubSystemID) != 0x0cb6) return nullptr;
+        matchedPCI->configRead16(kIOPCIConfigDeviceID) != 0x7d55 ||
+        matchedPCI->configRead16(kIOPCIConfigSubSystemVendorID) != 0x19e5 ||
+        matchedPCI->configRead16(kIOPCIConfigSubSystemID) != 0x3e71) return nullptr;
 #endif
     if (!opted_in()) { VFBLOG("not opted in (nmxvgafb=1 or NVRAM nullmoth-vgafb-once) - the firmware framebuffer keeps the display"); return nullptr; }
     VFBLOG("probe: opted in");
@@ -730,7 +730,7 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
         if(latitudeEDIDGeometry(latitudePanelEDID,sizeof latitudePanelEDID,fWidth,fHeight,&mmW,&mmH)){
             memcpy(fEdid,latitudePanelEDID,sizeof latitudePanelEDID);fEdidLen=sizeof latitudePanelEDID;
             setProperty("LatitudePanelWidthMM",mmW,32);setProperty("LatitudePanelHeightMM",mmH,32);
-            setProperty("LatitudePanelEDIDSource","Dell Linux capture 20261012 eDP-1");
+            setProperty("LatitudePanelEDIDSource","HUAWEI FLMH-XX EDO142 Linux capture 20261015 eDP-1");
         }
         fBacklight=LatitudeBacklightHandler::create(mmio,pipe);
         found=true; break;

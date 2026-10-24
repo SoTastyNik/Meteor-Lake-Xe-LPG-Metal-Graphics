@@ -61,12 +61,12 @@ static IOLock *g_lock;
 static bool g_started;
 static int g_devices;
 
-// This local laptop build is restricted to the real Meteor Lake-U PCI ID.
+// This local laptop build is restricted to the HUAWEI MateBook 14 Meteor Lake-H PCI ID.
 // Never treat it as the Panther Lake SR-IOV VF used by the VM patch series.
 static bool latitude_mtl_target(IOPCIDevice *pci)
 {
     return pci && pci->configRead16(kIOPCIConfigVendorID) == INTEL_VENDOR &&
-           pci->configRead16(kIOPCIConfigDeviceID) == 0x7D45;
+           pci->configRead16(kIOPCIConfigDeviceID) == 0x7D55;
 }
 
 static bool opted_in(IOPCIDevice *pci, uint16_t vendor)

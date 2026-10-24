@@ -29,7 +29,7 @@ static BOOL hardwareReady(void) {
         io_registry_entry_t claim=0,pci=0;
         if(IORegistryEntryGetParentEntry(fb,kIOServicePlane,&claim)==KERN_SUCCESS &&
            IORegistryEntryGetParentEntry(claim,kIOServicePlane,&pci)==KERN_SUCCESS &&
-           sameID(pci,CFSTR("vendor-id"),0x8086) && sameID(pci,CFSTR("device-id"),0x7d45)) {
+           sameID(pci,CFSTR("vendor-id"),0x8086) && sameID(pci,CFSTR("device-id"),0x7d55)) {
             ++matches;
             CFTypeRef claimed=IORegistryEntryCreateCFProperty(pci,CFSTR("nmxgpu-claimed"),kCFAllocatorDefault,0);
             ready=claimed && CFGetTypeID(claimed)==CFBooleanGetTypeID() && CFBooleanGetValue(claimed);
@@ -48,7 +48,7 @@ static int publish(NSDictionary *report) {
         io_registry_entry_t claim=0,parent=0;
         if(IORegistryEntryGetParentEntry(candidate,kIOServicePlane,&claim)==KERN_SUCCESS &&
            IORegistryEntryGetParentEntry(claim,kIOServicePlane,&parent)==KERN_SUCCESS &&
-           sameID(parent,CFSTR("vendor-id"),0x8086) && sameID(parent,CFSTR("device-id"),0x7d45)) {
+           sameID(parent,CFSTR("vendor-id"),0x8086) && sameID(parent,CFSTR("device-id"),0x7d55)) {
             ++matches;
             if(!fb) { fb=candidate; candidate=0; pci=parent; parent=0; }
         }
@@ -117,7 +117,7 @@ int main(int argc,char **argv) { @autoreleasepool {
         VkPhysicalDevice selected=VK_NULL_HANDLE;VkPhysicalDeviceProperties identity={0};unsigned matches=0;
         for(uint32_t i=0;i<count;i++) {
             VkPhysicalDeviceProperties candidate={0};properties(devices[i],&candidate);
-            if(candidate.vendorID==0x8086 && candidate.deviceID==0x7d45 && candidate.deviceType==VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+            if(candidate.vendorID==0x8086 && candidate.deviceID==0x7d55 && candidate.deviceType==VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
                 ++matches;selected=devices[i];identity=candidate;
             }
         }

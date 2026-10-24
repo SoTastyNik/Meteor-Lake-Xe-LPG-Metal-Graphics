@@ -1,0 +1,82 @@
+name: HUAWEI MateBook 14 graphics (8086:7D55)
+on:
+  workflow_dispatch:
+  push:
+    branches: [huawei-matebook14-7d55]
+    paths-ignore: ['**.md', 'huawei-port/README-RU.txt']
+permissions:
+  contents: read
+concurrency:
+  group: huawei-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 huawei-port/apply_identity.py --check
+      - run: python3 huawei-port/build_kernel.py out/kernel
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel
+          path: out/kernel
+          retention-days: 14
+
+  desktop:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 huawei-port/apply_identity.py --check
+      - run: rustup target add x86_64-apple-darwin
+      - run: python3 huawei-port/build_desktop.py out/desktop
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop
+          path: |
+            out/desktop
+            !out/desktop/cargo
+          retention-days: 14
+
+  mesa:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 huawei-port/apply_identity.py --check
+      - run: brew install meson ninja pkgconf bison flex
+      - run: python3 -m venv .venv && .venv/bin/pip install mako pyyaml packaging
+      - run: .venv/bin/python huawei-port/build_mesa.py out/mesa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mesa
+          path: |
+            out/mesa
+            !out/mesa/work
+          retention-days: 14
+
+  package:
+    needs: [kernel, desktop, mesa]
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            huawei-port
+            latitude-runtime
+            port-artifacts/desktop-0.3.5
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - run: python3 huawei-port/package.py out/kernel out/desktop out/mesa out/Huawei-MateBook14-Graphics
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Huawei-MateBook14-Graphics
+          path: out/Huawei-MateBook14-Graphics.tar.gz
+          retention-days: 30

@@ -5,7 +5,7 @@ static inline bool latitudePWMValid(const LatitudePWMState &s) {
  return (s.control & 0x80000000u) && s.period>=32 && s.period<=0x00ffffffu && s.duty<=s.period &&
         (s.pipeConf&0x80000000u) && (s.planeControl&0x80000000u);
 }
-static inline uint32_t latitudePWMMinimum(uint32_t period) { return (uint32_t)(((uint64_t)period*15+254)/255); }
+static inline uint32_t latitudePWMMinimum(uint32_t period) { return (uint32_t)(((uint64_t)period*6+254)/255); }
 static inline uint32_t latitudePWMDuty(uint32_t period,uint32_t level) {
  const uint32_t minimum=latitudePWMMinimum(period);
  if(level>65535)level=65535;

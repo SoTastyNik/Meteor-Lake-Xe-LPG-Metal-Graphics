@@ -695,7 +695,7 @@ static int nvmtl_vk_initialize(void)
 
     if (getenv("NVMTL_DESKTOP_STALL") && nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
         if (setenv("INTEL_DEBUG", "stall", 0) == 0)
-            nvlog("first-submit: 8086:7d45 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
+            nvlog("first-submit: 8086:7d55 WindowServer conservative cache/barrier mode INTEL_DEBUG=stall");
         else nvlog("first-submit: FAILED to set conservative cache/barrier policy");
     }
     if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))

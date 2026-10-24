@@ -580,7 +580,7 @@ static int i915_gem_init_stolen(struct intel_memory_region *mem)
 
 	/* Basic memrange allocator for stolen space. */
 #ifdef NMXKPI
-	if (INTEL_DEVID(i915) == 0x7d45) {
+	if (INTEL_DEVID(i915) == 0x7d55) {
 		u64 base, size;
 		u64 dsm = intel_uncore_read64(&i915->uncore, GEN6_DSMBASE) & GEN11_BDSM_MASK;
 		if (nmx_xnu_firmware_scanout(&base, &size) ||

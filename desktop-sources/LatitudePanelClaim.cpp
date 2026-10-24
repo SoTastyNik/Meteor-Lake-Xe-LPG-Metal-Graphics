@@ -41,7 +41,7 @@ public:
   uint16_t sv=pci->configRead16(kIOPCIConfigSubSystemVendorID),sd=pci->configRead16(kIOPCIConfigSubSystemID);
   IOLog("LatitudePanelClaim: probe %04x:%04x subsystem %04x:%04x claimed=%u\n",vendor,device,sv,sd,claimed);
   if(claimed){pci->setProperty("LatitudePanelClaimProbe","already tried this boot");return nullptr;}
-  if(vendor!=0x8086||device!=0x7d45||sv!=0x1028||sd!=0x0cb6){pci->setProperty("LatitudePanelClaimProbe","PCI identity mismatch");return nullptr;}
+  if(vendor!=0x8086||device!=0x7d55||sv!=0x19e5||sd!=0x3e71){pci->setProperty("LatitudePanelClaimProbe","PCI identity mismatch");return nullptr;}
   bool once=false;
   if(IORegistryEntry *e=IORegistryEntry::fromPath("/options",gIODTPlane)) {
    if(auto n=OSDynamicCast(IODTNVRAM,e)) {

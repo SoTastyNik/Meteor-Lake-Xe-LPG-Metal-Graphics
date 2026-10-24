@@ -1,6 +1,6 @@
 #include <IOKit/graphics/IODisplay.h>
 #include "latitude_pwm.h"
-// The Dell VBT selects native DDI PWM controller0, minimum15/255. Never change
+// The HUAWEI FLMH-XX VBT (panel_type 2) selects native DDI PWM controller0, 200 Hz, minimum 6/255. Never change
 // enable, pin routing, polarity, period, link training or the active pipe.
 class LatitudeBacklightHandler : public IODisplayParameterHandler {
  OSDeclareDefaultStructors(LatitudeBacklightHandler)

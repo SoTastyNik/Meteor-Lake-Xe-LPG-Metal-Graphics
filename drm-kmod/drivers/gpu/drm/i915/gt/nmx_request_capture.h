@@ -18,7 +18,7 @@ static int nmx_snapshot_request_ring(struct i915_request *rq,
     struct intel_ring *ring;
     u32 i, mask;
     const u32 *words;
-    if (!rq || INTEL_DEVID(rq->i915) != 0x7d45 ||
+    if (!rq || INTEL_DEVID(rq->i915) != 0x7d55 ||
         rq->engine->class != RENDER_CLASS || rq->fence.seqno > 32 ||
         !i915_request_is_active(rq))
         return 0;

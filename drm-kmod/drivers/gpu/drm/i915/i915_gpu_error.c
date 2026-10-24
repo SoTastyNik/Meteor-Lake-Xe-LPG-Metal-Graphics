@@ -1684,7 +1684,7 @@ capture_engine(struct intel_engine_cs *engine,
 #ifdef NMXKPI
     /* rq has a reference from get_hung_entity. Snapshot only existing state:
        no new MMIO, list walks, allocation or wait in the hang path. */
-    if (rq && INTEL_DEVID(engine->i915)==0x7d45) {
+    if (rq && INTEL_DEVID(engine->i915)==0x7d55) {
         nmx_dump_saved_request_ring(rq);
         nmx_log_request_ring(rq, "hang");
         pr_err("NMX-i915-request: engine=%s context=%llu seqno=%llu flags=%lx error=%d ready=%u active=%u started=%u completed=%u submit-pending=%d\n",
@@ -2222,7 +2222,7 @@ static void nmx_i915_first_error_summary(const struct i915_gpu_coredump *error)
 {
     const struct intel_gt_coredump *gt;
     unsigned g = 0;
-    if (INTEL_DEVID(error->i915) != 0x7d45) return;
+    if (INTEL_DEVID(error->i915) != 0x7d55) return;
     pr_err("NMX-i915-first-error: resets=%u suspended=%u iommu=%d\n",
            error->reset_count, error->suspended, error->iommu);
     for (gt = error->gt; gt && g < 4; gt = gt->next, g++) {
