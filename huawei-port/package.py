@@ -67,7 +67,8 @@ def main():
     shutil.copytree(KERNEL / 'NMXGPU.kext', ext / 'NMXGPU.kext')
     for k in ['NMXAccel.kext', 'LatitudeMTLFB.kext']:
         shutil.copytree(DESKTOP / 'Extensions' / k, ext / k)
-    shutil.copytree(DESKTOP / 'EFI-Kexts/LatitudePanelClaim.kext', PKG / 'EFI-Kexts/LatitudePanelClaim.kext')
+    for k in ['LatitudePanelClaim.kext', 'HuaweiI2CMeteorLake.kext']:
+        shutil.copytree(DESKTOP / 'EFI-Kexts' / k, PKG / 'EFI-Kexts' / k)
 
     # Metal plugin bundle
     bundle = lib / 'GPUBundles/NVMTLDriver.bundle'
@@ -135,7 +136,7 @@ def main():
             p.chmod(0o755)
             if '.kext/' not in str(p) and '.bundle/' not in str(p):
                 sign(p)
-    for p in [bundle, *ext.iterdir(), PKG / 'EFI-Kexts/LatitudePanelClaim.kext']:
+    for p in [bundle, *ext.iterdir(), *(PKG / 'EFI-Kexts').iterdir()]:
         sign(p)
     for p in [PKG / 'install.sh', PKG / 'uninstall.sh', PKG / 'collect.sh', nm / 'load-panel-framebuffer.sh']:
         p.chmod(0o755)

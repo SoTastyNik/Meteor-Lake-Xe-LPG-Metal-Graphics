@@ -93,11 +93,14 @@ def main():
 
     # Small hardware tests from the upstream runtime, rebuilt for this machine's identity
     for name, src, extra in [('latitude-vulkan-test', 'latitude-runtime/tools/latitude-vulkan-test.c', ['-I', 'Vulkan-Headers/include']),
-                             ('latitude-metal-test', 'latitude-runtime/tools/latitude-metal-test.m', ['-fobjc-arc', '-framework', 'Foundation', '-framework', 'Metal']),
+                             ('latitude-metal-test', 'latitude-runtime/tools/latitude-metal-test.m', ['-fobjc-arc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOKit']),
                              ('latitude-i915-info', 'latitude-runtime/tools/latitude-i915-info.c', [])]:
         run(name, ['xcrun', 'clang', *X86, '-O2', *extra, src, '-o', str(OUT / 'tools' / name)])
         sign(OUT / 'tools' / name)
     shutil.copy2(R / 'latitude-runtime/tools/check.spv', OUT / 'tools/check.spv')
+
+    # VoodooI2C controller personality for the touchpad/touchscreen controllers (OpenCore-injected)
+    run('i2c', [sys.executable, 'huawei-port/i2c/build_i2c.py', str(OUT / 'EFI-Kexts')])
 
     for kext in ['Extensions/LatitudeMTLFB.kext', 'Extensions/NMXAccel.kext', 'EFI-Kexts/LatitudePanelClaim.kext']:
         name = Path(kext).stem

@@ -9,6 +9,7 @@ Usage (repository root, macOS x86_64 with Xcode):  python3 huawei-port/build_ker
 import concurrent.futures
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +54,26 @@ def repoint_scripts():
         link.symlink_to(target, target_is_directory=True)
 
 
+def restore_kpi_snapshot():
+    """The root freebsd-src/drm-kmod carry later LinuxKPI edits (linux_uuid_t rename with an inline uuid_copy that
+    collides with Kernel.framework's, static lkpi_pci_drivers, ...) that the 1.0.15 overrides predate: the checked-in
+    lkobj/linux_pci.o still references the global pci_drivers. build-inputs/nmxnpu-source/upstream/kpi keeps the
+    matching snapshot of every file the kernel build uses; put back the files that differ."""
+    snap = R / 'build-inputs/nmxnpu-source/upstream/kpi'
+    restored = []
+    for sub in ['freebsd-src', 'drm-kmod']:
+        for src in (snap / sub).rglob('*'):
+            if not src.is_file():
+                continue
+            dst = R / sub / src.relative_to(snap / sub)
+            if not dst.is_file() or dst.read_bytes() != src.read_bytes():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+                restored.append(str(dst.relative_to(R)))
+    (OUT / 'kpi-snapshot-restored.txt').write_text('\n'.join(restored) + '\n')
+    print(f'restored {len(restored)} LinuxKPI/drm-kmod files from the 1.0.15 snapshot')
+
+
 def source_for(group, name):
     ext = '.cpp' if group == 'xnuobj' else '.c'
     for base in SEARCH[group]:
@@ -87,6 +108,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(exist_ok=True)
     repoint_scripts()
+    restore_kpi_snapshot()
     items = manifest()
     (OUT / 'kernel-sources.txt').write_text(''.join(f'{g}/{n}.o <- {s.relative_to(R)}\n' for g, n, s in items))
     for g, n, _ in items:
@@ -99,9 +121,14 @@ def main():
         results = list(pool.map(compile_one, items))
     failed = [f'{g}/{n}' for (g, n, _), ok in results if not ok]
     if failed:
-        for f in failed[:30]:
+        errors = {}
+        for f in failed:
             g, n = f.split('/')
-            print(f'===== {f}\n' + '\n'.join((LOGS / f'{g}--{n}.log').read_text().splitlines()[-25:]))
+            for line in (LOGS / f'{g}--{n}.log').read_text(errors='replace').splitlines():
+                if ': error:' in line:
+                    errors.setdefault(re.sub(r'^.*/([^/]+:\d+):\d+: error: ', r'\1 ', line), []).append(f)
+        for key, files in sorted(errors.items(), key=lambda kv: -len(kv[1]))[:60]:
+            print(f'{len(files):4} {key}   [{files[0]}]')
         raise SystemExit(f'{len(failed)} of {len(items)} kernel objects failed')
     print(f'compiled {len(items)} kernel objects')
 

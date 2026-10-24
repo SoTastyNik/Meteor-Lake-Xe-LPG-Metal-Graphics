@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 huawei-port/apply_identity.py --check
-      - run: brew install meson ninja pkgconf bison flex
+      - run: brew install meson ninja pkgconf bison flex llvm@20
       - run: python3 -m venv .venv && .venv/bin/pip install mako pyyaml packaging
       - run: .venv/bin/python huawei-port/build_mesa.py out/mesa
       - uses: actions/upload-artifact@v4
@@ -58,6 +58,25 @@ jobs:
           path: |
             out/mesa
             !out/mesa/work
+          retention-days: 14
+
+  wifi:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            huawei-port
+            port-artifacts/awdl-radio-0.1.2-20261021/iGPU-Port/Peripherals/Continuity/Candidate-0.1.2/Source
+      - run: python3 huawei-port/wifi/build_wifi.py out/wifi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wifi
+          path: |
+            out/wifi/AirportItlwm.kext
+            out/wifi/xcodebuild.log
           retention-days: 14
 
   package:
