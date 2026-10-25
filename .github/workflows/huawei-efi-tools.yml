@@ -1,0 +1,31 @@
+name: HUAWEI MateBook 14 EFI tools
+on:
+  workflow_dispatch:
+  push:
+    branches: [huawei-matebook14-7d55]
+    paths: ['huawei-port/efi/**', '.github/workflows/huawei-efi-tools.yml']
+permissions:
+  contents: read
+jobs:
+  xapic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: huawei-port/efi
+      - run: sudo apt-get install -y clang lld llvm
+      - name: Build XApicMode.efi (freestanding PE32+ boot-service driver)
+        working-directory: huawei-port/efi
+        run: |
+          set -euo pipefail
+          clang --target=x86_64-unknown-windows -ffreestanding -fshort-wchar -mno-red-zone -fno-stack-protector \
+                -fno-builtin -O2 -Wall -Werror -c XApicMode.c -o XApicMode.o
+          lld-link /dll /subsystem:efi_boot_service_driver /entry:efi_main /nodefaultlib /out:XApicMode.efi XApicMode.o
+          llvm-readobj --file-headers --sections XApicMode.efi | grep -E 'Subsystem|Name: \.|Machine'
+          llvm-objdump -d XApicMode.efi | grep -E 'rdmsr|wrmsr|cpuid' | head
+          sha256sum XApicMode.efi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XApicMode
+          path: huawei-port/efi/XApicMode.efi
+          retention-days: 30
