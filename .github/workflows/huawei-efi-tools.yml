@@ -62,6 +62,8 @@ jobs:
           python3 huawei-port/acpi-tables/run_acpiexec.py acpica-2016/generate/unix/bin/acpiexec out/acpi-2016-native-only.log --no-ours
           if [ -x acpica-new/generate/unix/bin/acpiexec ]; then python3 huawei-port/acpi-tables/run_acpiexec.py acpica-new/generate/unix/bin/acpiexec out/acpi-new.log; fi
           grep -c -i error out/*.log || true
+      - name: Defer forward Scope blocks until every table loads in ACPICA 20160930
+        run: python3 huawei-port/acpi-tables/defer_scopes.py acpica-2016/generate/unix/bin/acpiexec out/defer
       - uses: actions/upload-artifact@v4
         if: always()
         with:
