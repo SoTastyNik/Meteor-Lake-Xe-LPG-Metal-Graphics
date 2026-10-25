@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [huawei-matebook14-7d55]
-    paths: ['huawei-port/efi/**', '.github/workflows/huawei-efi-tools.yml']
+    paths: ['huawei-port/efi/**', 'huawei-port/acpi-tables/**', '.github/workflows/huawei-efi-tools.yml']
 permissions:
   contents: read
 jobs:
@@ -28,4 +28,43 @@ jobs:
         with:
           name: XApicMode
           path: huawei-port/efi/XApicMode.efi
+          retention-days: 30
+
+  acpica2016:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: huawei-port/acpi-tables
+      - uses: actions/checkout@v4
+        with:
+          repository: acpica/acpica
+          ref: R09_30_16
+          path: acpica-2016
+      - uses: actions/checkout@v4
+        with:
+          repository: acpica/acpica
+          ref: master
+          path: acpica-new
+        continue-on-error: true
+      - run: sudo apt-get install -y bison flex
+      - name: Build acpiexec 20160930 (the ACPICA inside macOS AppleACPIPlatform)
+        run: |
+          make -C acpica-2016 acpiexec CC=gcc CWARNINGSFLAGS="-w" OPT_CFLAGS="-O1 -fcommon" -j4 > build-2016.log 2>&1 || { tail -40 build-2016.log; exit 1; }
+          ls acpica-2016/generate/unix/bin
+      - name: Build current acpiexec (reference)
+        continue-on-error: true
+        run: make -C acpica-new acpiexec -j4 > build-new.log 2>&1 || tail -20 build-new.log
+      - name: Load tables
+        run: |
+          mkdir -p out
+          python3 huawei-port/acpi-tables/run_acpiexec.py acpica-2016/generate/unix/bin/acpiexec out/acpi-2016.log
+          python3 huawei-port/acpi-tables/run_acpiexec.py acpica-2016/generate/unix/bin/acpiexec out/acpi-2016-native-only.log --no-ours
+          if [ -x acpica-new/generate/unix/bin/acpiexec ]; then python3 huawei-port/acpi-tables/run_acpiexec.py acpica-new/generate/unix/bin/acpiexec out/acpi-new.log; fi
+          grep -c -i error out/*.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acpica2016
+          path: out
           retention-days: 30

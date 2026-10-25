@@ -8,7 +8,7 @@ on:
         default: ''
   push:
     branches: [huawei-matebook14-7d55]
-    paths-ignore: ['**.md', 'huawei-port/README-RU.txt', 'huawei-port/efi/**', '.github/workflows/huawei-efi-tools.yml']
+    paths-ignore: ['**.md', 'huawei-port/README-RU.txt', 'huawei-port/efi/**', 'huawei-port/acpi-tables/**', '.github/workflows/huawei-efi-tools.yml']
 permissions:
   contents: read
   actions: read
