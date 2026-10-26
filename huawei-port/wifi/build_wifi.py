@@ -80,6 +80,46 @@ def main():
     p.write_text(s)
     assert s.count(HR) == 4 and s.count(f'if (strcmp(sc->sc_fwname, {GF}) == 0)') == 1  # PNVM override stays gf-only
 
+    # WCLDBG: the Sequoia recovery scans but never joins (no node_join_bss, no AUTH); macOS applies a private MAC,
+    # the firmware restarts, and the join is lost somewhere between WCL and net80211. Log each step once per event.
+    p = SRC / 'AirportItlwm/WCL/WCL.cpp'
+    s = p.read_text()
+    s = replace(s, '''    // Applying a private MAC restarts firmware asynchronously.''', '''    IOLog("itlwm: WCLDBG join request auth=%d running=%d joinPending=%d scanPending=%d macReconfig=%d ssidLen=%u upper=0x%x lower=0x%x\\n",
+          int(auth), (ic->ic_if.if_flags & IFF_RUNNING) != 0, joinPending, scanPending, ic->ic_wcl_mac_reconfig,
+          unsigned(join.ssidLength), unsigned(join.upperAuth), unsigned(join.lowerAuth));
+    // Applying a private MAC restarts firmware asynchronously.''', 1)
+    s = replace(s, '''        return !supported ? kIOReturnUnsupported : kIOReturnBusy;''', '''        IOLog("itlwm: WCLDBG join refused: %s\\n", !supported ? "unsupported auth" : "busy/not running");
+        return !supported ? kIOReturnUnsupported : kIOReturnBusy;''', 1)
+    s = replace(s, '''void AirportItlwmSkywalkInterface::resumeWCLJoin()
+{
+''', '''void AirportItlwmSkywalkInterface::resumeWCLJoin()
+{
+    IOLog("itlwm: WCLDBG resume join deferred=%d stopping=%d\\n", joinDeferred, wclStopping);
+''', 1)
+    s = replace(s, '''void AirportItlwmSkywalkInterface::finishWCLJoin(uint16_t status, uint16_t reason, IOReturn driverStatus)
+{
+''', '''void AirportItlwmSkywalkInterface::finishWCLJoin(uint16_t status, uint16_t reason, IOReturn driverStatus)
+{
+    IOLog("itlwm: WCLDBG finish join pending=%d status=%u reason=%u driver=0x%x\\n", joinPending, status, reason, driverStatus);
+''', 1)
+    s = replace(s, '''            bool ready = code == IEEE80211_EVT_DRIVER_READY;
+''', '''            bool ready = code == IEEE80211_EVT_DRIVER_READY;
+            IOLog("itlwm: WCLDBG driver %s macReconfig=%d deferred=%d\\n", ready ? "READY" : "STOPPED",
+                  ic->ic_wcl_mac_reconfig, joinDeferred);
+''', 1)
+    p.write_text(s)
+    p = SRC / 'itl80211/openbsd/net80211/ieee80211_node.c'
+    s = p.read_text()
+    s = replace(s, '''    /* We don't care about unrelated networks during background scans. */''', '''    if (ic->ic_des_esslen != 0 && ni->ni_esslen == ic->ic_des_esslen &&
+        memcmp(ni->ni_essid, ic->ic_des_essid, ic->ic_des_esslen) == 0)
+        XYLog("WCLDBG match fail=0x%x chan=%d protos=0x%x/0x%x akms=0x%x/0x%x ciphers=0x%x/0x%x group=%d mgmt=%d caps=0x%x psk=%d\\n",
+              fail, ieee80211_chan2ieee(ic, ni->ni_chan), ni->ni_rsnprotos, ic->ic_rsnprotos, ni->ni_rsnakms,
+              ic->ic_rsnakms, ni->ni_rsnciphers, ic->ic_rsnciphers, ni->ni_rsngroupcipher, ni->ni_rsngroupmgmtcipher,
+              ni->ni_rsncaps, (ic->ic_flags & IEEE80211_F_PSK) != 0);
+
+    /* We don't care about unrelated networks during background scans. */''', 1)
+    p.write_text(s)
+
     build = OUT / 'build'
     with (OUT / 'xcodebuild.log').open('w') as log:
         r = subprocess.run(['xcodebuild', '-project', 'itlwm.xcodeproj', '-scheme', 'AirportItlwm-Sequoia',

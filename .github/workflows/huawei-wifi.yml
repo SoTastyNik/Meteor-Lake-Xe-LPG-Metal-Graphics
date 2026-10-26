@@ -1,0 +1,27 @@
+name: HUAWEI MateBook 14 Wi-Fi (AirportItlwm)
+on:
+  workflow_dispatch:
+  push:
+    branches: [huawei-matebook14-7d55]
+    paths: ['huawei-port/wifi/**', '.github/workflows/huawei-wifi.yml']
+permissions:
+  contents: read
+jobs:
+  wifi:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            huawei-port
+            port-artifacts/awdl-radio-0.1.2-20261021/iGPU-Port/Peripherals/Continuity/Candidate-0.1.2/Source
+      - run: python3 huawei-port/wifi/build_wifi.py out/wifi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wifi
+          path: |
+            out/wifi/AirportItlwm.kext
+            out/wifi/xcodebuild.log
+          retention-days: 14
