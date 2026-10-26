@@ -18,7 +18,7 @@ jobs:
         working-directory: huawei-port/efi
         run: |
           set -euo pipefail
-          for d in XApicMode VtdOff; do
+          for d in XApicMode VtdOff MtlDiag; do
             clang --target=x86_64-unknown-windows -ffreestanding -fshort-wchar -mno-red-zone -fno-stack-protector \
                   -fno-builtin -O2 -Wall -Werror -c $d.c -o $d.o
             lld-link /dll /subsystem:efi_boot_service_driver /entry:efi_main /nodefaultlib /out:$d.efi $d.o
@@ -35,6 +35,11 @@ jobs:
         with:
           name: VtdOff
           path: huawei-port/efi/VtdOff.efi
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MtlDiag
+          path: huawei-port/efi/MtlDiag.efi
           retention-days: 30
 
   acpica2016:
