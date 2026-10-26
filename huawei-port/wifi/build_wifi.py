@@ -77,6 +77,23 @@ def main():
     # API83 command paths (MLD link, internal AUX, MAC_CONFIG v2) apply to either API83 image
     s = replace(s, f'        strcmp(sc->sc_fwname, {GF}) == 0 &&',
                 f'        (strcmp(sc->sc_fwname, {GF}) == 0 || strcmp(sc->sc_fwname, {HR}) == 0) &&', 3)
+    # The AX201 (hr) joins, reaches RUN and then the API83 firmware asserts (ADVANCED_SYSASSERT 0x3215, last host
+    # command 0x0309 = MAC_CONF LINK_CONFIG) on the post-association link MODIFY. The Dell port only ran it on gf.
+    # Log every LINK_CONFIG and allow the HE (0x60) and beacon-timing (0x10) parts to be left out by boot-arg.
+    s = replace(s, '''            int result=iwx_send_cmd_pdu(sc,iwx_cmd_id(0x09,IWX_MAC_CONF_GROUP,0),0,sizeof(link),&link);
+''', '''            int result=iwx_send_cmd_pdu(sc,iwx_cmd_id(0x09,IWX_MAC_CONF_GROUP,0),0,sizeof(link),&link);
+            XYLog("WCLDBG link stage=%s action=%u mask=0x%x active=%u flags=0x%x/0x%x color=%u result=%d\\n",
+                  link_stage, act, le32toh(link.modify_mask), le32toh(link.active), le32toh(link.flags),
+                  le32toh(link.flags_mask), link.color, result);
+''', 1)
+    s = replace(s, '''        if(timing) modifications|=0x10;
+        if(in->in_ni.ni_flags & IEEE80211_NODE_HE) modifications|=0x60;''', '''        int mld_nohe=0, mld_notiming=0;
+        PE_parse_boot_argn("itlwm_mld_nohe", &mld_nohe, sizeof(mld_nohe));
+        PE_parse_boot_argn("itlwm_mld_notiming", &mld_notiming, sizeof(mld_notiming));
+        if(mld_notiming) timing=false;
+        if(timing) modifications|=0x10;
+        if((in->in_ni.ni_flags & IEEE80211_NODE_HE) && !mld_nohe) modifications|=0x60;
+        else if(mld_nohe) { link.flags=0; link.flags_mask=0; }''', 1)
     p.write_text(s)
     assert s.count(HR) == 4 and s.count(f'if (strcmp(sc->sc_fwname, {GF}) == 0)') == 1  # PNVM override stays gf-only
 
