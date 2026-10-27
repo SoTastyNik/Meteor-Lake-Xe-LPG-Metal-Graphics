@@ -91,13 +91,19 @@ def main():
     for f in ['NullMoth/latitude-desktop-journal', 'NullMoth/latitude-gpu-identity', 'tools/validate-kernel-prelink']:
         sign(OUT / f)
 
-    # Small hardware tests from the upstream runtime, rebuilt for this machine's identity
+    # Small hardware tests from the upstream runtime, rebuilt for this machine's identity, plus the bare i915 probe
+    libdrm = ['-I', 'build-tree/sysroot/include', '-I', 'build-tree/sysroot/include/libdrm', 'build-tree/sysroot/lib/libdrm.2.dylib']
+    drm_tools = ['latitude-i915-info', 'latitude-gpu-probe']
     for name, src, extra in [('latitude-vulkan-test', 'latitude-runtime/tools/latitude-vulkan-test.c', ['-I', 'Vulkan-Headers/include']),
                              ('latitude-metal-test', 'latitude-runtime/tools/latitude-metal-test.m', ['-fobjc-arc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOKit']),
-                             ('latitude-i915-info', 'latitude-runtime/tools/latitude-i915-info.c',
-                              ['-I', 'build-tree/sysroot/include', '-I', 'build-tree/sysroot/include/libdrm',
-                               'build-tree/sysroot/lib/libdrm.2.dylib'])]:
+                             ('latitude-i915-info', 'latitude-runtime/tools/latitude-i915-info.c', libdrm),
+                             ('latitude-gpu-probe', 'huawei-port/tools/latitude-gpu-probe.c', libdrm)]:
         run(name, ['xcrun', 'clang', *X86, '-O2', *extra, src, '-o', str(OUT / 'tools' / name)])
+        if name in drm_tools:
+            # the sysroot's libdrm carries the build machine's install name; the package installs it to GPUBundles/nvmtl
+            old = subprocess.check_output(['otool', '-D', str(R / 'build-tree/sysroot/lib/libdrm.2.dylib')], text=True).split('\n')[1].strip()
+            subprocess.run(['install_name_tool', '-change', old, '/Library/GPUBundles/nvmtl/libdrm.2.dylib',
+                            str(OUT / 'tools' / name)], check=True)
         sign(OUT / 'tools' / name)
     shutil.copy2(R / 'latitude-runtime/tools/check.spv', OUT / 'tools/check.spv')
 

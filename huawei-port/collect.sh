@@ -24,8 +24,12 @@ find /Library/Logs/DiagnosticReports -newer /Library/NullMoth/huawei-last-backup
   -exec cp -p {} "$OUT/" \; 2>/dev/null
 if [ "${1:-}" = --test ]; then
   b 60 "$HERE/tools/latitude-i915-info" > "$OUT/test-i915-info.txt" 2>&1
+  # bare i915 submission (no Mesa), then the driver state dump into the kernel log
+  b 60 "$HERE/tools/latitude-gpu-probe" > "$OUT/test-gpu-probe.txt" 2>&1
   b 120 "$HERE/tools/latitude-vulkan-test" "$HERE/tools/check.spv" > "$OUT/test-vulkan.txt" 2>&1
   b 120 "$HERE/tools/latitude-metal-test" > "$OUT/test-metal.txt" 2>&1
+  sleep 3
+  b 120 log show --last 15m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS "i915 dump" OR eventMessage CONTAINS "state dump" OR eventMessage CONTAINS[c] "i915" OR eventMessage CONTAINS "NMX")' > "$OUT/kernel-after-tests.log" 2>&1
 fi
 grep -hE 'com.nullmoth|AMFIPass|LatitudePanelClaim' "$OUT/loaded-kexts.txt" | awk '{print $6, $7}'
 echo "Report: $OUT"
