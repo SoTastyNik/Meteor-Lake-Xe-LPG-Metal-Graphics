@@ -1,0 +1,45 @@
+name: HUAWEI MateBook 14 Bluetooth (IntelBluetoothFirmware master)
+# The v2.4.0 release (2024-02) predates IntelBTPatcher's Sequoia fix (50e971c5, 2024-06): on Sequoia the HCI
+# descriptor is not prepared, so the release never sees LE Set Scan Parameters, never sends the random address,
+# and the AX201 (8087:0026) rejects the scan with 0x12 -> bluetoothd "Scan stopped improperly with result 718"
+# and restarts every ~10 s.
+on:
+  workflow_dispatch:
+  push:
+    branches: [huawei-matebook14-7d55]
+    paths: ['.github/workflows/huawei-bt.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: OpenIntelWireless/IntelBluetoothFirmware
+          ref: a414375505fa3b014be32f8fca31b5bbfdf9f10f
+      - name: MacKernelSDK and Lilu SDK
+        run: |
+          git clone --depth=1 https://github.com/acidanthera/MacKernelSDK.git
+          git clone --depth=1 https://github.com/acidanthera/Lilu.git
+          cd Lilu
+          ln -s ../MacKernelSDK MacKernelSDK
+          xcodebuild -configuration Debug -arch x86_64 > ../lilu-build.log 2>&1 || { tail -40 ../lilu-build.log; exit 1; }
+          cp -R build/Debug/Lilu.kext ../
+      - name: Build Debug and Release
+        run: |
+          for c in Debug Release; do
+            xcodebuild -alltargets -configuration $c > build-$c.log 2>&1 || { tail -60 build-$c.log; exit 1; }
+          done
+          ls build/*/
+          for k in build/*/IntelBTPatcher.kext build/*/IntelBluetoothFirmware.kext; do
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' $k/Contents/Info.plist
+            shasum -a 256 $k/Contents/MacOS/*
+          done
+          strings build/Release/IntelBTPatcher.kext/Contents/MacOS/IntelBTPatcher | grep -E "Random Address|deviceRequest"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: intel-bt-master
+          path: build/*/*.zip
+          if-no-files-found: error
+          retention-days: 30
