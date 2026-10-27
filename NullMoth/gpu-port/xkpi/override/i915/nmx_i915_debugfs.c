@@ -7,10 +7,12 @@
 #include <drm/drm_print.h>
 
 #include "i915_drv.h"
+#include "i915_request.h"
 #include "gt/intel_engine.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_debugfs.h"
 #include "gt/intel_gt_pm.h"
+#include "gt/intel_timeline.h"
 #include "gt/uc/intel_guc.h"
 #include "gt/uc/intel_guc_ct.h"
 #include "gt/uc/intel_guc_submission.h"
@@ -57,6 +59,8 @@ static void nmx_i915_dump(void)
 		intel_guc_submission_print_info(guc, &p);
 		intel_guc_submission_print_context_info(guc, &p);
 	}
+	/* every active timeline's requests, including ones still waiting on a dependency and not yet sent to the GuC */
+	intel_gt_show_timelines(gt, &p, i915_request_show);
 	for_each_engine(engine, gt, id)
 		intel_engine_dump(engine, &p, "%s\n", engine->name);
 }

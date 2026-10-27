@@ -3,6 +3,7 @@
  * executed on the render and copy engines of the default context and waited on for 5 s each; then the driver state
  * dump (NMX_DRM_IOCTL_DEBUG_DUMP: GT, GuC load/CT/submission state, intel_engine_dump of every engine) is requested,
  * which lands in the kernel log as "i915 dump:" lines. Run as root after the GPU driver has attached.
+ * With --dump it only requests the state dump (collect.sh takes one while the Vulkan test is waiting).
  */
 #include <xf86drm.h>
 #include <i915_drm.h>
@@ -54,13 +55,28 @@ static int submit(int fd, uint32_t handle, uint64_t engine, const char *name)
 	return 0;
 }
 
-int main(void)
+static int dump(int fd)
+{
+	errno = 0;
+	int rc = drmNmxIoctl(fd, NMX_DRM_IOCTL_DEBUG_DUMP, NULL);
+	printf("DEBUG_DUMP rc=%d errno=%d (%s): see the kernel log, lines \"i915 dump:\"\n", rc, rc ? errno : 0,
+	       rc ? strerror(errno) : "ok");
+	return rc;
+}
+
+int main(int argc, char **argv)
 {
 	setbuf(stdout, NULL);
 	int fd = drmNmxOpen("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		printf("DRM open failed: %s\n", strerror(errno));
 		return 1;
+	}
+	/* --dump: only the state dump, taken while another client's submission is stuck */
+	if (argc > 1 && !strcmp(argv[1], "--dump")) {
+		int rc = dump(fd);
+		close(fd);
+		return rc ? 1 : 0;
 	}
 	struct drm_i915_gem_create create = { .size = 4096 };
 	int rc = drmNmxIoctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
@@ -86,10 +102,7 @@ int main(void)
 	submit(fd, create.handle, I915_EXEC_RENDER, "render");
 	submit(fd, create.handle, I915_EXEC_BLT, "copy");
 
-	errno = 0;
-	rc = drmNmxIoctl(fd, NMX_DRM_IOCTL_DEBUG_DUMP, NULL);
-	printf("DEBUG_DUMP rc=%d errno=%d (%s): see the kernel log, lines \"i915 dump:\"\n", rc, rc ? errno : 0,
-	       rc ? strerror(errno) : "ok");
+	dump(fd);
 	struct drm_gem_close close_bo = { .handle = create.handle };
 	drmNmxIoctl(fd, DRM_IOCTL_GEM_CLOSE, &close_bo);
 	close(fd);

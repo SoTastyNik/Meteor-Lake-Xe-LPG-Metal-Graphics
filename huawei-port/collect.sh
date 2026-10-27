@@ -26,7 +26,12 @@ if [ "${1:-}" = --test ]; then
   b 60 "$HERE/tools/latitude-i915-info" > "$OUT/test-i915-info.txt" 2>&1
   # bare i915 submission (no Mesa), then the driver state dump into the kernel log
   b 60 "$HERE/tools/latitude-gpu-probe" > "$OUT/test-gpu-probe.txt" 2>&1
-  b 120 "$HERE/tools/latitude-vulkan-test" "$HERE/tools/check.spv" > "$OUT/test-vulkan.txt" 2>&1
+  # a second dump while the Vulkan test waits on its fence (it gives up after 10 s)
+  b 120 "$HERE/tools/latitude-vulkan-test" "$HERE/tools/check.spv" > "$OUT/test-vulkan.txt" 2>&1 &
+  vk=$!
+  sleep 4
+  b 30 "$HERE/tools/latitude-gpu-probe" --dump > "$OUT/test-gpu-dump-during-vulkan.txt" 2>&1
+  wait "$vk"
   b 120 "$HERE/tools/latitude-metal-test" > "$OUT/test-metal.txt" 2>&1
   sleep 3
   b 120 log show --last 15m --style compact --predicate 'process == "kernel" AND (eventMessage CONTAINS "i915 dump" OR eventMessage CONTAINS "state dump" OR eventMessage CONTAINS[c] "i915" OR eventMessage CONTAINS "NMX")' > "$OUT/kernel-after-tests.log" 2>&1
