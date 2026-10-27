@@ -37,6 +37,26 @@ void microuptime(struct timeval *tv)
     tv->tv_usec = (suseconds_t)((ns % 1000000000ULL) / 1000);
 }
 
+/*
+ * User space's CLOCK_MONOTONIC on macOS is not mach_absolute_time: libc computes it as gettimeofday() minus
+ * kern.boottime (microsecond resolution). On the HUAWEI MateBook it ran about 70 s behind mach_absolute_time, so
+ * absolute deadlines from user space (DRM syncobj waits, Mesa passes now + 10 s) were already in the past for the
+ * kernel and every wait that had to sleep returned ETIME at once. Deadlines from user space are compared with this.
+ */
+int64_t nmx_user_monotonic_ns(void)
+{
+    extern int sysctlbyname(const char *, void *, size_t *, void *, size_t);
+    struct { int64_t tv_sec; int32_t tv_usec; int32_t pad; } boot;   /* user64_timeval, as the kernel's proc sees it */
+    size_t len = sizeof(boot);
+    clock_sec_t s;
+    clock_nsec_t n;
+
+    if (sysctlbyname("kern.boottime", &boot, &len, NULL, 0) != 0 || len < 12)
+        return -1;
+    clock_get_calendar_nanotime(&s, &n);
+    return ((int64_t)s - boot.tv_sec) * 1000000000LL + (int64_t)n - (int64_t)boot.tv_usec * 1000LL;
+}
+
 void nanotime(struct timespec *ts)
 {
     clock_sec_t s;

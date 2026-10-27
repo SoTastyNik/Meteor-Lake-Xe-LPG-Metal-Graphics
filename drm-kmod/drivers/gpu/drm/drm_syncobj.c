@@ -1222,6 +1222,16 @@ signed long drm_timeout_abs_to_jiffies(int64_t timeout_nsec)
 
 	abs_timeout = ns_to_ktime(timeout_nsec);
 	now = ktime_get();
+#ifdef NMXKPI
+	{
+		/* the deadline is on user space's CLOCK_MONOTONIC, which on macOS is not the kernel's uptime clock */
+		extern int64_t nmx_user_monotonic_ns(void);
+		int64_t user_now = nmx_user_monotonic_ns();
+
+		if (user_now >= 0)
+			now = ns_to_ktime(user_now);
+	}
+#endif
 
 	if (!ktime_after(abs_timeout, now))
 		return 0;
