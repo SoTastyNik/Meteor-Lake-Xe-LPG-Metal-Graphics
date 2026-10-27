@@ -11,10 +11,37 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 extern int drmNmxIoctl(int fd, unsigned long request, void *arg);
+
+/*
+ * Race experiments: NMX_TRACE_QUIET=1 logs nothing (interposition only); NMX_TRACE_WAIT_DELAY_US=N sleeps N us before
+ * every syncobj wait, so the GPU can finish and signal before the waiter starts.
+ */
+static int quiet = -1;
+static long wait_delay_us = -1;
+
+static void init_env(void)
+{
+	if (quiet < 0) {
+		const char *q = getenv("NMX_TRACE_QUIET"), *d = getenv("NMX_TRACE_WAIT_DELAY_US");
+		quiet = q && *q && *q != '0';
+		wait_delay_us = d ? strtol(d, NULL, 10) : 0;
+	}
+}
+
+static void before_wait(void)
+{
+	init_env();
+	if (wait_delay_us > 0)
+		usleep((useconds_t)wait_delay_us);
+}
+
+#define fprintf(...) ((void)(init_env(), quiet ? 0 : fprintf(__VA_ARGS__)))
 
 static uint64_t mono_ns(void)
 {
@@ -115,6 +142,8 @@ static void after(unsigned nr, void *arg)
 static int trace_ioctl(int fd, unsigned long request, void *arg)
 {
 	unsigned nr = request & 0xff, type = (request >> 8) & 0xff, size = (request >> 16) & 0x3fff;
+	if (type == 'd' && (nr == 0xC3 || nr == 0xCA))
+		before_wait();
 	uint64_t t0 = mono_ns();
 	fprintf(stderr, "[%.6f] fd=%d ioctl '%c' nr=0x%02x size=%u%s\n", t0 / 1e9, fd, type >= 32 && type < 127 ? type : '?',
 		nr, size, type == 'd' ? "" : " (non-DRM)");
@@ -153,6 +182,7 @@ static int t_create(int fd, uint32_t flags, uint32_t *handle)
 
 static int t_wait(int fd, uint32_t *h, unsigned n, int64_t timeout, unsigned flags, uint32_t *first)
 {
+	before_wait();
 	uint64_t t0 = mono_ns();
 	fprintf(stderr, "[%.6f] drmSyncobjWait n=%u first=%u flags=0x%x timeout_abs=%" PRId64 " (in %.3f s)\n", t0 / 1e9, n,
 		n ? h[0] : 0, flags, timeout, (double)(timeout - (int64_t)t0) / 1e9);
@@ -163,6 +193,7 @@ static int t_wait(int fd, uint32_t *h, unsigned n, int64_t timeout, unsigned fla
 
 static int t_twait(int fd, uint32_t *h, uint64_t *p, unsigned n, int64_t timeout, unsigned flags, uint32_t *first)
 {
+	before_wait();
 	uint64_t t0 = mono_ns();
 	fprintf(stderr, "[%.6f] drmSyncobjTimelineWait n=%u first=%u point=%" PRIu64 " flags=0x%x timeout_abs=%" PRId64
 		" (in %.3f s)\n", t0 / 1e9, n, n ? h[0] : 0, n && p ? p[0] : 0, flags, timeout,
