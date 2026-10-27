@@ -1,0 +1,44 @@
+name: HUAWEI MateBook 14 DRM ioctl tracer
+# nmx-ioctl-trace.dylib for DYLD_INSERT_LIBRARIES: logs the Vulkan test's DRM ioctls and libdrm syncobj calls, to find
+# where a submission whose i915 request completes still leaves vkWaitForFences waiting.
+on:
+  workflow_dispatch:
+  push:
+    branches: [huawei-matebook14-7d55]
+    paths: ['huawei-port/trace/**', '.github/workflows/huawei-trace.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: huawei-port/trace
+      - name: Build against a libdrm stub with the package's install name
+        working-directory: huawei-port/trace
+        run: |
+          set -euo pipefail
+          F="-arch x86_64 -mmacosx-version-min=15.0"
+          cat > stub.c <<'EOF'
+          #include <stdint.h>
+          int drmNmxIoctl(int a, unsigned long b, void *c) { return -1; }
+          int drmSyncobjCreate(int a, uint32_t b, uint32_t *c) { return -1; }
+          int drmSyncobjWait(int a, uint32_t *b, unsigned c, int64_t d, unsigned e, uint32_t *f) { return -1; }
+          int drmSyncobjTimelineWait(int a, uint32_t *b, uint64_t *c, unsigned d, int64_t e, unsigned f, uint32_t *g) { return -1; }
+          int drmSyncobjReset(int a, const uint32_t *b, uint32_t c) { return -1; }
+          int drmSyncobjSignal(int a, const uint32_t *b, uint32_t c) { return -1; }
+          int drmSyncobjTimelineSignal(int a, const uint32_t *b, uint64_t *c, uint32_t d) { return -1; }
+          int drmSyncobjQuery2(int a, uint32_t *b, uint64_t *c, uint32_t d, uint32_t e) { return -1; }
+          EOF
+          clang $F -dynamiclib -o libdrm-stub.dylib stub.c -install_name /Library/GPUBundles/nvmtl/libdrm.2.dylib
+          clang $F -dynamiclib -O2 -Wall -Werror -o nmx-ioctl-trace.dylib nmx-ioctl-trace.c libdrm-stub.dylib
+          codesign --force --sign - --timestamp=none nmx-ioctl-trace.dylib
+          otool -L nmx-ioctl-trace.dylib
+          otool -s __DATA __interpose nmx-ioctl-trace.dylib | head
+          shasum -a 256 nmx-ioctl-trace.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nmx-ioctl-trace
+          path: huawei-port/trace/nmx-ioctl-trace.dylib
+          retention-days: 30
