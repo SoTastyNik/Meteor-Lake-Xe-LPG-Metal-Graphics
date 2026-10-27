@@ -792,6 +792,45 @@ void intel_ggtt_unbind_vma(struct i915_address_space *vm,
  */
 #define GUC_TOP_RESERVE_SIZE (SZ_4G - GUC_GGTT_TOP)
 
+#ifdef NMXKPI
+extern int nmx_xnu_firmware_scanout(u64 *base, u64 *size);
+
+/*
+ * HUAWEI FLMH-XX (7D55): the GOP scans the panel out of GGTT 0xfea00000, which overlaps the GuC top reserve
+ * at GUC_GGTT_TOP (0xfee00000). Render-only mode skips the display code that moves the initial plane to GGTT 0
+ * (intel_plane_initial.c), so binding the GuC image at GUC_GGTT_TOP rewrote the panel's PTEs: a band of
+ * firmware bytes on screen, and LatitudeMTLFB declined the plane (scratch PTEs, LatitudeMapFlags). Keep the
+ * live plane's GGTT range reserved and place the uC image node below it.
+ */
+static struct drm_mm_node latitude_fw_plane;
+
+static int latitude_reserve_fw_plane(struct i915_ggtt *ggtt)
+{
+	struct intel_uncore *uncore = ggtt->vm.gt->uncore;
+	u64 base, size, surf;
+	int ret;
+
+	if (INTEL_DEVID(ggtt->vm.i915) != 0x7d55 || nmx_xnu_firmware_scanout(&base, &size))
+		return 0;
+	if (!(intel_uncore_read(uncore, _MMIO(0x70180)) & BIT(31)))	/* PLANE_CTL_1_A enable */
+		return 0;
+	surf = intel_uncore_read(uncore, _MMIO(0x7019c)) & ~0xfffull;	/* PLANE_SURF_1_A */
+	size = round_up(size, I915_GTT_PAGE_SIZE);
+	if (surf >= ggtt->vm.total || size > ggtt->vm.total - surf)
+		return 0;
+
+	ret = i915_gem_gtt_reserve(&ggtt->vm, NULL, &latitude_fw_plane, size, surf,
+				   I915_COLOR_UNEVICTABLE, PIN_NOEVICT);
+	if (ret)
+		drm_err(&ggtt->vm.i915->drm, "Latitude MTL: cannot reserve firmware plane GGTT [0x%llx, 0x%llx): %d\n",
+			surf, surf + size, ret);
+	else
+		drm_info(&ggtt->vm.i915->drm, "Latitude MTL: firmware plane GGTT [0x%llx, 0x%llx) reserved\n",
+			 surf, surf + size);
+	return ret;
+}
+#endif
+
 static int ggtt_reserve_guc_top(struct i915_ggtt *ggtt)
 {
 	u64 offset;
@@ -802,6 +841,25 @@ static int ggtt_reserve_guc_top(struct i915_ggtt *ggtt)
 
 	GEM_BUG_ON(ggtt->vm.total <= GUC_TOP_RESERVE_SIZE);
 	offset = ggtt->vm.total - GUC_TOP_RESERVE_SIZE;
+
+#ifdef NMXKPI
+	ret = latitude_reserve_fw_plane(ggtt);
+	if (ret)
+		return ret;
+	if (drm_mm_node_allocated(&latitude_fw_plane) &&
+	    latitude_fw_plane.start + latitude_fw_plane.size > offset) {
+		/* GuC, HuC and GSC images take 2M each (uc_fw_ggtt_offset), plus 8M for a media GT */
+		ret = drm_mm_insert_node_in_range(&ggtt->vm.mm, &ggtt->uc_fw, SZ_16M, SZ_2M,
+						  I915_COLOR_UNEVICTABLE, ggtt->pin_bias,
+						  latitude_fw_plane.start, DRM_MM_INSERT_HIGH);
+		if (ret)
+			drm_err(&ggtt->vm.i915->drm, "Latitude MTL: no GGTT below the firmware plane for uC images: %d\n", ret);
+		else
+			drm_info(&ggtt->vm.i915->drm, "Latitude MTL: uC images at GGTT 0x%llx (below the firmware plane)\n",
+				 ggtt->uc_fw.start);
+		return ret;
+	}
+#endif
 
 	ret = i915_gem_gtt_reserve(&ggtt->vm, NULL, &ggtt->uc_fw,
 				   GUC_TOP_RESERVE_SIZE, offset,
@@ -817,6 +875,10 @@ static void ggtt_release_guc_top(struct i915_ggtt *ggtt)
 {
 	if (drm_mm_node_allocated(&ggtt->uc_fw))
 		drm_mm_remove_node(&ggtt->uc_fw);
+#ifdef NMXKPI
+	if (drm_mm_node_allocated(&latitude_fw_plane))
+		drm_mm_remove_node(&latitude_fw_plane);
+#endif
 }
 
 static void cleanup_init_ggtt(struct i915_ggtt *ggtt)
