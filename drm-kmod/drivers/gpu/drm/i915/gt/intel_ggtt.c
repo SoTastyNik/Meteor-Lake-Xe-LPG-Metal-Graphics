@@ -829,6 +829,26 @@ static int latitude_reserve_fw_plane(struct i915_ggtt *ggtt)
 			 surf, surf + size);
 	return ret;
 }
+
+static struct drm_mm_node latitude_guc_top[2];
+
+static int latitude_reserve_guc_gap(struct i915_ggtt *ggtt, struct drm_mm_node *node, u64 start, u64 end)
+{
+	int ret;
+
+	start = max_t(u64, start, ggtt->vm.total - GUC_TOP_RESERVE_SIZE);
+	if (end <= start)
+		return 0;
+	ret = i915_gem_gtt_reserve(&ggtt->vm, NULL, node, end - start, start,
+				   I915_COLOR_UNEVICTABLE, PIN_NOEVICT);
+	if (ret)
+		drm_err(&ggtt->vm.i915->drm, "Latitude MTL: cannot reserve GuC-inaccessible GGTT [0x%llx, 0x%llx): %d\n",
+			start, end, ret);
+	else
+		drm_info(&ggtt->vm.i915->drm, "Latitude MTL: GuC-inaccessible GGTT [0x%llx, 0x%llx) reserved\n",
+			 start, end);
+	return ret;
+}
 #endif
 
 static int ggtt_reserve_guc_top(struct i915_ggtt *ggtt)
@@ -852,11 +872,20 @@ static int ggtt_reserve_guc_top(struct i915_ggtt *ggtt)
 		ret = drm_mm_insert_node_in_range(&ggtt->vm.mm, &ggtt->uc_fw, SZ_16M, SZ_2M,
 						  I915_COLOR_UNEVICTABLE, ggtt->pin_bias,
 						  latitude_fw_plane.start, DRM_MM_INSERT_HIGH);
-		if (ret)
+		if (ret) {
 			drm_err(&ggtt->vm.i915->drm, "Latitude MTL: no GGTT below the firmware plane for uC images: %d\n", ret);
-		else
-			drm_info(&ggtt->vm.i915->drm, "Latitude MTL: uC images at GGTT 0x%llx (below the firmware plane)\n",
-				 ggtt->uc_fw.start);
+			return ret;
+		}
+		drm_info(&ggtt->vm.i915->drm, "Latitude MTL: uC images at GGTT 0x%llx (below the firmware plane)\n",
+			 ggtt->uc_fw.start);
+		/*
+		 * The rest of [GUC_GGTT_TOP, 4G) must stay unusable, or best-fit puts GuC objects there (RSA, ADS,
+		 * CT buffers) and the GuC cannot reach them: load failed, Auth = 0x01, GPU wedged on init.
+		 */
+		ret = latitude_reserve_guc_gap(ggtt, &latitude_guc_top[0], offset, latitude_fw_plane.start);
+		if (!ret)
+			ret = latitude_reserve_guc_gap(ggtt, &latitude_guc_top[1],
+						       latitude_fw_plane.start + latitude_fw_plane.size, ggtt->vm.total);
 		return ret;
 	}
 #endif
@@ -878,6 +907,9 @@ static void ggtt_release_guc_top(struct i915_ggtt *ggtt)
 #ifdef NMXKPI
 	if (drm_mm_node_allocated(&latitude_fw_plane))
 		drm_mm_remove_node(&latitude_fw_plane);
+	for (int i = 0; i < ARRAY_SIZE(latitude_guc_top); i++)
+		if (drm_mm_node_allocated(&latitude_guc_top[i]))
+			drm_mm_remove_node(&latitude_guc_top[i]);
 #endif
 }
 
