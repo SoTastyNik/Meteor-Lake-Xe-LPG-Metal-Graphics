@@ -74,6 +74,11 @@ jobs:
           python3 huawei-port/acpi-tables/run_acpiexec.py acpica-2016/generate/unix/bin/acpiexec out/acpi-2016-native-only.log --no-ours
           if [ -x acpica-new/generate/unix/bin/acpiexec ]; then python3 huawei-port/acpi-tables/run_acpiexec.py acpica-new/generate/unix/bin/acpiexec out/acpi-new.log; fi
           grep -c -i error out/*.log || true
+      - name: Evaluate battery, lid and touchpad methods as macOS sees them
+        run: |
+          python3 huawei-port/acpi-tables/eval_macos.py acpica-2016/generate/unix/bin/acpiexec out/eval-macos-2016.log
+          if [ -x acpica-new/generate/unix/bin/acpiexec ]; then python3 huawei-port/acpi-tables/eval_macos.py acpica-new/generate/unix/bin/acpiexec out/eval-macos-new.log; fi
+          grep -nE "Evaluating|Evaluation of|AE_|Error|TPDX|TPLX|\\[Integer\\]|\\[Package\\]|\\[Buffer\\]" out/eval-macos-2016.log | head -120
       - name: Defer forward Scope blocks until every table loads in ACPICA 20160930
         run: python3 huawei-port/acpi-tables/defer_scopes.py acpica-2016/generate/unix/bin/acpiexec out/defer
       - uses: actions/upload-artifact@v4
