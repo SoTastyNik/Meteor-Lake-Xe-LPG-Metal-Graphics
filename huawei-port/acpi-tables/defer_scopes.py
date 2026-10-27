@@ -7,6 +7,12 @@ its GNVS fields (STAS, OSYS, ...). This loop loads the tables in acpiexec 201609
 bytes of the same length, and re-emits the identical block in SSDT-LATE-SCOPES, which OpenCore adds after
 every firmware table. It repeats until every table loads.
 
+The targets (UA00, HDAS, I2C1, SPI0, ...) are created by the DSDT itself inside module-level If blocks such as
+If (PCHS != 0x04) { Scope (_SB.PC00) { Device (I2C0) ... } }. macOS's ACPICA groups all module-level code and
+runs it only after every table has loaded (AcpiGbl_GroupModuleLevelCode), so a top-level Scope in a late SSDT
+fails as well ("AE_NOT_FOUND (SSDT:LATESCP ) while loading table" in the macOS log). Each re-emitted block is
+therefore wrapped in If (CondRefOf (<absolute target>)), which ACPICA defers the same way and runs after the DSDT's.
+
 Outputs in <out>: SSDT-LATE-SCOPES.aml, defer-patches.json (OpenCore ACPI patches: original block ->
 NoOps, pinned by table signature/OEM table id/length), final-load.log.
 Usage: python3 defer_scopes.py <acpiexec 20160930> <out dir>
@@ -99,8 +105,28 @@ def ident(t):
     return bytes(t[0:4]).decode(), bytes(t[16:24]).decode('latin1').rstrip('\x00 ')
 
 
+def encode_pkglen(n):
+    """PkgLength for n bytes of content (the encoding's own bytes count towards the length)."""
+    if n + 1 <= 0x3f:
+        return bytes([n + 1])
+    for extra in (1, 2, 3):
+        total = n + 1 + extra
+        if total < 1 << (4 + 8 * extra):
+            return bytes([(extra << 6) | (total & 0x0f)]) + (total >> 4).to_bytes(extra, 'little')
+    raise ValueError(n)
+
+
+def deferred(block):
+    """If (CondRefOf (<absolute scope target>)) { block }: module-level code, run after the DSDT's own If blocks."""
+    segs, _, _ = namepath(block, 1 + pkglen(block, 1)[1])
+    name = b''.join(x.encode() for x in segs)
+    prefix = b'' if len(segs) == 1 else bytes.fromhex('2e') if len(segs) == 2 else bytes([0x2f, len(segs)])
+    content = bytes.fromhex('5b12') + b'\\' + prefix + name + bytes(1) + block   # CondRefOf (\path, NullName)
+    return bytes.fromhex('a0') + encode_pkglen(len(content)) + content          # IfOp
+
+
 def late_table():
-    body = b''.join(late_blocks).replace(b'_OSI', b'XOSI')   # OpenCore's _OSI->XOSI patch targets the DSDT only
+    body = b''.join(deferred(b) for b in late_blocks).replace(b'_OSI', b'XOSI')   # OpenCore's _OSI->XOSI patch targets the DSDT only
     t = bytearray(b'SSDT' + struct.pack('<I', 36 + len(body)) + bytes([2, 0]) + b'HUAWEI' + b'LATESCP ' +
                   struct.pack('<I', 1) + b'INTL' + struct.pack('<I', 0x20160930)) + body
     checksum(t)

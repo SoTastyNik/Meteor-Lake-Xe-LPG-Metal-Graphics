@@ -4,6 +4,8 @@ macos-view/ holds the tables in macOS load order: the firmware DSDT and SSDTs wi
 already applied (scope deferral, _OSI -> XOSI), then our SSDTs in ACPI > Add order (see ORDER.txt). Under macOS the
 battery reads zeros (BAT0._STA lacks the present bit), the lid fails in HWEC.ECRD with AE_AML_OPERAND_TYPE
 ("found [Mutex]"), and the touchpad device TPDX that SSDT-TPAD-TSCR adds under I2C0 never appears.
+macOS's ACPICA groups module-level code (runs every top-level If after all tables have loaded); only an acpiexec
+built with AcpiGbl_GroupModuleLevelCode = TRUE reproduces its table-load failures.
 Usage: python3 eval_macos.py <acpiexec 20160930> <log>
 """
 import subprocess
@@ -15,7 +17,7 @@ acpiexec, log = sys.argv[1], Path(sys.argv[2])
 tables = [str(here / name) for name in (here / 'ORDER.txt').read_text().split()]
 EC = '\\_SB.PC00.LPCB.HWEC'
 cmds = [
-    'namespace \\_SB.PC00.I2C0', 'namespace \\_SB.PC00.I2C1',
+    'namespace \\_SB.PC00.I2C0', 'namespace \\_SB.PC00.I2C1', 'namespace \\_SB.PC00.UA00',
     'evaluate \\_SB.PC00.I2C0.TPDX._STA', 'evaluate \\_SB.PC00.I2C0.TPDX._CRS',
     'evaluate \\_SB.PC00.I2C1.TPLX._STA', 'evaluate \\_SB.PC00.I2C1.TPLX._CRS',
     f'evaluate {EC}._REG 3 1',

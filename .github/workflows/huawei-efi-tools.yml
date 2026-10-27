@@ -56,6 +56,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: acpica/acpica
+          ref: R09_30_16
+          path: acpica-2016g
+      - uses: actions/checkout@v4
+        with:
+          repository: acpica/acpica
           ref: master
           path: acpica-new
         continue-on-error: true
@@ -64,6 +69,12 @@ jobs:
         run: |
           make -C acpica-2016 acpiexec CC=gcc CWARNINGSFLAGS="-w" OPT_CFLAGS="-O1 -fcommon" -j4 > build-2016.log 2>&1 || { tail -40 build-2016.log; exit 1; }
           ls acpica-2016/generate/unix/bin
+      - name: Build acpiexec 20160930 with grouped module-level code (macOS runs every module-level If after all tables load)
+        run: |
+          grep -rn "GroupModuleLevelCode" acpica-2016g/source/include acpica-2016g/source/tools/acpiexec | head
+          sed -i 's/\(AcpiGbl_GroupModuleLevelCode, *\)FALSE/\1TRUE/' acpica-2016g/source/include/acpixf.h
+          grep -n "AcpiGbl_GroupModuleLevelCode, *TRUE" acpica-2016g/source/include/acpixf.h
+          make -C acpica-2016g acpiexec CC=gcc CWARNINGSFLAGS="-w" OPT_CFLAGS="-O1 -fcommon" -j4 > build-2016g.log 2>&1 || { tail -40 build-2016g.log; exit 1; }
       - name: Build current acpiexec (reference)
         continue-on-error: true
         run: make -C acpica-new acpiexec -j4 > build-new.log 2>&1 || tail -20 build-new.log
@@ -77,6 +88,10 @@ jobs:
       - name: Evaluate battery, lid and touchpad methods as macOS sees them
         run: |
           python3 huawei-port/acpi-tables/eval_macos.py acpica-2016/generate/unix/bin/acpiexec out/eval-macos-2016.log
+          python3 huawei-port/acpi-tables/eval_macos.py acpica-2016g/generate/unix/bin/acpiexec out/eval-macos-2016-grouped.log
+          echo "=== grouped (as macOS) ==="
+          grep -nE "Evaluating|Evaluation of|AE_|Error|TPDX|TPLX|BTH0|TCON|while loading|table load" out/eval-macos-2016-grouped.log | head -120
+          echo "=== ungrouped ==="
           if [ -x acpica-new/generate/unix/bin/acpiexec ]; then python3 huawei-port/acpi-tables/eval_macos.py acpica-new/generate/unix/bin/acpiexec out/eval-macos-new.log; fi
           grep -nE "Evaluating|Evaluation of|AE_|Error|TPDX|TPLX|\\[Integer\\]|\\[Package\\]|\\[Buffer\\]" out/eval-macos-2016.log | head -120
       - name: Defer forward Scope blocks until every table loads in ACPICA 20160930
