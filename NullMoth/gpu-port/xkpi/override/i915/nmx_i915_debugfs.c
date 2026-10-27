@@ -50,6 +50,12 @@ static void nmx_i915_dump(void)
 		return;
 	guc = gt_to_guc(gt);
 	p = (struct drm_printer){ .printfn = dump_printfn, .puts = dump_puts };
+	{
+		/* user deadlines (syncobj waits) are on user space's CLOCK_MONOTONIC: show both kernel clocks */
+		extern int64_t nmx_user_monotonic_ns(void);
+		drm_printf(&p, "clocks: ktime %lld ns, user CLOCK_MONOTONIC as computed by the kernel %lld ns\n",
+			   (long long)ktime_get_ns(), (long long)nmx_user_monotonic_ns());
+	}
 	drm_printf(&p, "GT%u: awake %d wedged %d, guc submission %d\n", gt->info.id,
 		   intel_gt_pm_is_awake(gt), intel_gt_is_wedged(gt), intel_uc_uses_guc_submission(&gt->uc));
 	intel_uc_fw_dump(&guc->fw, &p);
