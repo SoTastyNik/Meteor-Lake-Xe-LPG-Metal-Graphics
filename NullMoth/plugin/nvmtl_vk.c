@@ -1339,9 +1339,9 @@ static int nvmtl_vk_buffer_create_body(size_t size, int host_visible, nvk_buffer
     memset(out, 0, sizeof *out); out->size = size;
     if (host_visible == 2 && size <= NVMTL_POOL_MAX && vpool_on() && pool_buffer_create_in(1, size, out) == 0) return 0;
     memset(out, 0, sizeof *out); out->size = size;
-    if (host_visible && host_visible != 3 && size <= NVMTL_POOL_MAX && pool_buffer_create(size, out) == 0) return 0;
+    if (host_visible && host_visible != 3 && host_visible != 4 && size <= NVMTL_POOL_MAX && pool_buffer_create(size, out) == 0) return 0;
     memset(out, 0, sizeof *out); out->size = size;
-    if (host_visible != 3 && bpark_take(size, host_visible, out) == 0) return 0;
+    if (host_visible != 3 && host_visible != 4 && bpark_take(size, host_visible, out) == 0) return 0;
     memset(out, 0, sizeof *out); out->size = size;
     if (!host_visible && size >= (1u << 20) && nvmtl_vk_sparse_on() && nvmtl_vk_buffer_create_sparse(size, out) == 0) return 0;
     memset(out, 0, sizeof *out); out->size = size;
@@ -1352,8 +1352,12 @@ static int nvmtl_vk_buffer_create_body(size_t size, int host_visible, nvk_buffer
         VK_SHARING_MODE_EXCLUSIVE, 0, NULL };
     VKCK(nvmtl_opaque_CreateBuffer(g_dev, &bci, NULL, &out->buf), "vkCreateBuffer");
     VkMemoryRequirements mr; pvkGetBufferMemoryRequirements(g_dev, out->buf, &mr);
-    int mt = memtype(mr.memoryTypeBits, host_visible
-        ? (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    /* 4: a readback buffer whose user maintains the CPU cache itself; Meteor Lake's coherent type is write-combined */
+    int mt = host_visible == 4
+        ? memtype(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT) : -1;
+    if (mt < 0)
+        mt = memtype(mr.memoryTypeBits, host_visible
+            ? (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (mt < 0) { nvlog("vk: no memory type for buffer (host_visible=%d)", host_visible); return -1; }
     if (host_visible == 2 && size > NVMTL_POOL_MAX) { int bt = bar1_memtype(mr.memoryTypeBits, mr.size); if (bt >= 0) {
         VkMemoryAllocateFlagsInfo bf = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, NULL, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, 0 };
@@ -5984,12 +5988,15 @@ static int nvmtl_vk_readback(nvk_queue *q, nvk_image *img, void *dst, size_t row
     if (owned ? nvmtl_readback_stage_acquire(plan.bytes,retain,&stage,&stage_lease) : nvmtl_vk_stage(q, plan.bytes, &stage)) {
         nvlog("readback FAILED phase=staging-allocation image=%p bytes=%zu owned=%d",img->img,plan.bytes,owned); return -1;
     }
-    /* All staging allocation paths require HOST_VISIBLE|HOST_COHERENT. Refuse
-       an unknown or incompatible memory type rather than reading stale bytes. */
+    /* Staging must be HOST_VISIBLE|HOST_COHERENT, or HOST_CACHED in a leased slot whose cache lines are flushed.
+       Refuse an unknown or incompatible memory type rather than reading stale bytes. */
     const uint32_t mt = stage.memtype1 ? stage.memtype1-1 : UINT32_MAX;
+    /* a leased slot may be HOST_CACHED: nvmtl_cpu_cache_sync below flushes it before submission and after the fence */
+    const VkMemoryPropertyFlags stage_flags = mt < g_memp.memoryTypeCount ? g_memp.memoryTypes[mt].propertyFlags : 0;
+    const VkMemoryPropertyFlags coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    const VkMemoryPropertyFlags cached = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     if (!stage.map || mt >= g_memp.memoryTypeCount ||
-        (g_memp.memoryTypes[mt].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) !=
-        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        ((stage_flags & coherent) != coherent && !(stage_lease >= 0 && (stage_flags & cached) == cached))) {
         nvlog("readback REFUSED noncoherent or unknown staging memory type %u", mt);
         if (owned) nvmtl_readback_stage_release(&stage,stage_lease,2); return -1;
     }

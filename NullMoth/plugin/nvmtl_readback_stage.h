@@ -1,6 +1,7 @@
 #pragma once
 #include <pthread.h>
 #include <string.h>
+#include "nvmtl_ws_tuning.h"
 
 #define NVMTL_READBACK_SLOTS 4
 /* 40 MB, as NVMTL_PUBLICATION_MAX: a 2880x1920 frame did not fit the retained slots and got a fresh 22 MB
@@ -29,7 +30,8 @@ static int nvmtl_readback_stage_acquire(size_t bytes,int retain,nvk_buffer *out,
             if(slot->buffer.buf && slot->buffer.size<bytes)
                 nvmtl_vk_buffer_destroy(&slot->buffer);
             if(slot->buffer.buf && slot->buffer.size<bytes){pthread_mutex_unlock(&slot->mutex);return -1;}
-            if(!slot->buffer.buf && nvmtl_vk_buffer_create(bytes,3,&slot->buffer)){
+            /* leased slots get their cache lines flushed around every use, so they may live in cached memory */
+            if(!slot->buffer.buf && nvmtl_vk_buffer_create(bytes,nvmtl_ws_cached_readback()?NVMTL_HOST_CACHED_READBACK:3,&slot->buffer)){
                 pthread_mutex_unlock(&slot->mutex);return -1;
             }
             *out=slot->buffer;*lease=(int)i;return 0;
