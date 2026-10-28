@@ -266,9 +266,23 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 
 	pinned = 0;
 	while (pinned < num_pages) {
+#ifdef NMXKPI
+		/*
+		 * macOS port: the fast path pins nothing (__get_user_pages_fast returns 0, which would spin this loop
+		 * forever); pin_user_pages wires the range through an IOMemoryDescriptor on the task (nmx_user_pages_pin).
+		 * Lets Mesa import host memory (VK_EXT_external_memory_host), so the Metal plugin can render WindowServer's
+		 * IOSurfaces in place instead of copying every 2880x1920 frame out of a private image.
+		 */
+		ret = pin_user_pages(obj->userptr.ptr + pinned * PAGE_SIZE,
+				     num_pages - pinned, gup_flags,
+				     &pvec[pinned]);
+		if (ret == 0)
+			ret = -EFAULT;
+#else
 		ret = pin_user_pages_fast(obj->userptr.ptr + pinned * PAGE_SIZE,
 					  num_pages - pinned, gup_flags,
 					  &pvec[pinned]);
+#endif
 		if (ret < 0)
 			goto out;
 

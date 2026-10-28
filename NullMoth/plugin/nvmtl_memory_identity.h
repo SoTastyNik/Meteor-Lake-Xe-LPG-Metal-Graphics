@@ -18,9 +18,13 @@ static int nvmtl_mtl_unified_identity(uint32_t vendor, uint32_t device,
            type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
 }
 
+/* The port's i915 builds userptr since the HUAWEI v13 kernel (CONFIG_MMU_NOTIFIER, pin_user_pages through the
+   port's IOMemoryDescriptor wiring). Host imports, and with them IOSurface textures rendered in place, are opted into
+   with /Library/GPUBundles/nvmtl-host-import until they are proven on the MateBook. */
+#include <unistd.h>
 static int nvmtl_mtl_userptr_unavailable(uint32_t vendor, uint32_t device)
 {
-    return vendor == 0x8086 && device == 0x7d55;
+    return vendor == 0x8086 && device == 0x7d55 && access("/Library/GPUBundles/nvmtl-host-import", F_OK) != 0;
 }
 
 /* A queried budget is a limit, not dedicated VRAM or a physical reservation. */

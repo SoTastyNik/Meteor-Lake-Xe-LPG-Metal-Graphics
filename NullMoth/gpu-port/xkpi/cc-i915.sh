@@ -12,7 +12,7 @@ src=$1; shift
 exec xcrun clang -arch x86_64 -mmacosx-version-min=15.0 -ffile-prefix-map=/Users/ved/igpu-build=/src -mkernel -fapple-kext -nostdinc -std=gnu11 \
   -fno-builtin -fno-common -fno-strict-aliasing -fms-extensions -O2 -g0 \
   -Wno-pointer-sign -Wno-unused-parameter -Wno-microsoft-anon-tag -ferror-limit=80 \
-  -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 \
+  -D_KERNEL -DKERNEL -DKERNEL_PRIVATE -DLINUXKPI_VERSION=61400 -DNMXKPI=1 -DCONFIG_MMU_NOTIFIER=1 \
   -include $X/bsdcompat/include/nmxkpi_prelude.h \
   -include $L/common/include/linux/compiler_types.h -include $L/common/include/linux/kconfig.h -include $X/bsdcompat/include/nmxkpi_post.h \
   -I$X/override/include -I$X/bsdcompat/include -I$D/linuxkpi/bsd/include -I$L/common/include -I$L/dummy/include -I$X/fbroot \
