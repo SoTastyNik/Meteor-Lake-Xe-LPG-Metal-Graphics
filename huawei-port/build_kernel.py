@@ -153,6 +153,9 @@ def main():
     (OUT / 'NMXGPU-imports.txt').write_text('\n'.join(undefined) + '\n')
     reference = R / 'latitude-desktop/WindowServerKernel/NMXGPU.kext/Contents/MacOS/NMXGPU'
     upstream = set(subprocess.check_output(['xcrun', 'nm', '-uj', str(reference)], text=True).split())
+    # HUAWEI additions, all com.apple.kpi.iokit: the idle-sleep assertion NMXGPU holds while it drives the GPU
+    upstream |= {'__ZN9IOService15getPMRootDomainEv', '__ZN14IOPMrootDomain17createPMAssertionEyjP9IOServicePKc',
+                 '__ZN14IOPMrootDomain18releasePMAssertionEy'}
     extra = sorted(set(undefined) - upstream)
     assert not extra, f'imports the upstream 1.0.15 kernel does not have: {extra}'
     subprocess.run(['codesign', '--force', '--sign', '-', str(OUT / 'NMXGPU.kext')], check=True)
