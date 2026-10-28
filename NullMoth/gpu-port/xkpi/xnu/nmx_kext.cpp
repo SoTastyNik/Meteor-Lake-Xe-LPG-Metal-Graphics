@@ -16,6 +16,7 @@
 #include <IOKit/IOLocks.h>
 #include <IOKit/IONVRAM.h>
 #include <IOKit/pci/IOPCIDevice.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSData.h>
 #include <mach/kmod.h>
@@ -44,6 +45,7 @@ class NMXGPU : public IOService {
     volatile int attach_;   /* 0 = attach pending on its thread, 1 = attached, -1 = not attached */
     bool pm_;
     bool suspended_;        /* the driver was told to suspend; only then does a power-on mean resume */
+    IOPMDriverAssertionID noIdleSleep_;
     static void attachThread(void *arg, wait_result_t);
     void attachNow();
 public:
@@ -268,6 +270,12 @@ void NMXGPU::attachNow()
     nmx_marker_write(false);
     IOLog("NullMoth GPU: driving %04x:%04x (build %s)\n", pci_->configRead16(kIOPCIConfigVendorID),
           pci_->configRead16(kIOPCIConfigDeviceID), NMX_BUILD_STAMP);
+    /* Suspend and resume of the Latitude MTL takeover are unproven: idle sleep hung in the GT suspend wait and
+       macOS panicked after 180 s ("Sleep transition timed out", NMXGPU). Keep the Mac out of idle sleep while this
+       driver runs; display sleep and an explicit sleep are unaffected. */
+    if (IOPMrootDomain *root = getPMRootDomain())
+        noIdleSleep_ = root->createPMAssertion(kIOPMDriverAssertionPreventSystemIdleSleepBit,
+                                               kIOPMDriverAssertionLevelOn, this, "NMXGPU: GPU sleep unsupported");
     OSSynchronizeIO();
     attach_ = 1;
 }
@@ -282,6 +290,9 @@ void NMXGPU::stop(IOService *provider)
     if (fb_ != nullptr)
         nmx_fb_unpublish(fb_, this, dev_);
     fb_ = nullptr;
+    if (noIdleSleep_ != 0 && getPMRootDomain() != nullptr)
+        getPMRootDomain()->releasePMAssertion(noIdleSleep_);
+    noIdleSleep_ = 0;
     if (pm_)
         PMstop();
     pm_ = false;

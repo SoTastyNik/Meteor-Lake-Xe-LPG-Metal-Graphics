@@ -322,10 +322,43 @@ err_wedged:
 	goto out_fw;
 }
 
-static void wait_for_suspend(struct intel_gt *gt)
+#ifdef NMXKPI
+/*
+ * macOS calls the suspend path from NMXGPU::setPowerState on its power-management thread and panics the Mac when
+ * that call has not returned after 180 s. The HUAWEI MateBook's idle sleep hung here with the GT wakeref still held
+ * (intel_wakeref_wait_for_idle never woke). Wait at most 5 s, running a pending deferred put ourselves, then log what
+ * still holds the GT and let the caller skip the uC suspend instead of hanging the Mac.
+ */
+static bool nmx_gt_pm_wait_for_idle(struct intel_gt *gt)
+{
+	struct intel_wakeref *wf = &gt->wakeref;
+	struct intel_engine_cs *engine;
+	enum intel_engine_id id;
+	int i;
+
+	for (i = 0; i < 50 && intel_wakeref_is_active(wf); i++) {
+		if (delayed_work_pending(&wf->work))
+			flush_delayed_work(&wf->work);
+		if (intel_wakeref_is_active(wf))
+			msleep(100);
+	}
+	if (!intel_wakeref_is_active(wf)) {
+		intel_wakeref_unlock_wait(wf);
+		return true;
+	}
+	gt_err(gt, "Latitude MTL: GT still awake 5 s into suspend (count %d, put pending %d); skipping uC suspend\n",
+	       atomic_read(&wf->count), delayed_work_pending(&wf->work) ? 1 : 0);
+	for_each_engine(engine, gt, id)
+		gt_err(gt, "Latitude MTL:   %s wakeref count %d\n", engine->name,
+		       atomic_read(&engine->wakeref.count));
+	return false;
+}
+#endif
+
+static bool wait_for_suspend(struct intel_gt *gt)
 {
 	if (!intel_gt_pm_is_awake(gt))
-		return;
+		return true;
 
 	if (intel_gt_wait_for_idle(gt, I915_GT_SUSPEND_IDLE_TIMEOUT) == -ETIME) {
 		/*
@@ -336,7 +369,12 @@ static void wait_for_suspend(struct intel_gt *gt)
 		intel_gt_retire_requests(gt);
 	}
 
+#ifdef NMXKPI
+	return nmx_gt_pm_wait_for_idle(gt);
+#else
 	intel_gt_pm_wait_for_idle(gt);
+	return true;
+#endif
 }
 
 void intel_gt_suspend_prepare(struct intel_gt *gt)
@@ -362,7 +400,8 @@ void intel_gt_suspend_late(struct intel_gt *gt)
 	intel_wakeref_t wakeref;
 
 	/* We expect to be idle already; but also want to be independent */
-	wait_for_suspend(gt);
+	if (!wait_for_suspend(gt))
+		return;
 
 	if (is_mock_gt(gt))
 		return;
