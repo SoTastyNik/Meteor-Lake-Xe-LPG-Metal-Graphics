@@ -3,7 +3,9 @@
 #include <string.h>
 
 #define NVMTL_READBACK_SLOTS 4
-#define NVMTL_READBACK_KEEP_MAX (16u << 20)
+/* 40 MB, as NVMTL_PUBLICATION_MAX: a 2880x1920 frame did not fit the retained slots and got a fresh 22 MB
+   staging buffer every frame */
+#define NVMTL_READBACK_KEEP_MAX (40u << 20)
 typedef struct {
     pthread_mutex_t mutex;
     nvk_buffer buffer;

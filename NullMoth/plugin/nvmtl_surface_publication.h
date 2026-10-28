@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #define NVMTL_PUBLICATION_SLOTS 3
-#define NVMTL_PUBLICATION_MAX (16u<<20)
+/* 40 MB: the HUAWEI MateBook panel is 2880x1920x4 = 22.1 MB (a 4K monitor 33.2 MB); at 16 MB (sized for the
+   Dell's 9.2 MB frame) every frame took the unstaged path and publication cost 85-107 ms */
+#define NVMTL_PUBLICATION_MAX (40u<<20)
 typedef struct {pthread_mutex_t lock;void *bytes;size_t capacity;} nvmtl_publication_slot;
 static nvmtl_publication_slot nvmtl_publication_slots[3]={
  {PTHREAD_MUTEX_INITIALIZER,NULL,0},{PTHREAD_MUTEX_INITIALIZER,NULL,0},{PTHREAD_MUTEX_INITIALIZER,NULL,0}};
