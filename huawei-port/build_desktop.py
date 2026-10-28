@@ -16,7 +16,8 @@ from pathlib import Path
 R = Path(__file__).resolve().parent.parent
 OUT = Path(sys.argv[1]).resolve()
 LOGS = OUT / 'logs'
-VERSIONS = {'LatitudeMTLFB': '0.2.12', 'LatitudePanelClaim': '0.2.3', 'NMXAccel': '0.2.9', 'NVMTLDriver': '0.3.19'}
+VERSIONS = {'LatitudeMTLFB': '0.2.12', 'LatitudePanelClaim': '0.2.3', 'NMXAccel': '0.2.9', 'NMXAGDC': '0.1',
+            'NVMTLDriver': '0.3.19'}
 X86 = ['-arch', 'x86_64', '-mmacosx-version-min=15.0']
 
 
@@ -70,6 +71,14 @@ def main():
     set_version(OUT / 'Extensions/NMXAccel.kext', VERSIONS['NMXAccel'])
     sign(OUT / 'Extensions/NMXAccel.kext')
 
+    # AGDC for the panel (in the Dell's working AuxKC next to NMXAccel): IOPresentment asks it for the display pipes.
+    # Without it NMXAccel's phase 1 reports AGDC 0xe00002f0, IOPresentment fails ("Unable to get AGDC information"),
+    # WindowServer falls back to the legacy swap path and the panel stops updating a few seconds into the desktop.
+    run('nmxagdc', ['bash', 'NullMoth/kexts/NMXAGDC/build.sh', str(OUT / 'agdc-build')])
+    shutil.copytree(OUT / 'agdc-build/NMXAGDC.kext', OUT / 'Extensions/NMXAGDC.kext', dirs_exist_ok=True)
+    set_version(OUT / 'Extensions/NMXAGDC.kext', VERSIONS['NMXAGDC'])
+    sign(OUT / 'Extensions/NMXAGDC.kext')
+
     # Metal plugin (only the shipping x86_64 variant is packaged)
     run('plugin-0.3.19', [sys.executable, 'desktop-sources/build-windowserver-0.3.19.py'])
     shutil.copy2(R / 'desktop-build/NVMTLDriver-0.3.19', OUT / 'GPUBundles/NVMTLDriver')
@@ -110,7 +119,8 @@ def main():
     # VoodooI2C controller personality for the touchpad/touchscreen controllers (OpenCore-injected)
     run('i2c', [sys.executable, 'huawei-port/i2c/build_i2c.py', str(OUT / 'EFI-Kexts')])
 
-    for kext in ['Extensions/LatitudeMTLFB.kext', 'Extensions/NMXAccel.kext', 'EFI-Kexts/LatitudePanelClaim.kext']:
+    for kext in ['Extensions/LatitudeMTLFB.kext', 'Extensions/NMXAccel.kext', 'Extensions/NMXAGDC.kext',
+                 'EFI-Kexts/LatitudePanelClaim.kext']:
         name = Path(kext).stem
         (OUT / f'{name}-UUID.txt').write_text(uuid_of(OUT / kext / 'Contents/MacOS' / name) + '\n')
         (OUT / f'{name}-VERSION.txt').write_text(VERSIONS[name] + '\n')

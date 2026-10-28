@@ -65,7 +65,7 @@ def main():
     ext = lib / 'Extensions'
     ext.mkdir(parents=True)
     shutil.copytree(KERNEL / 'NMXGPU.kext', ext / 'NMXGPU.kext')
-    for k in ['NMXAccel.kext', 'LatitudeMTLFB.kext']:
+    for k in ['NMXAccel.kext', 'LatitudeMTLFB.kext', 'NMXAGDC.kext']:
         shutil.copytree(DESKTOP / 'Extensions' / k, ext / k)
     for k in ['LatitudePanelClaim.kext', 'HuaweiI2CMeteorLake.kext']:
         shutil.copytree(DESKTOP / 'EFI-Kexts' / k, PKG / 'EFI-Kexts' / k)
@@ -124,7 +124,7 @@ def main():
     shutil.copytree(UP / 'licenses', PKG / 'licenses')
     for name in ['NMXGPU-UUID.txt']:
         shutil.copy2(KERNEL / name, PKG / name)
-    for name in ['NMXAccel', 'LatitudeMTLFB', 'LatitudePanelClaim']:
+    for name in ['NMXAccel', 'LatitudeMTLFB', 'NMXAGDC', 'LatitudePanelClaim']:
         for suffix in ['UUID', 'VERSION']:
             shutil.copy2(DESKTOP / f'{name}-{suffix}.txt', PKG / f'{name}-{suffix}.txt')
     (PKG / 'NMXGPU-VERSION.txt').write_text(plistlib.loads((ext / 'NMXGPU.kext/Contents/Info.plist').read_bytes())['CFBundleVersion'] + '\n')

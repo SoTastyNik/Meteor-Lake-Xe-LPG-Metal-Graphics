@@ -35,7 +35,7 @@ BKC=/System/Library/KernelCollections/BootKernelExtensions.kc
 SKC=/System/Library/KernelCollections/SystemKernelExtensions.kc
 AUX=/Library/KernelCollections/AuxiliaryKernelExtensions.kc
 [ -f "$BKC" ] && [ -f "$SKC" ] || { echo 'System kernel collections not found.' >&2; exit 2; }
-OURS="NMXGPU.kext NMXAccel.kext LatitudeMTLFB.kext"
+OURS="NMXGPU.kext NMXAccel.kext LatitudeMTLFB.kext NMXAGDC.kext"
 WORK=$(mktemp -d /private/var/tmp/huawei-mtl.XXXXXX)
 ditto "$HERE/Library/Extensions" "$WORK/Extensions"
 chown -R root:wheel "$WORK/Extensions"; chmod -R a+rX,go-w "$WORK/Extensions"
@@ -54,6 +54,7 @@ fi
 BACKUP="/Library/NullMoth/huawei-backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP/original"
 PATHS=( /Library/Extensions/NMXGPU.kext /Library/Extensions/NMXAccel.kext /Library/Extensions/LatitudeMTLFB.kext
+  /Library/Extensions/NMXAGDC.kext
   /Library/GPUBundles/NVMTLDriver.bundle /Library/GPUBundles/nvmtl /Library/GPUBundles/nvmtl-allow.txt
   /Library/NullMoth/firmware/i915 /Library/NullMoth/load-panel-framebuffer.sh /Library/NullMoth/latitude-desktop-journal
   /Library/NullMoth/latitude-gpu-identity /Library/LaunchDaemons/com.huawei-mtl.panel-load.plist "$AUX" )
@@ -91,6 +92,7 @@ V="$HERE/tools/validate-kernel-prelink"
 "$V" "$REPORT/prelink-info.txt" "$(cat "$HERE/NMXGPU-UUID.txt")" /Library/Extensions/NMXGPU.kext "$(cat "$HERE/NMXGPU-VERSION.txt")" > "$REPORT/validate.txt"
 "$V" "$REPORT/prelink-info.txt" "$(cat "$HERE/NMXAccel-UUID.txt")" /Library/Extensions/NMXAccel.kext "$(cat "$HERE/NMXAccel-VERSION.txt")" com.nullmoth.NMXAccel NMXAccel >> "$REPORT/validate.txt"
 "$V" "$REPORT/prelink-info.txt" "$(cat "$HERE/LatitudeMTLFB-UUID.txt")" /Library/Extensions/LatitudeMTLFB.kext "$(cat "$HERE/LatitudeMTLFB-VERSION.txt")" com.nullmoth.LatitudeMTLFB LatitudeMTLFB >> "$REPORT/validate.txt"
+"$V" "$REPORT/prelink-info.txt" "$(cat "$HERE/NMXAGDC-UUID.txt")" /Library/Extensions/NMXAGDC.kext "$(cat "$HERE/NMXAGDC-VERSION.txt")" com.nullmoth.NMXAGDC NMXAGDC >> "$REPORT/validate.txt"
 mkdir -p /Library/KernelCollections
 cp "$WORK/installed.kc" "$AUX.huawei-tmp"; chown root:wheel "$AUX.huawei-tmp"; chmod 644 "$AUX.huawei-tmp"; mv -f "$AUX.huawei-tmp" "$AUX"
 kcditto > "$REPORT/kcditto.txt" 2>&1
