@@ -1235,6 +1235,7 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
     }
 }
 #include "nvmtl_surface_publication.h"
+#include "nvmtl_ws_tuning.h"
 - (BOOL)nvmtlSurfaceOut {
     NVMTLTexture *r = _parent ? _parent : self;
     if (!r->_surf || r->_hostOn) return YES;   // the GPU wrote the surface's own pages
@@ -1251,7 +1252,7 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
     }
     uint64_t t0=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     size_t packed=0,bytes=0;void *snapshot=NULL;int lease=-1,rc=-1;
-    const BOOL staged=nvmtl_vk_windowserver_serial() &&
+    const BOOL staged=nvmtl_vk_windowserver_serial() && nvmtl_ws_staged_publication() &&
         !nvmtl_publication_geometry(r->_i.w,r->_i.h,r->_i.bpp,&packed,&bytes) &&
         (lease=nvmtl_publication_acquire(bytes,&snapshot))>=0;
     // The same surface-plane monitor stays held; only the external IOSurface

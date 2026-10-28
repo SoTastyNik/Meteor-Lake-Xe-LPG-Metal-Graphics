@@ -138,7 +138,7 @@ static int nvmtl_skip_empty_on(void) {
     static int after = -1; if (after < 0) { const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && e[0] == '1'; }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
     for (NVMTLTexture *s in part->surfaces)
-        if (nvmtl_vk_windowserver_serial() || (after && s != drawable)) _scheduleAfterPublish = YES;
+        if ((nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) || (after && s != drawable)) _scheduleAfterPublish = YES;
     part->scratch = [_scratch copy]; part->signalEvent = event; part->value = value;
     part->encoders = _nEnc - _nEncSealed; _nEncSealed = _nEnc;
     if (_g79Sig.count) { part->signals = [_g79Sig copy]; [_g79Sig removeAllObjects]; }
