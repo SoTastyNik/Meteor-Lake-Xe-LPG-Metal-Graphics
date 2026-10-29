@@ -119,7 +119,10 @@ namespace {
 struct UserWire {
     IOMemoryDescriptor *md;
     task_t task;
+    size_t npages;
 };
+/* live user wirings, to tell a pin leak from a range that went away when xnu refuses one (kIOReturnCannotWire) */
+SInt64 g_user_wired_pages, g_user_wired_ranges, g_user_wires_total, g_user_wired_peak;
 }
 
 extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int write, uint64_t *phys, void **handle)
@@ -159,6 +162,11 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
               (unsigned long long)uaddr, (unsigned long)npages, pr, pr2);
         pr = pr2;
     }
+    if (md != nullptr && pr != kIOReturnSuccess)
+        IOLog("NullMoth GPU: wiring 0x%llx + %lu pages refused (0x%x) with %lld ranges / %lld pages (%lld MB) wired, "
+              "peak %lld pages, %lld wired so far\n", (unsigned long long)uaddr, (unsigned long)npages, pr,
+              (long long)g_user_wired_ranges, (long long)g_user_wired_pages, (long long)(g_user_wired_pages >> 8),
+              (long long)g_user_wired_peak, (long long)g_user_wires_total);
     int err = md == nullptr ? ENOMEM : pr != kIOReturnSuccess ? EFAULT : 0;
     for (size_t i = 0; err == 0 && i < npages; i++) {
         IOByteCount len = 0;
@@ -178,7 +186,16 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
     }
     w->md = md;
     w->task = task;
+    w->npages = npages;
     *handle = w;
+    SInt64 live = __atomic_add_fetch(&g_user_wired_pages, (SInt64)npages, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
+    if (live > g_user_wired_peak)
+        g_user_wired_peak = live;
+    if ((__atomic_add_fetch(&g_user_wires_total, 1, __ATOMIC_RELAXED) & 511) == 0)
+        IOLog("NullMoth GPU: user wirings: %lld ranges / %lld pages (%lld MB) live, peak %lld pages, %lld so far\n",
+              (long long)g_user_wired_ranges, (long long)live, (long long)(live >> 8), (long long)g_user_wired_peak,
+              (long long)g_user_wires_total);
     return 0;
 }
 
@@ -190,5 +207,7 @@ extern "C" void nmx_xnu_user_unwire(void *handle)
     w->md->complete();
     w->md->release();
     task_deallocate(w->task);
+    __atomic_sub_fetch(&g_user_wired_pages, (SInt64)w->npages, __ATOMIC_RELAXED);
+    __atomic_sub_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
     IODelete(w, UserWire, 1);
 }

@@ -2546,6 +2546,19 @@ int nvmtl_vk_windowserver_serial(void)
     return nvmtl_windowserver_serial_policy(g_vendor,g_pci_device,getprogname());
 }
 
+/* A WindowServer whose backend went down draws nothing again: every later command buffer fails at begin. Before the
+   failed encoder answered -methodForSelector:, QuartzCore crashed on it and launchd restarted WindowServer with a new
+   device; now nothing would, and the panel stays black with only the cursor. On the HUAWEI MateBook, end WindowServer
+   deliberately instead (after the log line is out), so it comes back on a fresh device. */
+static void nvmtl_vk_backend_lost(void)
+{
+    const char *n = getprogname();
+    if (g_vendor != 0x8086 || g_pci_device != 0x7d55 || !n || strcmp(n, "WindowServer")) return;
+    nvlog("vk: GPU backend lost in WindowServer - exiting so launchd restarts it on a fresh device");
+    usleep(200000);
+    abort();
+}
+
 /* created, destroyed, live, peak, quarantined, pending, completed, abandoned */
 static uint64_t g_command_pool_stats[8];
 static pthread_mutex_t g_command_pool_stats_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -5487,6 +5500,7 @@ int nvmtl_vk_submit_begin_at(nvk_cmdbuf *c, nvmtl_inflight *f, const char *who)
         if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
         nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
         nvlog("vk: queue submit -> %d; disabling backend and retaining uncertain in-flight resources", result);
+        nvmtl_vk_backend_lost();
         return -2;
     }
     f->fence = fence;
@@ -5524,6 +5538,7 @@ int nvmtl_vk_submit_finish(nvmtl_inflight *f)
         if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
         nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
         nvlog("vk: fence wait -> %d after %ld ms (budget %ld ms); disabling backend without retiring in-flight resources", wr, waited_ms, budget_ms);
+        nvmtl_vk_backend_lost();
         return -2;
     }
     if (c->wseq && c->wseq != NVMTL_WSEQ_BLIND) {
@@ -5533,6 +5548,7 @@ int nvmtl_vk_submit_finish(nvmtl_inflight *f)
             if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
             nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
             nvlog("vk: completion witness missing; disabling backend and retaining all in-flight resources");
+            nvmtl_vk_backend_lost();
             return -2;
         }
         c->wseq = 0;
