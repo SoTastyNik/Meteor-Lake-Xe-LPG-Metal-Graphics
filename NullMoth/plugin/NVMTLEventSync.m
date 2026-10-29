@@ -351,7 +351,7 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
     return copies;
 }
 - (BOOL)nvmtlSubmitAhead {
-    if (nvmtl_vk_windowserver_serial()) return NO;
+    if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_pipeline()) return NO;
     if (_executionDone || _cbError || !_committed) return NO;
     if (_nextSubmit < _nextPart) _nextSubmit = _nextPart;
     while (_nextSubmit < _parts.count) {

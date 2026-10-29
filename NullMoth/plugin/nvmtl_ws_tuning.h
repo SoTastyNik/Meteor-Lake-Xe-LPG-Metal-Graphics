@@ -15,6 +15,10 @@
  *                                                ~1 GB/s (20 ms). Default (absent): the HOST_CACHED type; the leased
  *                                                slots already flush their cache lines before submission and after
  *                                                the fence (nvmtl_cpu_cache_sync).
+ *   /Library/GPUBundles/nvmtl-ws-pipeline        let WindowServer's command buffers be submitted ahead (the queue
+ *                                                keeps several in flight) instead of one submit-and-wait at a time.
+ *                                                Its main thread spent 27% of a drag waiting to be scheduled behind
+ *                                                the previous command buffer's GPU work (v18 sample). Experimental.
  */
 #include <unistd.h>
 
@@ -41,6 +45,12 @@ static inline int nvmtl_ws_cached_readback(void)
 {
     static int coherent = -1;
     return !nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-coherent-readback", &coherent);
+}
+
+static inline int nvmtl_ws_pipeline(void)
+{
+    static int on = -1;
+    return nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-pipeline", &on);
 }
 
 /* nvmtl_vk_buffer_create's host_visible value for a cached (non-coherent, cache-maintained) readback buffer */

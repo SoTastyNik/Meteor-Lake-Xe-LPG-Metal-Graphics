@@ -73,7 +73,7 @@ class NMXVGAFB : public IOFramebuffer {
     IOMemoryMap *fPteMap = nullptr;       // the window's GGTT entries (GTTADR, BAR0 + 8 MB)
     uint64_t fWin = 0, fSlotBytes = 0;
     uint32_t fGopSurf = 0, fGopStride = 0;
-    struct FlipSlot { IOMemoryDescriptor *md; uint32_t surfaceId, pitch; uint64_t lastUse; };
+    struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; };
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
@@ -761,6 +761,24 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
 
 static int gLatFlip = 0;
 static SInt64 gLatFlips, gLatFlipFills, gLatFlipRefused, gLatFlipTimeouts, gLatFlipWaitUs;
+/*
+ * The display engine reads memory without snooping the CPU caches. With the first plane flips (v18) the panel showed
+ * only fragments of each frame, black elsewhere: the frame's newest lines were still in the caches, which NMXAccel's
+ * copy reads coherently. Each presented surface's lines are written back (CLFLUSHOPT) before it goes on the panel.
+ */
+static int gLatFlipFlush = 1;
+static SInt64 gLatFlipFlushUs;
+SYSCTL_INT(_debug, OID_AUTO, nmxfb_flip_flush, CTLFLAG_RW | CTLFLAG_LOCKED, &gLatFlipFlush, 0,
+           "MateBook panel: 1 = write a flipped surface's cache lines back before the plane reads it");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_flush_us, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipFlushUs,
+            "MateBook panel: total time spent writing flipped surfaces' cache lines back, us");
+static void latitudeFlushLines(const volatile uint8_t *p, uint64_t bytes)
+{
+    __asm__ volatile("mfence" ::: "memory");
+    for (uint64_t o = 0; o < bytes; o += 64)
+        __asm__ volatile(".byte 0x66; clflush %0" : "+m"(*(volatile uint8_t *)(p + o)));   // CLFLUSHOPT
+    __asm__ volatile("mfence" ::: "memory");
+}
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_flip, CTLFLAG_RW | CTLFLAG_LOCKED, &gLatFlip, 0,
            "MateBook panel: 1 = scan presented surfaces out of their own pages (plane flip, no copy), 0 = copy them");
 SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_count, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlips, "MateBook panel: plane flips latched");
@@ -810,7 +828,7 @@ void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
 void NMXVGAFB::latitudeFlipFini()
 {
     if (fFlipLock && fRegsMap) latitudeHome();
-    for (auto &s : fFlip) if (s.md) { s.md->complete(); s.md->release(); s = {}; }
+    for (auto &s : fFlip) if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
     OSSafeReleaseNULL(fPteMap);
     OSSafeReleaseNULL(fRegsMap);
     if (fFlipLock) { IOLockFree(fFlipLock); fFlipLock = nullptr; }
@@ -841,7 +859,7 @@ IOReturn NMXVGAFB::latitudeHome()
     IOLockLock(fFlipLock);
     IOReturn ret = kIOReturnSuccess;
     if (fFlipCur >= 0) {
-        if (latitudePlaneTo(fGopSurf, fGopStride)) fFlipCur = -1;
+        if (latitudePlaneTo(fGopSurf, fGopStride)) { fFlipCur = -1; VFBLOG("Latitude: plane back on the firmware buffer"); }
         else { ret = kIOReturnTimeout; VFBLOG("Latitude: the plane did not return to the firmware buffer within 50 ms"); }
     }
     IOLockUnlock(fFlipLock);
@@ -873,7 +891,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
     IOReturn ret = kIOReturnSuccess;
     if (hit < 0 && victim >= 0) {
         FlipSlot &s = fFlip[victim];
-        if (s.md) { s.md->complete(); s.md->release(); s = {}; }
+        if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
         // the surface's pages, wired while it holds the slot, become the slot's GGTT entries (uncached, PAT 2,
         // as i915 maps display buffers)
         bool ok = md->prepare() == kIOReturnSuccess;
@@ -886,10 +904,12 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
             for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < bytes; o += PAGE_SIZE, off += PAGE_SIZE)
                 pte[off >> 12] = (pa + o) | 1ull | (1ull << 53);
         }
+        IOMemoryMap *map = ok ? md->map(kIOMapReadOnly) : nullptr;   // for the cache write-back before each flip
+        if (ok && !map) ok = false;
         if (ok) {
             (void)pte[(bytes >> 12) - 1];                       // the writes are posted: read one back
             md->retain();
-            s = { md, r->surfaceId, r->pitch, 0 };
+            s = { md, map, r->surfaceId, r->pitch, 0 };
             hit = victim;
             OSAddAtomic64(1, &gLatFlipFills);
         } else {
@@ -898,6 +918,13 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
             ret = kIOReturnUnsupported;
         }
     } else if (hit < 0) ret = kIOReturnNoResources;
+    // also for the surface already on the panel: WindowServer drew this frame into it in place
+    if (hit >= 0 && gLatFlipFlush && fFlip[hit].map) {
+        const uint64_t f0 = mach_absolute_time();
+        latitudeFlushLines((const volatile uint8_t *)fFlip[hit].map->getVirtualAddress(), bytes);
+        uint64_t fns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - f0, &fns);
+        OSAddAtomic64((SInt64)(fns / 1000), &gLatFlipFlushUs);
+    }
     if (hit >= 0 && hit != fFlipCur) {
         const uint32_t surf = (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
         if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / 64))) {
@@ -1097,6 +1124,7 @@ bool NMXVGAFB::start(IOService *provider)
     sysctl_register_oid(&sysctl__debug_nmxfb_flip);         sysctl_register_oid(&sysctl__debug_nmxfb_flip_count);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
+    sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush_us);
 #endif
     return true;
 }
@@ -1109,6 +1137,7 @@ void NMXVGAFB::stop(IOService *provider)
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip);         sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_count);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_wait_us);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush_us);
     latitudeFlipFini();
 #endif
     if (OSCompareAndSwapPtr(this, nullptr, (void * volatile *)&gVtInst)) {
