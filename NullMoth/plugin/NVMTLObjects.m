@@ -4735,7 +4735,13 @@ destinationBytesPerImage:(NSUInteger)img options:(MTLBlitOption)opt {
 - (void)nvmtlReleaseCapacity {
     if (__atomic_exchange_n(&_capacityHeld, NO, __ATOMIC_ACQ_REL)) dispatch_semaphore_signal(_queue->_capacity);
 }
-- (void)nvmtlRecordEncodingError:(NSError *)error { if (!_cbError) _cbError = error; }
+- (void)nvmtlRecordEncodingError:(NSError *)error {
+    if (_cbError) return;
+    _cbError = error;
+    static _Atomic unsigned said;
+    if (atomic_fetch_add(&said, 1) < 32)
+        nvlog("command buffer %p failed while encoding: %s", (__bridge void *)self, error.localizedDescription.UTF8String ?: "?");
+}
 - (void)setProtectionOptions:(unsigned long long)o { if (o) { static int said; if (!said++) nvlog("setProtectionOptions: 0x%llx asked - no protected-content path; protectionOptions stays 0 (said once)", o); } }
 - (unsigned long long)globalTraceObjectID { return nvmtl_global_trace_id(self); }
 - (BOOL)retainedReferences { return YES; }

@@ -29,6 +29,11 @@
            class_getInstanceMethod(_encodingClass, selector) != NULL;
 }
 - (BOOL)conformsToProtocol:(Protocol *)protocol { return class_conformsToProtocol(_encodingClass, protocol); }
+// QuartzCore caches encoder IMPs (-[NSObject methodForSelector:]) and calls them directly. NSProxy has no such method,
+// so the request itself was forwarded and answered with a zeroed return value: WindowServer later called address 0
+// from CA::OGL::MetalContext::draw (setRenderPipelineState:) whenever a command buffer had failed. Hand out the
+// forwarding entry instead, so a cached call lands in -forwardInvocation: like any other message to this encoder.
+- (IMP)methodForSelector:(SEL)selector { return class_getMethodImplementation(object_getClass(self), selector); }
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
     Method method = class_getInstanceMethod(_encodingClass, selector);
     return method ? [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)] : nil;
