@@ -844,6 +844,14 @@ bool NMXVGAFB::start(IOService *provider)
         nmxVramReserve((fScanCap + fScanCap / 64 + PAGE_SIZE - 1) & ~(unsigned long long)(PAGE_SIZE - 1));
     } else if (IODeviceMemory *sm = IODeviceMemory::withRange(fBase, (IOPhysicalLength)fRowBytes * fHeight)) {
         fSurfMap = sm->map(kIOMapWriteCombineCache); sm->release();
+#ifdef LATITUDE_MTL_PANEL
+        // The MateBook's display surfaces (2880x1920, 22.1 MB each) came from on-demand contiguous allocations: after
+        // many windows the kernel had 5 GB wired and no 22 MB run left, retried the search several times a second
+        // (vm_page_find_contiguous over all of RAM) and every display-pipe transaction failed - the picture froze.
+        // Reserve the slots now, while memory is still unfragmented, as the virtio path does.
+        const unsigned long long one = (unsigned long long)fRowBytes * fHeight;
+        nmxVramReserve((one + one / 64 + PAGE_SIZE - 1) & ~(unsigned long long)(PAGE_SIZE - 1));
+#endif
     }
     if (fSurfMap) {
         // head 0 of the GPU's accelerator (NMXAccel watches for this class)
@@ -1076,8 +1084,23 @@ static IOReturn nmxVramAlloc(NVRMVramRequest *r)
             if (!(gVramSlotBusy & (1u << i))) { gVramSlotBusy |= 1u << i; b = gVramSlot[i]; b->retain(); }
         IOLockUnlock(gVramLock);
     }
-    if (!b) b = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-        kNmxRawPhysicalOptions, want, 0x000000FFFFFFF000ull);
+    // A failed search for a contiguous run scans all of RAM (and garbage-collects zones); WindowServer retries at
+    // once, several times a second. Refuse without searching for a second after a failure.
+    static volatile uint64_t gVramNoRunUntil = 0;
+    if (!b) {
+        uint64_t now = mach_absolute_time();
+        if (now < gVramNoRunUntil) {
+            OSAddAtomic64(-(SInt64)want, &gVramUsed);
+            return kIOReturnNoMemory;
+        }
+        b = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+            kNmxRawPhysicalOptions, want, 0x000000FFFFFFF000ull);
+        if (!b) {
+            uint64_t second = 0;
+            nanoseconds_to_absolutetime(1000000000ull, &second);
+            gVramNoRunUntil = mach_absolute_time() + second;
+        }
+    }
     if (!b) {
         OSAddAtomic64(-(SInt64)want, &gVramUsed);
         VFBLOG("nvAllocVram(%llu): no contiguous system memory", want);
