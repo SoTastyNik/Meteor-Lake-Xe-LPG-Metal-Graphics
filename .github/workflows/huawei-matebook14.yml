@@ -6,6 +6,10 @@ on:
         description: 'Package only, from the build artifacts of this run id'
         required: false
         default: ''
+      mesa_run:
+        description: 'Take Mesa from this run id instead of building it (macOS arm64 runners unavailable)'
+        required: false
+        default: ''
   push:
     branches: [huawei-matebook14-7d55]
     paths-ignore: ['**.md', 'huawei-port/README-RU.txt', 'huawei-port/efi/**', 'huawei-port/acpi-tables/**', '.github/workflows/huawei-efi-tools.yml', 'huawei-port/wifi/**', '.github/workflows/huawei-wifi.yml', '.github/workflows/huawei-bt.yml', 'huawei-port/trace/**', '.github/workflows/huawei-trace.yml']
@@ -51,7 +55,7 @@ jobs:
           retention-days: 14
 
   mesa:
-    if: ${{ !inputs.artifacts_run }}
+    if: ${{ !inputs.artifacts_run && !inputs.mesa_run }}
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -105,6 +109,13 @@ jobs:
         with:
           path: out
           run-id: ${{ inputs.artifacts_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.mesa_run }}
+        with:
+          name: mesa
+          path: out/mesa
+          run-id: ${{ inputs.mesa_run }}
           github-token: ${{ github.token }}
       - run: python3 huawei-port/package.py out/kernel out/desktop out/mesa out/Huawei-MateBook14-Graphics
       - uses: actions/upload-artifact@v4
