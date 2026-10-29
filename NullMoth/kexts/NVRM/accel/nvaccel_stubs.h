@@ -147,6 +147,7 @@ public:
     unsigned fIopNext;
     const void *iopMapSurface(unsigned id, IOMemoryDescriptor *md, unsigned long long need);
     void        iopDropSources();
+    int         nmxCopySurface(IOService *fb, unsigned head, IOSurface *s, bool ready, uint64_t published);
 };
 OSDefineMetaClassAndStructors(NVDisplayPipe, IOAccelLegacyDisplayPipe)
 class NVGLContext : public IOAccelGLContext2 {

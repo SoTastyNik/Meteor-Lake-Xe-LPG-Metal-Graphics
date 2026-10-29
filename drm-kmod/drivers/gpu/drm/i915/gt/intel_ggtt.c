@@ -830,6 +830,15 @@ static int latitude_reserve_fw_plane(struct i915_ggtt *ggtt)
 	return ret;
 }
 
+/*
+ * A GGTT window for the panel's plane flips: LatitudeMTLFB maps a presented IOSurface's pages here (its own PTE
+ * writes, through GTTADR) and points PLANE_SURF at them, instead of copying each frame into the firmware plane.
+ * Four slots of 24 MB: WindowServer's display surfaces (2880x1920, 22.1 MB) and a spare.
+ */
+extern void nmx_xnu_scanout_window(u64 base, u64 size);
+#define LATITUDE_FLIP_WINDOW	(4 * SZ_16M + 4 * SZ_8M)
+static struct drm_mm_node latitude_flip_window;
+
 static struct drm_mm_node latitude_guc_top[2];
 
 static int latitude_reserve_guc_gap(struct i915_ggtt *ggtt, struct drm_mm_node *node, u64 start, u64 end)
@@ -878,6 +887,16 @@ static int ggtt_reserve_guc_top(struct i915_ggtt *ggtt)
 		}
 		drm_info(&ggtt->vm.i915->drm, "Latitude MTL: uC images at GGTT 0x%llx (below the firmware plane)\n",
 			 ggtt->uc_fw.start);
+		/* optional: without it the panel keeps the copy path */
+		if (drm_mm_insert_node_in_range(&ggtt->vm.mm, &latitude_flip_window, LATITUDE_FLIP_WINDOW, SZ_2M,
+						I915_COLOR_UNEVICTABLE, ggtt->pin_bias, ggtt->uc_fw.start,
+						DRM_MM_INSERT_HIGH) == 0) {
+			drm_info(&ggtt->vm.i915->drm, "Latitude MTL: plane flip window GGTT [0x%llx, 0x%llx) reserved\n",
+				 latitude_flip_window.start, latitude_flip_window.start + latitude_flip_window.size);
+			nmx_xnu_scanout_window(latitude_flip_window.start, latitude_flip_window.size);
+		} else {
+			drm_err(&ggtt->vm.i915->drm, "Latitude MTL: no GGTT for the plane flip window\n");
+		}
 		/*
 		 * The rest of [GUC_GGTT_TOP, 4G) must stay unusable, or best-fit puts GuC objects there (RSA, ADS,
 		 * CT buffers) and the GuC cannot reach them: load failed, Auth = 0x01, GPU wedged on init.
@@ -907,6 +926,10 @@ static void ggtt_release_guc_top(struct i915_ggtt *ggtt)
 #ifdef NMXKPI
 	if (drm_mm_node_allocated(&latitude_fw_plane))
 		drm_mm_remove_node(&latitude_fw_plane);
+	if (drm_mm_node_allocated(&latitude_flip_window)) {
+		nmx_xnu_scanout_window(0, 0);
+		drm_mm_remove_node(&latitude_flip_window);
+	}
 	for (int i = 0; i < ARRAY_SIZE(latitude_guc_top); i++)
 		if (drm_mm_node_allocated(&latitude_guc_top[i]))
 			drm_mm_remove_node(&latitude_guc_top[i]);

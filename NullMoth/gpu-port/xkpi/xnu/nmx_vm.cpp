@@ -33,6 +33,22 @@ extern "C" int nmx_xnu_firmware_scanout(uint64_t *base, uint64_t *size)
     return 0;
 }
 
+/* the GGTT window i915 reserves for the panel's plane flips (intel_ggtt.c); NMXGPU publishes it on the PCI device */
+static uint64_t g_scanout_window_base, g_scanout_window_size;
+
+extern "C" void nmx_xnu_scanout_window(uint64_t base, uint64_t size)
+{
+    g_scanout_window_base = base;
+    g_scanout_window_size = size;
+}
+
+extern "C" int nmx_xnu_scanout_window_get(uint64_t *base, uint64_t *size)
+{
+    *base = g_scanout_window_base;
+    *size = g_scanout_window_size;
+    return *size != 0;
+}
+
 extern "C" {
 extern void *kernel_pmap;
 extern ppnum_t pmap_find_phys(void *pmap, addr64_t va);

@@ -1020,7 +1020,8 @@ static thread_call_t gNmxFrontTimer = nullptr;
 static struct { const NVDisplayPipe *pipe; const volatile unsigned *src; unsigned w, h, pitch;
                 volatile unsigned *dst; unsigned dpitch; IOSurface *surface; uint64_t published; IOService *framebuffer; uint64_t gamma; } gNmxFront;
 static SInt64 gCntNmxFrontCopies;
-static int gNmxFrontHz = 60;
+// the MateBook panel refreshes at 119.5 Hz: a frame whose pixels land after its transaction waits at most one refresh
+static int gNmxFrontHz = 120;
 static unsigned gNmxFrontTicksLeft = 0;   // copies until the timer stops, refilled by each transaction
 static bool gNmxFrontArmed = false;
 static constexpr unsigned kNmxFrontMaxHz = 240;
@@ -1100,6 +1101,18 @@ static void nmxFrontInit()
     if (!gNmxFrontLock) gNmxFrontLock = IOLockAlloc();
     if (!gNmxFrontTimer) gNmxFrontTimer = thread_call_allocate(nmxFrontTick, nullptr);
 }
+// a second of front-buffer re-copies, as after a transaction (an ordered copy that had to leave its frame held)
+static void nmxFrontKick()
+{
+    if (!gNmxFrontLock) return;
+    IOLockLock(gNmxFrontLock);
+    const int hz = gNmxFrontHz;
+    gNmxFrontTicksLeft = hz > 0 ? (unsigned)(hz < (int)kNmxFrontMaxHz ? hz : kNmxFrontMaxHz) : 0;
+    const bool arm = gNmxFront.src != nullptr && gNmxFrontTicksLeft && !gNmxFrontArmed;
+    if (arm) {gNmxFrontArmed=true;gNmxFrontNext=0;}
+    IOLockUnlock(gNmxFrontLock);
+    if (arm) nmxFrontArm();
+}
 #endif
 
 IOReturn NVDisplayPipe::performTransaction(IOAccelDisplayPipeTransaction2 *txn)
@@ -1175,9 +1188,17 @@ static bool nvAccelSurfCopyReady(IOSurface *s, unsigned head);
  * own pages: the framebuffer makes them a blob the host shows as a dmabuf. 1 = on the panel, 2 = held (the surface's
  * newest pixels are not in its memory yet: the previous frame stays, as the copy path does), 0 = not taken (copy).
  */
+// The framebuffer scans presented surfaces out of their own memory: a virtio-gpu blob, or (LatitudeScanoutFlip) the
+// MateBook panel's plane pointed at the surface's pages through the GGTT window NMXGPU reserves.
+static bool nmxFbFlips(IOService *fb)
+{
+    return fb && (fb->getProperty("NMXVirtioScanout") || fb->getProperty("LatitudeScanoutFlip"));
+}
+// the MateBook panel (NMXVGAFB's Latitude build): presents complete on the ordered thread call, flipped or copied
+static bool nmxFbLatitude(IOService *fb) { return fb && fb->getProperty("LatitudePanelValidated") == kOSBooleanTrue; }
 static int nmxIopBlobFlip(IOService *fb, unsigned head, IOSurface *s, bool final = false)
 {
-    if (!gNmxBlobScanout || !fb || !s || !fb->getProperty("NMXVirtioScanout")) return 0;
+    if (!gNmxBlobScanout || !fb || !s || !nmxFbFlips(fb)) return 0;
     if (!nvAccelSurfCopyReady(s, head)) return 2;
     IOMemoryDescriptor *md = s->getMemoryDescriptor();
     if (!md) return 0;
@@ -1190,6 +1211,7 @@ static int nmxIopBlobFlip(IOService *fb, unsigned head, IOSurface *s, bool final
     const OSSymbol *sym = OSSymbol::withCStringNoCopy(NMX_SCANOUT_FN_SURFACE);
     IOReturn rr = sym ? fb->callPlatformFunction(sym, false, &q, nullptr, nullptr, nullptr) : kIOReturnNoMemory;
     OSSafeReleaseNULL(sym);
+    if (rr == kIOReturnNotReady) return 0;      // flips are off (the MateBook panel's debug.nmxfb_flip): a copy
     if (rr != kIOReturnSuccess) {
         OSAddAtomic64(1, &gCntNmxBlobRefused);
         if (gNmxBlobLogs < 8) { gNmxBlobLogs++; ALOG("iop: blob scan-out of surface 0x%x %ux%u pitch %u fmt 0x%08x refused (0x%x) -- copying",
@@ -1209,6 +1231,51 @@ static bool nvAccelIopFlip(IOService *fb, unsigned head, IOSurface *s, void *pip
 static void nvAccelIopHome(IOService *fb, unsigned head);
 #ifdef NMX_ACCEL
 static bool nmxOrderedStart(void *pipe, IOService *fb, unsigned head, IOSurface *s);
+static SInt64 gCntNmxOrdCopies;
+/*
+ * The MateBook panel without a plane flip: the ordered thread call copies the presented surface into the firmware
+ * plane once its pixels are in place, then completes the transaction. Before, a frame WindowServer presented ahead of
+ * the GPU (with the plugin's early schedule nearly all of them) stayed held until the front timer's next tick at
+ * 60 Hz: up to 17 ms late, unevenly paced (felt as ~26 fps). Called under gNmxFrontLock. 1 = on the panel,
+ * 2 = held (its pixels are not in its memory yet; the front timer copies them once published), 0 = not copied.
+ */
+int NVDisplayPipe::nmxCopySurface(IOService *fb, unsigned head, IOSurface *s, bool ready, uint64_t published)
+{
+    NVAccel *a = NVAccel::gAccel;
+    if (!a || !fb || !s || s->getPixelFormat() != 0x42475241u) return 0;
+    const unsigned long long W = s->getWidth(), H = s->getHeight(), P = s->getBytesPerRow();
+    if (!W || !H || W > 16384 || H > 16384 || P < 4 * W || (P & 3) || P > 16384ull * 8) return 0;
+    IOMemoryDescriptor *md = s->getMemoryDescriptor();
+    const volatile unsigned *src = md ? (const volatile unsigned *)iopMapSurface(s->getSurfaceID(), md, H * P) : nullptr;
+    if (!src) return 0;
+    struct NVRMVramRequest q;
+    for (unsigned i = 0; i < sizeof q; i++) ((volatile unsigned char *)&q)[i] = 0;
+    q.version = NVRM_VRAM_ABI_VERSION;
+    if (a->askFramebufferForScanout(&q, fb) != kIOReturnSuccess || !q.kva || q.pitch < 4 || W != q.width || H != q.height)
+        return 0;
+    uint64_t gamma = 0;
+    const bool copy = ready && nvAccelSurfCopyReady(s, head);
+    if (!copy) OSAddAtomic64(1, &gNmxIncompleteHeld);
+    else if (!nmxCopyWithGamma(fb, (volatile unsigned *)q.kva, src, (unsigned)W, (unsigned)H, q.pitch, (unsigned)P, &gamma))
+        return 0;
+    // the plane back from a flipped surface once the firmware buffer holds this frame (not a stale one meanwhile)
+    nvAccelIopHome(fb, head);
+    // it is the front buffer now: the timer re-copies it when a later frame (or a gamma change) lands in it
+    if (gNmxFront.surface != s) {
+        if (gNmxFront.surface) ((OSObject *)gNmxFront.surface)->release();
+        gNmxFront.surface = s; ((OSObject *)s)->retain();
+    }
+    if (gNmxFront.framebuffer != fb) {
+        if (gNmxFront.framebuffer) gNmxFront.framebuffer->release();
+        gNmxFront.framebuffer = fb; fb->retain();
+    }
+    gNmxFront.pipe = this; gNmxFront.src = src; gNmxFront.w = (unsigned)W; gNmxFront.h = (unsigned)H;
+    gNmxFront.pitch = (unsigned)P; gNmxFront.dst = (volatile unsigned *)q.kva; gNmxFront.dpitch = q.pitch;
+    gNmxFront.gamma = gamma; gNmxFront.published = published;
+    if (!copy) return 2;
+    OSAddAtomic64(1, &gCntNmxOrdCopies);
+    return 1;
+}
 #endif
 IOReturn NVDisplayPipe::performTransactionCopy(IOAccelDisplayPipeTransaction2 *txn)
 {
@@ -1254,7 +1321,7 @@ IOReturn NVDisplayPipe::performTransactionCopy(IOAccelDisplayPipeTransaction2 *t
         if ((unsigned long long)h * pitch > vm->fBytes) NVIOP_FAIL(kIOReturnOverrun, "resource %ux%u pitch %u exceeds its %llu bytes", w, h, pitch, (unsigned long long)vm->fBytes);
         src = (const volatile unsigned int *)vm->fKva; fromRes = true;
 #ifdef NMX_ACCEL
-    } else if (s && fb->getProperty("NMXVirtioScanout") && nmxOrderedStart(this, fb, head, s)) {
+    } else if (s && (fb->getProperty("NMXVirtioScanout") || nmxFbLatitude(fb)) && nmxOrderedStart(this, fb, head, s)) {
         return kIOReturnSuccess;
     } else if (int b = s ? nmxIopBlobFlip(fb, head, s) : 0) {
         if (b == 1) { OSAddAtomic64(1, &gCntIopSrcSurf); OSAddAtomic64(1, &gCntIopOk); OSAddAtomic64(1, &gCntIopOkHead[head]); }
@@ -1479,6 +1546,11 @@ static SInt64 gCntNmxOrdWaited, gCntNmxOrdTimeout, gCntNmxOrdNs;
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_blob_ordered, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxBlobOrdered, 0,
            "VM display: 1 = a presented surface goes on the panel once its pixels are in its memory (the flip waits on a "
            "thread call; WindowServer's commit does not wait for the GPU), 0 = flip at once (WindowServer waits)");
+static int gNmxOrderedCopy = 1;
+SYSCTL_INT(_debug, OID_AUTO, nmxfb_ordered_copy, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxOrderedCopy, 0,
+           "MateBook panel: 1 = a presented surface is flipped or copied on a thread call once its pixels are in place "
+           "(the transaction completes then), 0 = copied at once, a late frame by the front timer");
+NVACCEL_CNT(nmxfb_ord_copies, gCntNmxOrdCopies, "MateBook panel: frames the ordered thread call copied onto the panel");
 NVACCEL_CNT(nmxfb_ord_waited, gCntNmxOrdWaited, "VM display: ordered flips that waited for the surface's pixels");
 NVACCEL_CNT(nmxfb_ord_timeout, gCntNmxOrdTimeout, "VM display: ordered flips that gave up waiting (flipped anyway)");
 NVACCEL_CNT(nmxfb_ord_wait_us, gCntNmxOrdNs, "VM display: total time ordered flips waited, us");
@@ -1505,6 +1577,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_blob_ordered);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_waited);
     sysctl_register_oid(&sysctl__debug_nmxfb_ord_timeout);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_front_written);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_trace);
+    sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
 #else
     sysctl_register_oid(&sysctl__debug_nvaccel_headless);
 #endif
@@ -2016,7 +2089,7 @@ static bool nmxSurfaceReady(IOSurface *s, uint64_t *pub)
     return pending == 0 || *pub >= pending;
 }
 static constexpr unsigned kNmxOrdMaxMs = 100;
-struct NMXOrdered { void *pipe; IOService *fb; unsigned head; IOSurface *s; volatile SInt32 busy; struct thread_call *call; uint64_t tSubmit; };
+struct NMXOrdered { void *pipe; IOService *fb; unsigned head; IOSurface *s; volatile SInt32 busy; struct thread_call *call; uint64_t tSubmit; bool latitude; };
 static NMXOrdered gNmxOrd[kNvMaxFB];
 static struct { unsigned id; uint64_t pub; } gNmxSeen[16];   // a surface's NMXPublished when it last went on the panel
 static unsigned gNmxSeenNext;
@@ -2079,8 +2152,11 @@ static void nmxOrderedRun(void *p0, void *)
     IOSurface *traceFront = trace ? gNmxOrdFront[e->head] : nullptr;
     const uint64_t traceFrontPub = traceFront ? nmxPublished(traceFront) : 0, tReady = mach_absolute_time();
     if (gNmxFrontLock) IOLockLock(gNmxFrontLock);      // nmxIopBlobFlip ends the front-buffer recopy (gNmxFront)
-    const int b = nmxIopBlobFlip(e->fb, e->head, s, final);
+    int b = nmxIopBlobFlip(e->fb, e->head, s, final);
+    // the MateBook panel without a plane flip (off, or this surface refused): the copy the transaction would have made
+    if (b == 0 && e->latitude) b = ((NVDisplayPipe *)e->pipe)->nmxCopySurface(e->fb, e->head, s, ready, pub);
     if (gNmxFrontLock) IOLockUnlock(gNmxFrontLock);
+    if (b == 2 && e->latitude) nmxFrontKick();
     if (trace) {
         // times in us of the mach clock (ns on x86), the same base as NMXVGAFB's debug.nmxfb_vtrace
         gNmxOrdTrace--;
@@ -2098,7 +2174,7 @@ static void nmxOrderedRun(void *p0, void *)
         if (gNmxOrdFront[e->head]) ((OSObject *)gNmxOrdFront[e->head])->release();
         gNmxOrdFront[e->head] = s; gNmxOrdFrontPub[e->head] = pub;
         OSAddAtomic64(1, &gCntIopSrcSurf); OSAddAtomic64(1, &gCntIopOk); OSAddAtomic64(1, &gCntIopOkHead[e->head]);
-    } else if (b == 0 && ++gNmxOrdRefuseRun >= 3 && gNmxBlobOrdered) {
+    } else if (b == 0 && !e->latitude && ++gNmxOrdRefuseRun >= 3 && gNmxBlobOrdered) {
         // that frame stayed off the panel; the copy path (synchronous) takes over
         gNmxBlobOrdered = 0;
         ALOG("iop: 3 ordered blob flips refused in a row -- debug.nmxfb_blob_ordered=0 (WindowServer waits again, copy fallback)");
@@ -2110,7 +2186,10 @@ static void nmxOrderedRun(void *p0, void *)
 // true when the flip was handed to the thread call (the transaction completes later)
 static bool nmxOrderedStart(void *pipe, IOService *fb, unsigned head, IOSurface *s)
 {
-    if (!gNmxBlobOrdered || !pipe || head >= kNvMaxFB || !gCntNmxBlobFlips) return false;   // after one direct flip worked
+    if (!pipe || head >= kNvMaxFB) return false;
+    const bool latitude = nmxFbLatitude(fb);
+    // a blob display after one direct flip worked; the MateBook panel always (it falls back to the copy in the run)
+    if (latitude ? !gNmxOrderedCopy : (!gNmxBlobOrdered || !gCntNmxBlobFlips)) return false;
     NMXOrdered *e = &gNmxOrd[head];
     // the family sends a pipe's next transaction only after the last one completed; wait out a stray overlap
     for (unsigned i = 0; i < 200 && __atomic_load_n(&e->busy, __ATOMIC_ACQUIRE); i++) IOSleep(1);
@@ -2118,7 +2197,7 @@ static bool nmxOrderedStart(void *pipe, IOService *fb, unsigned head, IOSurface 
     if (!e->call) e->call = thread_call_allocate(nmxOrderedRun, e);
     if (!e->call) return false;
     ((OSObject *)s)->retain();
-    e->pipe = pipe; e->fb = fb; e->head = head; e->s = s; e->tSubmit = mach_absolute_time();
+    e->pipe = pipe; e->fb = fb; e->head = head; e->s = s; e->tSubmit = mach_absolute_time(); e->latitude = latitude;
     __atomic_store_n(&e->busy, 1, __ATOMIC_RELEASE);
     thread_call_enter(e->call);
     return true;
@@ -2195,7 +2274,7 @@ static void nvAccelIopHome(IOService *fb, unsigned head)
 {
 #ifdef NMX_ACCEL
     // a VM display that scanned a surface out: back to its own buffer before a frame is copied into it
-    if (fb && fb->getProperty("NMXVirtioScanout")) {
+    if (nmxFbFlips(fb)) {
         const OSSymbol *sym = OSSymbol::withCStringNoCopy(NMX_SCANOUT_FN_HOME);
         if (sym) { fb->callPlatformFunction(sym, false, nullptr, nullptr, nullptr, nullptr); sym->release(); }
         return;

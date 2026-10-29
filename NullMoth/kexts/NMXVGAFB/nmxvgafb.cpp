@@ -65,6 +65,24 @@ class NMXVGAFB : public IOFramebuffer {
     bool fPanelTiming = false;
     bool fPanelMemoryValidated = false;
     bool adoptLatitudePanel(IOPCIDevice *pci);
+    // Plane flips (debug.nmxfb_flip): a presented surface's pages are mapped into the GGTT window NMXGPU reserved
+    // and the panel's plane is pointed at them, instead of NMXAccel copying the frame into the firmware plane. The
+    // firmware plane (fGopSurf) stays home: NMXAccel copies there whenever a flip is off or refused.
+    uint32_t fPlaneStep = 0;              // the panel pipe's register step (pipe * 0x1000)
+    IOMemoryMap *fRegsMap = nullptr;      // BAR0: plane registers
+    IOMemoryMap *fPteMap = nullptr;       // the window's GGTT entries (GTTADR, BAR0 + 8 MB)
+    uint64_t fWin = 0, fSlotBytes = 0;
+    uint32_t fGopSurf = 0, fGopStride = 0;
+    struct FlipSlot { IOMemoryDescriptor *md; uint32_t surfaceId, pitch; uint64_t lastUse; };
+    static constexpr unsigned kFlipSlots = 4;
+    FlipSlot fFlip[kFlipSlots] = {};
+    int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
+    IOLock *fFlipLock = nullptr;
+    void latitudeFlipInit(IOPCIDevice *pci);
+    void latitudeFlipFini();
+    bool latitudePlaneTo(uint32_t surf, uint32_t stride);
+    IOReturn latitudeFlip(NMXScanoutSurface *r);
+    IOReturn latitudeHome();
 #endif
     IOMemoryMap *fSurfMap = nullptr;   // write-combined CPU view of the scan-out (NMXAccel's frames land here)
     struct Irq { IOFBInterruptProc proc = nullptr; OSObject *target = nullptr; void *ref = nullptr; };
@@ -254,6 +272,7 @@ public:
     void free() override {
         if(fBacklight){fBacklight->disable();if(fBacklight->getProvider()==this)fBacklight->detach(this);OSSafeReleaseNULL(fBacklight);}
         if(fGammaLock){IOLockFree(fGammaLock);fGammaLock=nullptr;}
+        latitudeFlipFini();
         IOFramebuffer::free();
     }
     IOReturn getAppleSense(IOIndex idx,UInt32 *sense,UInt32 *primary,UInt32 *extended,UInt32 *type) override {
@@ -721,7 +740,7 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
         fVSO=vstart-fHeight; fVSW=vend-vstart; fRefreshMHz=(uint32_t)mhz;
         fHz=(uint32_t)((mhz+500)/1000); fFrameNs=ns/frames;
         fPclk=(uint64_t)htotal*vtotal*mhz/1000; fPanelTiming=true;
-        fBase=cpu;fPanelMemoryValidated=true;
+        fBase=cpu;fPanelMemoryValidated=true;fPlaneStep=step;
         setProperty("LatitudePanelPipe",pipe,32); setProperty("LatitudePanelValidated",kOSBooleanTrue);
         setProperty("LatitudePanelScanout",fBase,64); setProperty("LatitudePanelRefreshMilliHz",mhz,64);
         VFBLOG("Latitude: validated firmware panel %ux%u pitch %u pipe %c at %u.%03u Hz",fWidth,fHeight,fRowBytes,
@@ -738,6 +757,174 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
     mmio->release();
     if (!found) VFBLOG("Latitude: no linear firmware plane matches GOP; declining");
     return found;
+}
+
+static int gLatFlip = 0;
+static SInt64 gLatFlips, gLatFlipFills, gLatFlipRefused, gLatFlipTimeouts, gLatFlipWaitUs;
+SYSCTL_INT(_debug, OID_AUTO, nmxfb_flip, CTLFLAG_RW | CTLFLAG_LOCKED, &gLatFlip, 0,
+           "MateBook panel: 1 = scan presented surfaces out of their own pages (plane flip, no copy), 0 = copy them");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_count, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlips, "MateBook panel: plane flips latched");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_fills, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipFills,
+            "MateBook panel: surfaces mapped into the flip window (GGTT entries written)");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_refused, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipRefused,
+            "MateBook panel: surfaces not flipped (geometry, gamma, pages) - copied instead");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_timeouts, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipTimeouts,
+            "MateBook panel: flips the plane did not latch within 50 ms (flips then turn off)");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_wait_us, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipWaitUs,
+            "MateBook panel: total time flips waited for the plane to latch, us");
+
+void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
+{
+    OSNumber *b = OSDynamicCast(OSNumber, pci->getProperty("latitude-flip-ggtt"));
+    OSNumber *n = OSDynamicCast(OSNumber, pci->getProperty("latitude-flip-ggtt-size"));
+    const uint64_t win = b ? b->unsigned64BitValue() : 0, bytes = n ? n->unsigned64BitValue() : 0;
+    const uint64_t slot = (bytes / kFlipSlots) & ~0x3ffffull, frame = (uint64_t)fRowBytes * fHeight;
+    IODeviceMemory *bar = pci->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
+    if (!win || (win & 0x3ffff) || slot < frame || win + bytes > (4ull << 30) || !bar || bar->getLength() < (16ull << 20)) {
+        VFBLOG("Latitude: no plane flips (GGTT window 0x%llx + 0x%llx, BAR0 %llu MB) - frames are copied", win, bytes,
+               bar ? (unsigned long long)(bar->getLength() >> 20) : 0ull);
+        return;
+    }
+    // GTTADR: the upper half of BAR0 is the GGTT, 8 bytes per 4 KB page, as i915 writes it (gen8_set_pte)
+    IODeviceMemory *pt = IODeviceMemory::withRange(bar->getPhysicalAddress() + (8ull << 20) + (win >> 12) * 8,
+                                                   (IOPhysicalLength)((kFlipSlots * slot) >> 12) * 8);
+    fPteMap = pt ? pt->map(kIOMapInhibitCache) : nullptr;
+    OSSafeReleaseNULL(pt);
+    fRegsMap = pci->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
+    fFlipLock = IOLockAlloc();
+    if (!fPteMap || !fRegsMap || !fFlipLock) {
+        VFBLOG("Latitude: plane flip setup failed - frames are copied");
+        latitudeFlipFini();
+        return;
+    }
+    const volatile uint8_t *regs = (const volatile uint8_t *)fRegsMap->getVirtualAddress();
+    fGopSurf = *(const volatile uint32_t *)(regs + 0x7019c + fPlaneStep);
+    fGopStride = *(const volatile uint32_t *)(regs + 0x70188 + fPlaneStep);
+    fWin = win; fSlotBytes = slot;
+    setProperty("LatitudeScanoutFlip", kOSBooleanTrue);
+    setProperty("LatitudeFlipWindow", win, 64);
+    VFBLOG("Latitude: plane flips over GGTT 0x%llx (%u slots of %llu MB; firmware plane at 0x%x) - debug.nmxfb_flip=%d",
+           win, kFlipSlots, slot >> 20, fGopSurf, gLatFlip);
+}
+
+void NMXVGAFB::latitudeFlipFini()
+{
+    if (fFlipLock && fRegsMap) latitudeHome();
+    for (auto &s : fFlip) if (s.md) { s.md->complete(); s.md->release(); s = {}; }
+    OSSafeReleaseNULL(fPteMap);
+    OSSafeReleaseNULL(fRegsMap);
+    if (fFlipLock) { IOLockFree(fFlipLock); fFlipLock = nullptr; }
+}
+
+// PLANE_SURF arms the plane's double-buffered registers (stride too); the switch happens at the next vblank, when
+// PLANE_SURFLIVE takes the address. Waits for that (the surface left behind is free for WindowServer only then).
+bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride)
+{
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    *(volatile uint32_t *)(regs + 0x70188 + fPlaneStep) = stride;
+    *(volatile uint32_t *)(regs + 0x7019c + fPlaneStep) = surf;
+    const uint64_t t0 = mach_absolute_time();
+    for (unsigned ms = 0; ms <= 50; ms++) {
+        if (((*(const volatile uint32_t *)(regs + 0x701ac + fPlaneStep)) & ~0xfffu) == (surf & ~0xfffu)) {
+            uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+            OSAddAtomic64((SInt64)(ns / 1000), &gLatFlipWaitUs);
+            return true;
+        }
+        IOSleep(1);
+    }
+    return false;
+}
+
+IOReturn NMXVGAFB::latitudeHome()
+{
+    if (!fFlipLock || !fRegsMap) return kIOReturnNotReady;
+    IOLockLock(fFlipLock);
+    IOReturn ret = kIOReturnSuccess;
+    if (fFlipCur >= 0) {
+        if (latitudePlaneTo(fGopSurf, fGopStride)) fFlipCur = -1;
+        else { ret = kIOReturnTimeout; VFBLOG("Latitude: the plane did not return to the firmware buffer within 50 ms"); }
+    }
+    IOLockUnlock(fFlipLock);
+    return ret;
+}
+
+IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
+{
+    if (!gLatFlip || !fFlipLock || fStopping) return kIOReturnNotReady;
+    IOMemoryDescriptor *md = OSDynamicCast(IOMemoryDescriptor, (OSObject *)r->md);
+    const uint64_t bytes = ((uint64_t)r->pitch * r->height + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    // linear planes take a stride in 64-byte units; Night Shift and calibration LUTs exist only in NMXAccel's copy
+    bool gamma = false;
+    if (fGammaLock) { IOLockLock(fGammaLock); gamma = fGamma.active; IOLockUnlock(fGammaLock); }
+    if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width ||
+        (r->pitch & 63) || r->pitch / 64 > 0x7ff || bytes > fSlotBytes || md->getLength() < bytes || gamma) {
+        OSAddAtomic64(1, &gLatFlipRefused);
+        return kIOReturnUnsupported;
+    }
+    const uint64_t t0 = mach_absolute_time();
+    IOLockLock(fFlipLock);
+    int hit = -1, victim = -1;
+    for (int i = 0; i < (int)kFlipSlots; i++) {
+        const FlipSlot &s = fFlip[i];
+        if (s.md == md && s.surfaceId == r->surfaceId && s.pitch == r->pitch) { hit = i; break; }
+        if (i == fFlipCur) continue;                            // never the one on the panel
+        if (victim < 0 || !s.md || (fFlip[victim].md && s.lastUse < fFlip[victim].lastUse)) victim = i;
+    }
+    IOReturn ret = kIOReturnSuccess;
+    if (hit < 0 && victim >= 0) {
+        FlipSlot &s = fFlip[victim];
+        if (s.md) { s.md->complete(); s.md->release(); s = {}; }
+        // the surface's pages, wired while it holds the slot, become the slot's GGTT entries (uncached, PAT 2,
+        // as i915 maps display buffers)
+        bool ok = md->prepare() == kIOReturnSuccess;
+        const bool prepared = ok;
+        volatile uint64_t *pte = (volatile uint64_t *)fPteMap->getVirtualAddress() + (uint64_t)victim * (fSlotBytes >> 12);
+        for (uint64_t off = 0; ok && off < bytes; ) {
+            IOByteCount len = 0;
+            const addr64_t pa = md->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
+            if (!pa || (pa & 0xfff) || len < PAGE_SIZE || pa >= (1ull << 46)) { ok = false; break; }
+            for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < bytes; o += PAGE_SIZE, off += PAGE_SIZE)
+                pte[off >> 12] = (pa + o) | 1ull | (1ull << 53);
+        }
+        if (ok) {
+            (void)pte[(bytes >> 12) - 1];                       // the writes are posted: read one back
+            md->retain();
+            s = { md, r->surfaceId, r->pitch, 0 };
+            hit = victim;
+            OSAddAtomic64(1, &gLatFlipFills);
+        } else {
+            if (prepared) md->complete();
+            OSAddAtomic64(1, &gLatFlipRefused);
+            ret = kIOReturnUnsupported;
+        }
+    } else if (hit < 0) ret = kIOReturnNoResources;
+    if (hit >= 0 && hit != fFlipCur) {
+        const uint32_t surf = (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
+        if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / 64))) {
+            fFlipCur = hit;
+            OSAddAtomic64(1, &gLatFlips);
+        } else {
+            // a plane that does not latch: back to the firmware buffer, and copies from now on
+            gLatFlip = 0;
+            OSAddAtomic64(1, &gLatFlipTimeouts);
+            const bool home = latitudePlaneTo(fGopSurf, fGopStride);
+            if (home) fFlipCur = -1;
+            VFBLOG("Latitude: plane flip to GGTT 0x%x did not latch in 50 ms (live 0x%x); flips off, firmware plane %s",
+                   surf, *(const volatile uint32_t *)((volatile uint8_t *)fRegsMap->getVirtualAddress() + 0x701ac + fPlaneStep),
+                   home ? "restored" : "NOT restored");
+            ret = kIOReturnTimeout;
+        }
+    }
+    if (hit >= 0) fFlip[hit].lastUse = t0;
+    IOLockUnlock(fFlipLock);
+    uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+    r->ns = ns;
+    if (ret == kIOReturnSuccess && gLatFlips <= 3 && fSwitchLogs < 8) {
+        fSwitchLogs++;
+        VFBLOG("Latitude: surface 0x%x %ux%u pitch %u on the panel by plane flip in %llu us", r->surfaceId, r->width,
+               r->height, r->pitch, ns / 1000);
+    }
+    return ret;
 }
 #endif
 
@@ -782,6 +969,7 @@ bool NMXVGAFB::start(IOService *provider)
     for(unsigned attempt=0;attempt<500&&pci->getProperty("nmxgpu-claimed")!=kOSBooleanTrue;attempt++)IOSleep(10);
     if(pci->getProperty("nmxgpu-claimed")!=kOSBooleanTrue){VFBLOG("Latitude: render driver not ready after 5 seconds; declining");return false;}
     if (!adoptLatitudePanel(pci)) return false;
+    latitudeFlipInit(pci);
 #endif
 #ifdef LATITUDE_MTL_PANEL
     bool inBar = fPanelMemoryValidated;
@@ -906,6 +1094,9 @@ bool NMXVGAFB::start(IOService *provider)
     if (const OSSymbol *fn=OSSymbol::withCStringNoCopy("latitudePanelFramebufferReady")) {
         provider->callPlatformFunction(fn,false,this,nullptr,nullptr,nullptr);fn->release();
     }
+    sysctl_register_oid(&sysctl__debug_nmxfb_flip);         sysctl_register_oid(&sysctl__debug_nmxfb_flip_count);
+    sysctl_register_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_refused);
+    sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
 #endif
     return true;
 }
@@ -915,6 +1106,10 @@ void NMXVGAFB::stop(IOService *provider)
     fStopping = true;
 #ifdef LATITUDE_MTL_PANEL
     if(fBacklight){fBacklight->disable();fBacklight->detach(this);OSSafeReleaseNULL(fBacklight);}
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_flip);         sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_count);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_refused);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_wait_us);
+    latitudeFlipFini();
 #endif
     if (OSCompareAndSwapPtr(this, nullptr, (void * volatile *)&gVtInst)) {
         sysctl_unregister_oid(&sysctl__debug_nmxfb_vtiming);
@@ -1202,6 +1397,9 @@ void NMXVGAFB::dropSurfBlob(SurfBlob &b)
  */
 IOReturn NMXVGAFB::scanoutSurface(NMXScanoutSurface *r)
 {
+#ifdef LATITUDE_MTL_PANEL
+    if (!fVirtioOn) return latitudeFlip(r);
+#endif
     if (!fVirtioOn || !fScanLock) return kIOReturnNotReady;
     IOMemoryDescriptor *md = OSDynamicCast(IOMemoryDescriptor, (OSObject *)r->md);
     if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width)
@@ -1543,6 +1741,9 @@ IOReturn NMXVGAFB::snapshot(void *dst, size_t cap, size_t *len)
 // back to the framebuffer's own buffer (NMXAccel is about to copy a frame into it)
 IOReturn NMXVGAFB::scanoutHome()
 {
+#ifdef LATITUDE_MTL_PANEL
+    if (!fVirtioOn) return latitudeHome();
+#endif
     if (!fVirtioOn || !fScanLock) return kIOReturnNotReady;
     IOLockLock(fScanLock);
     IOReturn ret = kIOReturnSuccess;

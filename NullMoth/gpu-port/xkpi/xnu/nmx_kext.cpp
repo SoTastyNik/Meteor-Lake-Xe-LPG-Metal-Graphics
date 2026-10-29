@@ -259,6 +259,12 @@ void NMXGPU::attachNow()
     registerPowerDriver(this, states, 2);
     pm_ = true;
     registerService();
+    /* the panel driver (LatitudeMTLFB) waits for the claim below, then reads the GGTT window for its plane flips */
+    uint64_t window = 0, windowBytes = 0;
+    if (nmx_xnu_scanout_window_get(&window, &windowBytes)) {
+        pci_->setProperty("latitude-flip-ggtt", window, 64);
+        pci_->setProperty("latitude-flip-ggtt-size", windowBytes, 64);
+    }
     /* NMXAccel (the Metal accelerator for this GPU) starts only on a device this driver has claimed; it declined while
        the claim was pending, so matching on the device runs again now that it is set */
     pci_->setProperty("nmxgpu-claimed", kOSBooleanTrue);
