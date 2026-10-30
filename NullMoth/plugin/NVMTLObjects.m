@@ -4972,6 +4972,9 @@ void nvmtl_mark_published(NVMTLCommandBuffer *cb, NVMTLTexture *t) {
     nvmtl_res2_cb_done(self);
     if (!_committed && _c.cb) nvmtl_vk_cmd_abandon(&_c);
     [self nvmtlReleaseCapacity];
+    // A finished buffer has no reservation left and frees nothing for the pump. With the WindowServer pipeline the
+    // submit-ahead pass holds this lock across execbuffer: the main thread spent 25% of a drag here, waiting to do nothing.
+    if (!_reservation && nvmtl_vk_windowserver_serial() && nvmtl_ws_pipeline()) return;
     @synchronized ([NVMTLCommandBuffer class]) {
         [self nvmtlReleaseReservation];
         nvmtl_pump_buffers();

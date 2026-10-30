@@ -1251,7 +1251,9 @@ static constexpr unsigned long long kVramBudget = 512ull << 20;
 static volatile SInt64 gVramUsed = 0;
 static volatile SInt64 gVramCookie = 0;
 static unsigned gVramLogs = 0;
-static constexpr unsigned kVramSlots = 4;            // WindowServer's three display surfaces and one spare
+// WindowServer's three display surfaces, and the extra ones it asks for with many windows open: at five live surfaces
+// the next on-demand 22 MB run was not there, every transaction failed to wire it and the picture froze (v18)
+static constexpr unsigned kVramSlots = 8;
 static IOBufferMemoryDescriptor *gVramSlot[kVramSlots];
 static volatile UInt32 gVramSlotBusy = 0;            // bit per slot
 static unsigned long long gVramSlotBytes = 0;
