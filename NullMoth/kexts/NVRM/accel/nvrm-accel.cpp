@@ -1547,6 +1547,16 @@ SYSCTL_INT(_debug, OID_AUTO, nmxfb_blob_ordered, CTLFLAG_RW | CTLFLAG_LOCKED, &g
            "VM display: 1 = a presented surface goes on the panel once its pixels are in its memory (the flip waits on a "
            "thread call; WindowServer's commit does not wait for the GPU), 0 = flip at once (WindowServer waits)");
 static int gNmxOrderedCopy = 1;
+static constexpr unsigned kNmxFrameBuckets = 8;
+static SInt64 gCntNmxFrameMs[kNmxFrameBuckets];
+NVACCEL_CNT(nmxfb_frames_under_9ms, gCntNmxFrameMs[0], "Frames reaching the panel under 9 ms after the previous one (120 Hz)");
+NVACCEL_CNT(nmxfb_frames_9_13ms, gCntNmxFrameMs[1], "Frames 9-13 ms after the previous one");
+NVACCEL_CNT(nmxfb_frames_13_17ms, gCntNmxFrameMs[2], "Frames 13-17 ms after the previous one (60 Hz)");
+NVACCEL_CNT(nmxfb_frames_17_25ms, gCntNmxFrameMs[3], "Frames 17-25 ms after the previous one");
+NVACCEL_CNT(nmxfb_frames_25_34ms, gCntNmxFrameMs[4], "Frames 25-34 ms after the previous one");
+NVACCEL_CNT(nmxfb_frames_34_50ms, gCntNmxFrameMs[5], "Frames 34-50 ms after the previous one");
+NVACCEL_CNT(nmxfb_frames_50_100ms, gCntNmxFrameMs[6], "Frames 50-100 ms after the previous one");
+NVACCEL_CNT(nmxfb_frames_over_100ms, gCntNmxFrameMs[7], "Frames 100-250 ms after the previous one");
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_ordered_copy, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxOrderedCopy, 0,
            "MateBook panel: 1 = a presented surface is flipped or copied on a thread call once its pixels are in place "
            "(the transaction completes then), 0 = copied at once, a late frame by the front timer");
@@ -1578,6 +1588,10 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_ord_timeout);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_front_written);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_trace);
     sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
+    sysctl_register_oid(&sysctl__debug_nmxfb_frames_under_9ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_9_13ms);
+    sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
+    sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);
+    sysctl_register_oid(&sysctl__debug_nmxfb_frames_50_100ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_over_100ms);
 #else
     sysctl_register_oid(&sysctl__debug_nvaccel_headless);
 #endif
@@ -2107,6 +2121,19 @@ static int nmxSeenFind(unsigned id)
     for (unsigned i = 0; i < 16; i++) if (gNmxSeen[i].id == id) return (int)i;
     return -1;
 }
+// the time between frames reaching the panel: what a drag or an animation looks like, which an average hides
+static void nmxFrameInterval(uint64_t now)
+{
+    static uint64_t last;
+    uint64_t ns = 0;
+    if (last) absolutetime_to_nanoseconds(now - last, &ns);
+    last = now;
+    if (!ns || ns >= 250000000ull) return;      // the first frame of a burst, not a late one
+    static const uint32_t limitsMs[kNmxFrameBuckets - 1] = { 9, 13, 17, 25, 34, 50, 100 };
+    unsigned k = 0;
+    while (k < kNmxFrameBuckets - 1 && ns >= limitsMs[k] * 1000000ull) k++;
+    OSAddAtomic64(1, &gCntNmxFrameMs[k]);
+}
 static void nmxOrderedRun(void *p0, void *)
 {
     NMXOrdered *e = (NMXOrdered *)p0;
@@ -2131,9 +2158,10 @@ static void nmxOrderedRun(void *p0, void *)
             OSAddAtomic64(1, waited >= kNmxOrdMaxMs ? &gCntNmxOrdTimeout : &gCntNmxOrdWaited);
             if (waited >= kNmxOrdMaxMs) {
                 final = false;
-                if (gCntNmxOrdTimeout <= 4)
-                    ALOG("iop: ordered flip of surface 0x%x timed out after %u ms (NMXPublished %llu, last shown %llu) - "
-                         "shown unpublished", id, waited, (unsigned long long)pub, (unsigned long long)last);
+                if (gCntNmxOrdTimeout <= 64)
+                    ALOG("iop: ordered flip of surface 0x%x timed out after %u ms (NMXPublished %llu, NMXPending %llu, last shown %llu) - "
+                         "shown unpublished", id, waited, (unsigned long long)pub,
+                         (unsigned long long)nmxSurfaceNumber(s, "NMXPending"), (unsigned long long)last);
             }
             OSAddAtomic64((SInt64)((mach_absolute_time() - t0) / 1000), &gCntNmxOrdNs);   // x86: the timebase is ns
         }
@@ -2169,6 +2197,7 @@ static void nmxOrderedRun(void *p0, void *)
              (unsigned long long)gNmxOrdFrontPub[e->head]);
     }
     if (b == 1) {
+        nmxFrameInterval(mach_absolute_time());
         gNmxOrdRefuseRun = 0;
         ((OSObject *)s)->retain();
         if (gNmxOrdFront[e->head]) ((OSObject *)gNmxOrdFront[e->head])->release();

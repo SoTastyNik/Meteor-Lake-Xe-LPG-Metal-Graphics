@@ -83,6 +83,22 @@ class NMXVGAFB : public IOFramebuffer {
     bool latitudePlaneTo(uint32_t surf, uint32_t stride);
     IOReturn latitudeFlip(NMXScanoutSurface *r);
     IOReturn latitudeHome();
+    // The hardware cursor (debug.nmxfb_hwcursor), a 256x256 ARGB plane on the panel's pipe. Without one WindowServer
+    // draws the pointer into each frame, and the rectangles it repaired under the pointer showed older pixels: a trail
+    // along its path while selecting text, as wide as the pointer. Two buffers, so an image is replaced at a vblank.
+    static constexpr uint32_t kLcDim = 256, kLcBytes = kLcDim * kLcDim * 4, kLcBlocks = 32;
+    IOBufferMemoryDescriptor *fLcBuf = nullptr;
+    uint32_t fLcGgtt = 0, fLcIdx = 0, fLcHotX = 0, fLcHotY = 0;
+    bool fLcAvailable = false, fLcArmed = false, fLcLoaded = false, fLcVisible = false;
+    SInt32 fLcX = 0, fLcY = 0;
+    void latitudeCursorInit();
+    void latitudeCursorFini();
+    void latitudeCursorWrite(bool visible);
+    IOReturn latitudeCursorImage(void *cursorImage);
+    IOReturn latitudeCursorState(SInt32 x, SInt32 y, bool visible);
+public:
+    int latitudeCursorArm();
+private:
 #endif
     IOMemoryMap *fSurfMap = nullptr;   // write-combined CPU view of the scan-out (NMXAccel's frames land here)
     struct Irq { IOFBInterruptProc proc = nullptr; OSObject *target = nullptr; void *ref = nullptr; };
@@ -410,7 +426,12 @@ public:
     IOReturn setCursorState(SInt32 x, SInt32 y, bool visible) override;
     IOReturn getAttribute(IOSelect attribute, uintptr_t *value) override {
         if (attribute == kIOWindowServerActiveAttribute) { if (value) *value = 1; return kIOReturnSuccess; }
+#ifdef LATITUDE_MTL_PANEL
+        // read once, at open: with debug.nmxfb_hwcursor off setCursorImage refuses and IOGraphics draws in software
+        if (attribute == kIOHardwareCursorAttribute) { if (value) *value = fCursorOn || fLcAvailable; return kIOReturnSuccess; }
+#else
         if (attribute == kIOHardwareCursorAttribute) { if (value) *value = fCursorOn; return kIOReturnSuccess; }
+#endif
         return IOFramebuffer::getAttribute(attribute, value);
     }
     IOReturn setAttributeForConnection(IOIndex idx, IOSelect attribute, uintptr_t value) override {
@@ -798,7 +819,7 @@ void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
     const uint64_t win = b ? b->unsigned64BitValue() : 0, bytes = n ? n->unsigned64BitValue() : 0;
     const uint64_t slot = (bytes / kFlipSlots) & ~0x3ffffull, frame = (uint64_t)fRowBytes * fHeight;
     IODeviceMemory *bar = pci->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-    if (!win || (win & 0x3ffff) || slot < frame || win + bytes > (4ull << 30) || !bar || bar->getLength() < (16ull << 20)) {
+    if (!win || (win & 0x3ffff) || slot < frame + (2ull << 20) || win + bytes > (4ull << 30) || !bar || bar->getLength() < (16ull << 20)) {
         VFBLOG("Latitude: no plane flips (GGTT window 0x%llx + 0x%llx, BAR0 %llu MB) - frames are copied", win, bytes,
                bar ? (unsigned long long)(bar->getLength() >> 20) : 0ull);
         return;
@@ -823,10 +844,12 @@ void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
     setProperty("LatitudeFlipWindow", win, 64);
     VFBLOG("Latitude: plane flips over GGTT 0x%llx (%u slots of %llu MB; firmware plane at 0x%x) - debug.nmxfb_flip=%d",
            win, kFlipSlots, slot >> 20, fGopSurf, gLatFlip);
+    latitudeCursorInit();
 }
 
 void NMXVGAFB::latitudeFlipFini()
 {
+    latitudeCursorFini();
     if (fFlipLock && fRegsMap) latitudeHome();
     for (auto &s : fFlip) if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
     OSSafeReleaseNULL(fPteMap);
@@ -853,6 +876,179 @@ bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride)
     return false;
 }
 
+static NMXVGAFB *volatile gLatInst;
+static int gLatHwCursor = 0;
+static SInt64 gLatCursorImages, gLatCursorRefused;
+static int nmxHwCursorSysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gLatHwCursor;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    NMXVGAFB *f = gLatInst;
+    if (v && (!f || (err = f->latitudeCursorArm()) != 0)) return err ? err : ENXIO;
+    gLatHwCursor = v ? 1 : 0;
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxfb_hwcursor, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0, nmxHwCursorSysctl, "I",
+            "MateBook panel: 1 = the pointer on a hardware cursor plane from its next image change, 0 = drawn by WindowServer");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_hwcursor_images, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatCursorImages,
+            "MateBook panel: pointer images loaded into the cursor plane");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_hwcursor_refused, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatCursorRefused,
+            "MateBook panel: pointer images left to WindowServer (larger than the plane, or the plane off)");
+
+void NMXVGAFB::latitudeCursorInit()
+{
+    const volatile uint8_t *regs = (const volatile uint8_t *)fRegsMap->getVirtualAddress();
+    auto rd = [&](uint32_t off) { return *(const volatile uint32_t *)(regs + off + fPlaneStep); };
+    VFBLOG("Latitude: cursor CTL 0x%x BASE 0x%x BUF 0x%x WM0 0x%x | plane BUF 0x%x WM0-3 0x%x 0x%x 0x%x 0x%x TRANS 0x%x SAGV 0x%x",
+           rd(0x70080), rd(0x70084), rd(0x7017c), rd(0x70140), rd(0x7027c), rd(0x70240), rd(0x70244), rd(0x70248), rd(0x7024c),
+           rd(0x70268), rd(0x70258));
+    fLcBuf = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryKernelUserShared |
+        kIOMemoryPhysicallyContiguous | kIOMemoryHostPhysicallyContiguous | kIOMemoryMapperNone, 2 * kLcBytes, 0x000000FFFFFFF000ull);
+    if (!fLcBuf) { VFBLOG("Latitude: no memory for the cursor plane"); return; }
+    bzero(fLcBuf->getBytesNoCopy(), 2 * kLcBytes);
+    latitudeFlushLines((const volatile uint8_t *)fLcBuf->getBytesNoCopy(), 2 * kLcBytes);
+    const uint64_t pa = fLcBuf->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
+    // the top of the flip window, above the last slot's frame
+    const uint64_t off = kFlipSlots * fSlotBytes - (1ull << 20);
+    volatile uint64_t *pte = (volatile uint64_t *)fPteMap->getVirtualAddress() + (off >> 12);
+    for (uint32_t i = 0; i < (2 * kLcBytes) >> 12; i++) pte[i] = (pa + ((uint64_t)i << 12)) | 1ull | (1ull << 53);
+    (void)pte[0];
+    fLcGgtt = (uint32_t)(fWin + off);
+    fLcAvailable = true;
+}
+
+void NMXVGAFB::latitudeCursorFini()
+{
+    if (fLcArmed && fRegsMap) { fLcVisible = false; latitudeCursorWrite(false); }
+    fLcArmed = fLcAvailable = fLcLoaded = false;
+    OSSafeReleaseNULL(fLcBuf);
+}
+
+/*
+ * Gives the cursor plane what the firmware left it without: display buffer blocks (the last ones of the primary
+ * plane's, 32 as i915 gives a single pipe's cursor) and watermarks, the primary plane's scaled by width. All of it
+ * double-buffered: the plane's new allocation is armed by a PLANE_SURF write and has to be live before the blocks go
+ * to the cursor. Refused when the primary plane could not spare them.
+ */
+int NMXVGAFB::latitudeCursorArm()
+{
+    if (fLcArmed) return 0;
+    if (!fLcAvailable || !fFlipLock) return ENXIO;
+    IOLockLock(fFlipLock);
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    auto rd = [&](uint32_t off) { return *(const volatile uint32_t *)(regs + off + fPlaneStep); };
+    auto wr = [&](uint32_t off, uint32_t v) { *(volatile uint32_t *)(regs + off + fPlaneStep) = v; };
+    const uint32_t cfg = rd(0x7027c), start = cfg & 0xfff, end = (cfg >> 16) & 0xfff;      // both inclusive
+    int err = 0;
+    if (!(rd(0x7017c) >> 16)) {
+        const uint32_t size = end >= start ? end - start + 1 : 0;
+        bool fits = size > 2 * kLcBlocks;
+        for (uint32_t i = 0; fits && i < 8; i++) {
+            const uint32_t wm = rd(0x70240 + i * 4);
+            if ((wm >> 31) && (wm & 0xfff) >= size - kLcBlocks) fits = false;
+        }
+        if (!fits) err = ENOSPC;
+        else {
+            wr(0x7027c, ((end - kLcBlocks) << 16) | start);
+            wr(0x7019c, rd(0x7019c));
+            const uint32_t f0 = rd(0x70040);
+            for (unsigned ms = 0; ms < 50 && rd(0x70040) - f0 < 2; ms++) IOSleep(1);
+            if (rd(0x70040) - f0 < 2) err = ETIMEDOUT;
+            else wr(0x7017c, (end << 16) | (end - kLcBlocks + 1));
+        }
+    }
+    if (!err) {
+        auto scaled = [&](uint32_t wm) {
+            const uint32_t blocks = ((wm & 0xfff) * kLcDim + fWidth - 1) / fWidth + 1;
+            return (wm >> 31) && blocks < kLcBlocks ? (wm & 0xffffc000u) | blocks : 0u;
+        };
+        // a level the cursor cannot meet stays off, and with it the levels above
+        bool on = true;
+        for (uint32_t i = 0; i < 8; i++) {
+            const uint32_t wm = on ? scaled(rd(0x70240 + i * 4)) : 0;
+            on = wm != 0;
+            wr(0x70140 + i * 4, wm);
+        }
+        wr(0x70168, scaled(rd(0x70268))); wr(0x70158, scaled(rd(0x70258))); wr(0x7015c, scaled(rd(0x7025c)));
+        fLcArmed = true;
+    }
+    VFBLOG("Latitude: cursor plane armed: %d (plane BUF 0x%x -> 0x%x, cursor BUF 0x%x WM0 0x%x)", err, cfg, rd(0x7027c), rd(0x7017c), rd(0x70140));
+    IOLockUnlock(fFlipLock);
+    return err;
+}
+
+// CUR_BASE arms everything, and any cursor register write cancels an armed update: always the three, in this order
+void NMXVGAFB::latitudeCursorWrite(bool visible)
+{
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress() + fPlaneStep;
+    SInt32 x = fLcX, y = fLcY;
+    uint32_t pos = 0;
+    if (x < 0) { pos |= 1u << 15; x = -x; }
+    if (y < 0) { pos |= 1u << 31; y = -y; }
+    pos |= ((uint32_t)x & 0x7fff) | (((uint32_t)y & 0x7fff) << 16);
+    *(volatile uint32_t *)(regs + 0x70080) = visible ? 0x23u : 0u;     // MCURSOR_MODE_256_ARGB_AX
+    *(volatile uint32_t *)(regs + 0x70088) = pos;
+    *(volatile uint32_t *)(regs + 0x70084) = visible ? fLcGgtt + fLcIdx * kLcBytes : 0u;
+}
+
+IOReturn NMXVGAFB::latitudeCursorImage(void *cursorImage)
+{
+    if (!fLcAvailable) return kIOReturnUnsupported;
+    const bool on = gLatHwCursor && fLcArmed;
+    UInt32 *staging = on ? (UInt32 *)IOMalloc(kLcBytes) : nullptr;
+    bool converted = false;
+    IOHardwareCursorInfo ci; bzero(&ci, sizeof ci);
+    if (staging) {
+        bzero(staging, kLcBytes);
+        IOHardwareCursorDescriptor d; bzero(&d, sizeof d);
+        d.majorVersion = kHardwareCursorDescriptorMajorVersion;
+        d.minorVersion = kHardwareCursorDescriptorMinorVersion;
+        d.width = kLcDim; d.height = kLcDim;
+        d.bitDepth = 32;
+        d.supportedSpecialEncodings = kTransparentEncodedPixel;
+        ci.majorVersion = kHardwareCursorInfoMajorVersion;
+        ci.minorVersion = kHardwareCursorInfoMinorVersion;
+        ci.hardwareCursorData = (UInt8 *)staging;
+        converted = convertCursorImage(cursorImage, &d, &ci) && ci.cursorWidth && ci.cursorWidth <= kLcDim &&
+                    ci.cursorHeight && ci.cursorHeight <= kLcDim;
+    }
+    if (!converted) {
+        // the plane off, or an image larger than it: IOGraphics draws this one in software
+        if (staging) IOFree(staging, kLcBytes);
+        if (fLcVisible) { fLcVisible = false; latitudeCursorWrite(false); }
+        fLcLoaded = false;
+        OSAddAtomic64(1, &gLatCursorRefused);
+        return kIOReturnUnsupported;
+    }
+    // the free buffer: straight alpha from convertCursorImage, premultiplied for the plane
+    const uint32_t next = fLcIdx ^ 1;
+    UInt32 *px = (UInt32 *)fLcBuf->getBytesNoCopy() + (size_t)next * kLcDim * kLcDim;
+    for (uint32_t y = 0; y < kLcDim; y++)
+        for (uint32_t x = 0; x < kLcDim; x++) {
+            uint32_t v = (y < ci.cursorHeight && x < ci.cursorWidth) ? staging[y * ci.cursorWidth + x] : 0;
+            const uint32_t a = v >> 24;
+            if (a != 255) v = (a << 24) | ((((v >> 16) & 255) * a / 255) << 16) | ((((v >> 8) & 255) * a / 255) << 8) | ((v & 255) * a / 255);
+            px[y * kLcDim + x] = v;
+        }
+    IOFree(staging, kLcBytes);
+    latitudeFlushLines((const volatile uint8_t *)px, kLcBytes);
+    fLcIdx = next; fLcHotX = ci.cursorHotSpotX; fLcHotY = ci.cursorHotSpotY; fLcLoaded = true;
+    if (OSAddAtomic64(1, &gLatCursorImages) < 4)
+        VFBLOG("Latitude: cursor image %ux%u hot %u,%u", (unsigned)ci.cursorWidth, (unsigned)ci.cursorHeight, fLcHotX, fLcHotY);
+    if (fLcVisible) latitudeCursorWrite(true);
+    return kIOReturnSuccess;
+}
+
+IOReturn NMXVGAFB::latitudeCursorState(SInt32 x, SInt32 y, bool visible)
+{
+    if (!fLcAvailable) return kIOReturnUnsupported;
+    if (!fLcLoaded) return kIOReturnSuccess;
+    fLcX = x; fLcY = y;
+    if (visible != fLcVisible || visible) { fLcVisible = visible; latitudeCursorWrite(visible); }
+    return kIOReturnSuccess;
+}
+
 IOReturn NMXVGAFB::latitudeHome()
 {
     if (!fFlipLock || !fRegsMap) return kIOReturnNotReady;
@@ -875,7 +1071,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
     bool gamma = false;
     if (fGammaLock) { IOLockLock(fGammaLock); gamma = fGamma.active; IOLockUnlock(fGammaLock); }
     if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width ||
-        (r->pitch & 63) || r->pitch / 64 > 0x7ff || bytes > fSlotBytes || md->getLength() < bytes || gamma) {
+        (r->pitch & 63) || r->pitch / 64 > 0x7ff || bytes > fSlotBytes - (2ull << 20) || md->getLength() < bytes || gamma) {
         OSAddAtomic64(1, &gLatFlipRefused);
         return kIOReturnUnsupported;
     }
@@ -1125,6 +1321,9 @@ bool NMXVGAFB::start(IOService *provider)
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush_us);
+    gLatInst = this;
+    sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor);     sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor_images);
+    sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor_refused);
 #endif
     return true;
 }
@@ -1138,6 +1337,9 @@ void NMXVGAFB::stop(IOService *provider)
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_wait_us);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush_us);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor);     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_images);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_refused);
+    gLatInst = nullptr;
     latitudeFlipFini();
 #endif
     if (OSCompareAndSwapPtr(this, nullptr, (void * volatile *)&gVtInst)) {
@@ -1552,6 +1754,9 @@ void NMXVGAFB::cursorShow(bool visible, SInt32 x, SInt32 y)
 
 IOReturn NMXVGAFB::setCursorImage(void *cursorImage)
 {
+#ifdef LATITUDE_MTL_PANEL
+    if (!fVirtioOn) return latitudeCursorImage(cursorImage);
+#endif
     if (!fCursorOn) return kIOReturnUnsupported;
     UInt32 *px = (UInt32 *)fCursorBuf->getBytesNoCopy();
     IOHardwareCursorDescriptor d; bzero(&d, sizeof d);
@@ -1593,6 +1798,9 @@ IOReturn NMXVGAFB::setCursorImage(void *cursorImage)
 
 IOReturn NMXVGAFB::setCursorState(SInt32 x, SInt32 y, bool visible)
 {
+#ifdef LATITUDE_MTL_PANEL
+    if (!fVirtioOn) return latitudeCursorState(x, y, visible);
+#endif
     if (!fCursorOn) return kIOReturnUnsupported;
     visible = visible && fCursorHaveImage;
     fCursorX = x; fCursorY = y;
