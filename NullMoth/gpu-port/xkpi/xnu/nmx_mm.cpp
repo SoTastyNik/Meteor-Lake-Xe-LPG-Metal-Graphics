@@ -199,6 +199,33 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
     return 0;
 }
 
+/* What a GPU submission costs: Mesa lists every memory object of the device in each execbuffer, so WindowServer's
+   imported surfaces can make the ioctl grow with the number of windows */
+extern "C" uint64_t nmx_xnu_execbuf_begin(void)
+{
+    return mach_absolute_time();
+}
+
+extern "C" void nmx_xnu_execbuf_end(uint64_t t0, unsigned objects)
+{
+    static uint64_t s_calls, s_objects, s_ns, s_max;
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+    __atomic_add_fetch(&s_objects, objects, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&s_ns, ns, __ATOMIC_RELAXED);
+    if (ns > s_max)
+        s_max = ns;
+    const uint64_t calls = __atomic_add_fetch(&s_calls, 1, __ATOMIC_RELAXED);
+    if ((calls & 1023) == 0) {
+        const uint64_t objs = __atomic_exchange_n(&s_objects, 0, __ATOMIC_RELAXED);
+        const uint64_t total = __atomic_exchange_n(&s_ns, 0, __ATOMIC_RELAXED);
+        const uint64_t max = __atomic_exchange_n(&s_max, 0, __ATOMIC_RELAXED);
+        IOLog("NullMoth GPU: execbuffer stats: last 1024 of %llu: %llu objects each, %llu us each, %llu us at most\n",
+              (unsigned long long)calls, (unsigned long long)(objs / 1024), (unsigned long long)(total / 1024000),
+              (unsigned long long)(max / 1000));
+    }
+}
+
 extern "C" void nmx_xnu_user_unwire(void *handle)
 {
     UserWire *w = (UserWire *)handle;

@@ -3613,7 +3613,18 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 		return -EFAULT;
 	}
 
+#ifdef NMXKPI
+	{
+		extern u64 nmx_xnu_execbuf_begin(void);
+		extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
+		const u64 t0 = nmx_xnu_execbuf_begin();
+
+		err = i915_gem_do_execbuffer(dev, file, args, exec2_list);
+		nmx_xnu_execbuf_end(t0, args->buffer_count);
+	}
+#else
 	err = i915_gem_do_execbuffer(dev, file, args, exec2_list);
+#endif
 
 	/*
 	 * Now that we have begun execution of the batchbuffer, we ignore

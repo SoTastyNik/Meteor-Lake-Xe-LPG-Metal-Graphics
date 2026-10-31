@@ -780,7 +780,7 @@ bool NMXVGAFB::adoptLatitudePanel(IOPCIDevice *pci)
     return found;
 }
 
-static int gLatFlip = 0;
+static int gLatFlip = 1;
 static SInt64 gLatFlips, gLatFlipFills, gLatFlipRefused, gLatFlipTimeouts, gLatFlipWaitUs;
 /*
  * The display engine reads memory without snooping the CPU caches. With the first plane flips (v18) the panel showed
@@ -877,7 +877,7 @@ bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride)
 }
 
 static NMXVGAFB *volatile gLatInst;
-static int gLatHwCursor = 0;
+static int gLatHwCursor = 1;
 static SInt64 gLatCursorImages, gLatCursorRefused;
 static int nmxHwCursorSysctl SYSCTL_HANDLER_ARGS
 {
@@ -1317,6 +1317,8 @@ bool NMXVGAFB::start(IOService *provider)
     if (const OSSymbol *fn=OSSymbol::withCStringNoCopy("latitudePanelFramebufferReady")) {
         provider->callPlatformFunction(fn,false,this,nullptr,nullptr,nullptr);fn->release();
     }
+    // before WindowServer starts: IOGraphics may hold a spin lock around setCursorImage, this waits for vblanks
+    if (gLatHwCursor && fLcAvailable && latitudeCursorArm()) gLatHwCursor = 0;
     sysctl_register_oid(&sysctl__debug_nmxfb_flip);         sysctl_register_oid(&sysctl__debug_nmxfb_flip_count);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
