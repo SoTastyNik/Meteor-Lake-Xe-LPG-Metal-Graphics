@@ -3658,14 +3658,25 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 		nmx_xnu_execbuf_end(t0, args->buffer_count);
 		{
 			/* a slow GPU shows up here as waits for ring space: what frequency does it run at */
-			static unsigned int nmx_calls;
+			static unsigned int nmx_calls, nmx_top, nmx_sum, nmx_awake;
+			struct intel_rps *rps = &to_gt(to_i915(dev))->rps;
 
-			if ((++nmx_calls & 1023) == 0) {
-				struct intel_rps *rps = &to_gt(to_i915(dev))->rps;
+			/* the counter reads 0 while the GT sleeps: sampled, over the requests' own time */
+			if ((++nmx_calls & 15) == 0) {
+				const u32 f = intel_rps_read_actual_frequency(rps);
 
-				drm_info(dev, "Latitude MTL: execbuffer GT MHz: actual %u requested %u min %u max %u\n",
-					 intel_rps_read_actual_frequency(rps), intel_rps_get_requested_frequency(rps),
+				if (f) {
+					nmx_awake++;
+					nmx_sum += f;
+					nmx_top = max(nmx_top, f);
+				}
+			}
+			if ((nmx_calls & 1023) == 0) {
+				drm_info(dev, "Latitude MTL: execbuffer GT MHz: awake in %u of 64 samples, avg %u top %u, punit request %u, limits %u-%u\n",
+					 nmx_awake, nmx_awake ? nmx_sum / nmx_awake : 0, nmx_top,
+					 intel_rps_read_punit_req_frequency(rps),
 					 intel_rps_get_min_frequency(rps), intel_rps_get_max_frequency(rps));
+				nmx_awake = nmx_sum = nmx_top = 0;
 			}
 		}
 	}

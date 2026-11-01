@@ -207,6 +207,43 @@ extern "C" uint64_t nmx_xnu_execbuf_begin(void)
 }
 
 static uint64_t s_phase_ns[8], s_phase_max[8];
+static uint64_t s_vma_ns[3], s_vma_max[3], s_vma_bytes, s_vma_binds, s_vma_userptr, s_vma_user_bytes;
+
+/* A vma's first binding, the slow path of a pin: 0 its pages, 1 page table allocation, 2 the binding */
+extern "C" void nmx_xnu_vma_stage(int stage, uint64_t *t)
+{
+    const uint64_t now = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(now - *t, &ns);
+    *t = now;
+    __atomic_add_fetch(&s_vma_ns[stage], ns, __ATOMIC_RELAXED);
+    if (ns > s_vma_max[stage])
+        s_vma_max[stage] = ns;
+}
+
+extern "C" void nmx_xnu_vma_done(uint64_t bytes, int userptr)
+{
+    __atomic_add_fetch(&s_vma_bytes, bytes, __ATOMIC_RELAXED);
+    if (userptr) {
+        __atomic_add_fetch(&s_vma_userptr, 1, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&s_vma_user_bytes, bytes, __ATOMIC_RELAXED);
+    }
+    const uint64_t n = __atomic_add_fetch(&s_vma_binds, 1, __ATOMIC_RELAXED);
+    if (n & 255)
+        return;
+    const uint64_t all = __atomic_exchange_n(&s_vma_bytes, 0, __ATOMIC_RELAXED);
+    const uint64_t user = __atomic_exchange_n(&s_vma_userptr, 0, __ATOMIC_RELAXED);
+    const uint64_t userBytes = __atomic_exchange_n(&s_vma_user_bytes, 0, __ATOMIC_RELAXED);
+    uint64_t avg[3], top[3];
+    for (int i = 0; i < 3; i++) {
+        avg[i] = __atomic_exchange_n(&s_vma_ns[i], 0, __ATOMIC_RELAXED) / 256000;
+        top[i] = __atomic_exchange_n(&s_vma_max[i], 0, __ATOMIC_RELAXED) / 1000;
+    }
+    IOLog("NullMoth GPU: execbuffer new bindings: 256 of %llu, %llu MB, %llu userptr (%llu MB); us avg/max: pages %llu/%llu tables %llu/%llu bind %llu/%llu\n",
+          (unsigned long long)n, (unsigned long long)(all >> 20), (unsigned long long)user,
+          (unsigned long long)(userBytes >> 20), (unsigned long long)avg[0], (unsigned long long)top[0],
+          (unsigned long long)avg[1], (unsigned long long)top[1], (unsigned long long)avg[2], (unsigned long long)top[2]);
+}
 
 /* the time since *t goes to a phase: 0 object lookup, 1 engine pin and ring throttle, 2 object locks, 3 vma pins, 4 reserve and
    parse, 5 request, 6 move to GPU, 7 add to the engine */
