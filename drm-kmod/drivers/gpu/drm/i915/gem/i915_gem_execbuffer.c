@@ -19,6 +19,7 @@
 #include "gt/intel_gt_buffer_pool.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
+#include "gt/intel_rps.h"
 
 #include "pxp/intel_pxp.h"
 
@@ -247,7 +248,16 @@ struct eb_fence {
 	struct dma_fence_chain *chain_fence;
 };
 
+#ifdef NMXKPI
+extern u64 nmx_xnu_execbuf_begin(void);
+extern void nmx_xnu_execbuf_mark(int phase, u64 *t);
+extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
+#endif
+
 struct i915_execbuffer {
+#ifdef NMXKPI
+	u64 nmx_t; /* the current phase's start, for the execbuffer statistics */
+#endif
 	struct drm_i915_private *i915; /** i915 backpointer */
 	struct drm_file *file; /** per-file lookup tables and limits */
 	struct drm_i915_gem_execbuffer2 *args; /** ioctl parameters */
@@ -1022,6 +1032,9 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 	INIT_LIST_HEAD(&eb->unbound);
 
 	err = eb_lock_vmas(eb);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(2, &eb->nmx_t);
+#endif
 	if (err)
 		return err;
 
@@ -1059,6 +1072,9 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 			   eb_vma_misplaced(&eb->exec[i], vma, ev->flags));
 	}
 
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(3, &eb->nmx_t);
+#endif
 	if (!list_empty(&eb->unbound))
 		return eb_reserve(eb);
 
@@ -1922,6 +1938,9 @@ static int eb_relocate_parse(struct i915_execbuffer *eb)
 
 retry:
 	err = eb_pin_engine(eb, throttle);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(1, &eb->nmx_t);
+#endif
 	if (err) {
 		if (err != -EDEADLK)
 			return err;
@@ -3363,12 +3382,6 @@ eb_requests_create(struct i915_execbuffer *eb, struct dma_fence *in_fence,
 	return out_fence;
 }
 
-#ifdef NMXKPI
-extern u64 nmx_xnu_execbuf_begin(void);
-extern void nmx_xnu_execbuf_mark(int phase, u64 *t);
-extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
-#endif
-
 static int
 i915_gem_do_execbuffer(struct drm_device *dev,
 		       struct drm_file *file,
@@ -3381,9 +3394,6 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	struct sync_file *out_fence = NULL;
 	int out_fence_fd = -1;
 	int err;
-#ifdef NMXKPI
-	u64 nmx_t = 0;
-#endif
 
 	BUILD_BUG_ON(__EXEC_INTERNAL_FLAGS & ~__I915_EXEC_ILLEGAL_FLAGS);
 	BUILD_BUG_ON(__EXEC_OBJECT_INTERNAL_FLAGS &
@@ -3477,7 +3487,7 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 		goto err_context;
 
 #ifdef NMXKPI
-	nmx_t = nmx_xnu_execbuf_begin();
+	eb.nmx_t = nmx_xnu_execbuf_begin();
 #endif
 	err = eb_lookup_vmas(&eb);
 	if (err) {
@@ -3488,7 +3498,7 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	i915_gem_ww_ctx_init(&eb.ww, true);
 
 #ifdef NMXKPI
-	nmx_xnu_execbuf_mark(0, &nmx_t);
+	nmx_xnu_execbuf_mark(0, &eb.nmx_t);
 #endif
 	err = eb_relocate_parse(&eb);
 	if (err) {
@@ -3509,7 +3519,7 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 		goto err_vma;
 
 #ifdef NMXKPI
-	nmx_xnu_execbuf_mark(1, &nmx_t);
+	nmx_xnu_execbuf_mark(4, &eb.nmx_t);
 #endif
 	out_fence = eb_requests_create(&eb, in_fence, out_fence_fd);
 	if (IS_ERR(out_fence)) {
@@ -3522,18 +3532,18 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	}
 
 #ifdef NMXKPI
-	nmx_xnu_execbuf_mark(2, &nmx_t);
+	nmx_xnu_execbuf_mark(5, &eb.nmx_t);
 #endif
 	err = eb_submit(&eb);
 #ifdef NMXKPI
-	nmx_xnu_execbuf_mark(3, &nmx_t);
+	nmx_xnu_execbuf_mark(6, &eb.nmx_t);
 #endif
 
 err_request:
 	eb_requests_get(&eb);
 	err = eb_requests_add(&eb, err);
 #ifdef NMXKPI
-	nmx_xnu_execbuf_mark(4, &nmx_t);
+	nmx_xnu_execbuf_mark(7, &eb.nmx_t);
 #endif
 
 	if (eb.fences)
@@ -3646,6 +3656,18 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 
 		err = i915_gem_do_execbuffer(dev, file, args, exec2_list);
 		nmx_xnu_execbuf_end(t0, args->buffer_count);
+		{
+			/* a slow GPU shows up here as waits for ring space: what frequency does it run at */
+			static unsigned int nmx_calls;
+
+			if ((++nmx_calls & 1023) == 0) {
+				struct intel_rps *rps = &to_gt(to_i915(dev))->rps;
+
+				drm_info(dev, "Latitude MTL: execbuffer GT MHz: actual %u requested %u min %u max %u\n",
+					 intel_rps_read_actual_frequency(rps), intel_rps_get_requested_frequency(rps),
+					 intel_rps_get_min_frequency(rps), intel_rps_get_max_frequency(rps));
+			}
+		}
 	}
 #else
 	err = i915_gem_do_execbuffer(dev, file, args, exec2_list);
