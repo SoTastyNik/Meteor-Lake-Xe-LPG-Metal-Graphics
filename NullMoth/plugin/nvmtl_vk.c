@@ -1809,9 +1809,79 @@ static VkResult nvmtl_vk_alloc_image_mem(const VkMemoryRequirements *mr, VkDevic
     }
     return r;
 }
+/*
+ * WindowServer's image memory, kept for the next image of its size. Core Animation asks for a new texture for each
+ * blur, backdrop and offscreen pass (CA::OGL::MetalContext::create_surface), and Metal's are cheap; here each was a new
+ * GEM object whose pages the first execbuffer allocates at ~2 ms/MB. A drag or a Launchpad folder allocated up to 1.1 GB
+ * per 256 bindings, 45 ms for each 22 MB surface, and that one call held up the whole queue. A texture's contents start
+ * undefined, so the same object serves the next one; like the buffer park this relies on a texture being released only
+ * after the command buffers that use it. /Library/GPUBundles/nvmtl-ws-no-imagepark turns it off.
+ */
+#define NVMTL_IMGPARK_N     32
+#define NVMTL_IMGPARK_BYTES (512ull << 20)
+#define NVMTL_IMGPARK_MIN   (1ull << 20)
+static pthread_mutex_t g_ipark_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; } g_ipark[NVMTL_IMGPARK_N];
+static unsigned g_ipark_n;
+static uint64_t g_ipark_bytes;
+static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted;
+static int ipark_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        on = nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-no-imagepark", F_OK) != 0;
+        if (nvmtl_vk_windowserver_serial()) nvlog("image park: %s", on ? "a dead image's memory is reused by the next image of its size" : "OFF");
+    }
+    return on;
+}
+static void ipark_census(void)
+{
+    const uint64_t n = atomic_load(&g_ipark_parked) + atomic_load(&g_ipark_reused);
+    if (n & (n - 1)) return;
+    nvlog("image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB", (unsigned long long)atomic_load(&g_ipark_parked),
+          (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted), g_ipark_n,
+          (unsigned long long)(g_ipark_bytes >> 20));
+}
+static VkDeviceMemory ipark_take(const VkMemoryRequirements *mr)
+{
+    if (mr->size < NVMTL_IMGPARK_MIN || !ipark_on()) return VK_NULL_HANDLE;
+    VkDeviceMemory got = VK_NULL_HANDLE;
+    pthread_mutex_lock(&g_ipark_lock);
+    for (unsigned k = g_ipark_n; k-- > 0; )
+        if (g_ipark[k].size == mr->size && (mr->memoryTypeBits & (1u << g_ipark[k].type))) {
+            got = g_ipark[k].mem; g_ipark_bytes -= g_ipark[k].size;
+            memmove(&g_ipark[k], &g_ipark[k + 1], (g_ipark_n - k - 1) * sizeof g_ipark[0]); g_ipark_n--;
+            break;
+        }
+    pthread_mutex_unlock(&g_ipark_lock);
+    if (got) { atomic_fetch_add(&g_ipark_reused, 1); ipark_census(); }
+    return got;
+}
+// true: the image's memory is parked; the caller destroys the image and frees nothing
+static int ipark_put(const nvk_image *i)
+{
+    if (i->placed || !i->mem || i->sysmem || i->alloc < NVMTL_IMGPARK_MIN || i->alloc > NVMTL_IMGPARK_BYTES / 4 || !ipark_on()) return 0;
+    VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, (VkImage)i->img, &mr);
+    const int type = memtype(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type < 0 || mr.size != i->alloc) return 0;
+    VkDeviceMemory ev[NVMTL_IMGPARK_N + 1]; unsigned nev = 0;
+    pthread_mutex_lock(&g_ipark_lock);
+    while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES)) {
+        ev[nev++] = g_ipark[0].mem; g_ipark_bytes -= g_ipark[0].size;
+        memmove(&g_ipark[0], &g_ipark[1], (g_ipark_n - 1) * sizeof g_ipark[0]); g_ipark_n--;
+    }
+    g_ipark[g_ipark_n].mem = (VkDeviceMemory)i->mem; g_ipark[g_ipark_n].size = i->alloc; g_ipark[g_ipark_n].type = (uint32_t)type;
+    g_ipark_n++; g_ipark_bytes += i->alloc;
+    pthread_mutex_unlock(&g_ipark_lock);
+    for (unsigned k = 0; k < nev; k++) pvkFreeMemory(g_dev, ev[k], NULL);
+    if (nev) atomic_fetch_add(&g_ipark_evicted, nev);
+    atomic_fetch_add(&g_ipark_parked, 1); ipark_census();
+    return 1;
+}
 static VkResult nvmtl_alloc_opaque_image_mem(const VkMemoryRequirements *mr, void **out, uint32_t *sysmem, const char *what)
 {
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceMemory memory = ipark_take(mr);
+    if (memory) { *out = memory; *sysmem = 0; return VK_SUCCESS; }
     VkResult result = nvmtl_vk_alloc_image_mem(mr, &memory, sysmem, what);
     if (result == VK_SUCCESS) {
         *out = memory;
@@ -5651,8 +5721,9 @@ void nvmtl_vk_image_destroy(nvk_image *i)
     nvmtl_vk_image_upload_barrier(i);   // an async upload must finish before we free this image's memory (#96)
     g_img_gone++;
     if (i->view) pvkDestroyImageView(g_dev, (VkImageView)i->view, NULL);
+    const int parked = ipark_put(i);
     pvkDestroyImage(g_dev, (VkImage)i->img, NULL);
-    if (!i->placed && i->mem) { pvkFreeMemory(g_dev, (VkDeviceMemory)i->mem, NULL); g_alloc_bytes -= i->alloc; if (i->sysmem) { g_sys_bytes -= i->alloc; g_sys_align -= (i->alloc + 65535ull) & ~65535ull; } else { g_vram_bytes -= i->alloc; g_img_align -= (i->alloc + 65535ull) & ~65535ull; }    }
+    if (!i->placed && i->mem) { if (!parked) pvkFreeMemory(g_dev, (VkDeviceMemory)i->mem, NULL); g_alloc_bytes -= i->alloc; if (i->sysmem) { g_sys_bytes -= i->alloc; g_sys_align -= (i->alloc + 65535ull) & ~65535ull; } else { g_vram_bytes -= i->alloc; g_img_align -= (i->alloc + 65535ull) & ~65535ull; }    }
     memset(i, 0, sizeof *i);
 }
 
