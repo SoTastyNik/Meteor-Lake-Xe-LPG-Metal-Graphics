@@ -3363,6 +3363,12 @@ eb_requests_create(struct i915_execbuffer *eb, struct dma_fence *in_fence,
 	return out_fence;
 }
 
+#ifdef NMXKPI
+extern u64 nmx_xnu_execbuf_begin(void);
+extern void nmx_xnu_execbuf_mark(int phase, u64 *t);
+extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
+#endif
+
 static int
 i915_gem_do_execbuffer(struct drm_device *dev,
 		       struct drm_file *file,
@@ -3375,6 +3381,9 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	struct sync_file *out_fence = NULL;
 	int out_fence_fd = -1;
 	int err;
+#ifdef NMXKPI
+	u64 nmx_t = 0;
+#endif
 
 	BUILD_BUG_ON(__EXEC_INTERNAL_FLAGS & ~__I915_EXEC_ILLEGAL_FLAGS);
 	BUILD_BUG_ON(__EXEC_OBJECT_INTERNAL_FLAGS &
@@ -3467,6 +3476,9 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	if (unlikely(err))
 		goto err_context;
 
+#ifdef NMXKPI
+	nmx_t = nmx_xnu_execbuf_begin();
+#endif
 	err = eb_lookup_vmas(&eb);
 	if (err) {
 		eb_release_vmas(&eb, true);
@@ -3475,6 +3487,9 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 
 	i915_gem_ww_ctx_init(&eb.ww, true);
 
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(0, &nmx_t);
+#endif
 	err = eb_relocate_parse(&eb);
 	if (err) {
 		/*
@@ -3493,6 +3508,9 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 	if (err)
 		goto err_vma;
 
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(1, &nmx_t);
+#endif
 	out_fence = eb_requests_create(&eb, in_fence, out_fence_fd);
 	if (IS_ERR(out_fence)) {
 		err = PTR_ERR(out_fence);
@@ -3503,11 +3521,20 @@ i915_gem_do_execbuffer(struct drm_device *dev,
 			goto err_vma;
 	}
 
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(2, &nmx_t);
+#endif
 	err = eb_submit(&eb);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(3, &nmx_t);
+#endif
 
 err_request:
 	eb_requests_get(&eb);
 	err = eb_requests_add(&eb, err);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_mark(4, &nmx_t);
+#endif
 
 	if (eb.fences)
 		signal_fence_array(&eb, eb.composite_fence ?
@@ -3615,8 +3642,6 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 
 #ifdef NMXKPI
 	{
-		extern u64 nmx_xnu_execbuf_begin(void);
-		extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
 		const u64 t0 = nmx_xnu_execbuf_begin();
 
 		err = i915_gem_do_execbuffer(dev, file, args, exec2_list);

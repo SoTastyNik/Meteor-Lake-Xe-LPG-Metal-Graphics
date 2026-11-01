@@ -206,6 +206,20 @@ extern "C" uint64_t nmx_xnu_execbuf_begin(void)
     return mach_absolute_time();
 }
 
+static uint64_t s_phase_ns[5], s_phase_max[5];
+
+/* the time since *t goes to a phase: 0 object lookup, 1 lock/bind/relocate, 2 request, 3 move to GPU, 4 add to the engine */
+extern "C" void nmx_xnu_execbuf_mark(int phase, uint64_t *t)
+{
+    const uint64_t now = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(now - *t, &ns);
+    *t = now;
+    __atomic_add_fetch(&s_phase_ns[phase], ns, __ATOMIC_RELAXED);
+    if (ns > s_phase_max[phase])
+        s_phase_max[phase] = ns;
+}
+
 extern "C" void nmx_xnu_execbuf_end(uint64_t t0, unsigned objects)
 {
     static uint64_t s_calls, s_objects, s_ns, s_max;
@@ -223,6 +237,15 @@ extern "C" void nmx_xnu_execbuf_end(uint64_t t0, unsigned objects)
         IOLog("NullMoth GPU: execbuffer stats: last 1024 of %llu: %llu objects each, %llu us each, %llu us at most\n",
               (unsigned long long)calls, (unsigned long long)(objs / 1024), (unsigned long long)(total / 1024000),
               (unsigned long long)(max / 1000));
+        uint64_t avg[5], top[5];
+        for (int i = 0; i < 5; i++) {
+            avg[i] = __atomic_exchange_n(&s_phase_ns[i], 0, __ATOMIC_RELAXED) / 1024000;
+            top[i] = __atomic_exchange_n(&s_phase_max[i], 0, __ATOMIC_RELAXED) / 1000;
+        }
+        IOLog("NullMoth GPU: execbuffer phases, us avg/max: lookup %llu/%llu bind %llu/%llu request %llu/%llu move %llu/%llu add %llu/%llu\n",
+              (unsigned long long)avg[0], (unsigned long long)top[0], (unsigned long long)avg[1], (unsigned long long)top[1],
+              (unsigned long long)avg[2], (unsigned long long)top[2], (unsigned long long)avg[3], (unsigned long long)top[3],
+              (unsigned long long)avg[4], (unsigned long long)top[4]);
     }
 }
 
