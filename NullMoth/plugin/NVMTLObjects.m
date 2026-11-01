@@ -14,6 +14,7 @@ void nvlog(const char *fmt, ...);
 #import "NVMTLObjects.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <objc/objc-sync.h>
 static int nvmtl_trace_on(void);
 static void nvtrace_emit(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 // the arguments are evaluated only while tracing: draws pass strings converted per call (UTF8String), which cost 15% of
@@ -4890,6 +4891,7 @@ static int nvmtl_flips_ordered(void) {
     static int ws = -1;
     if (ws < 0) ws = (getprogname() && !strcmp(getprogname(), "WindowServer")) ? 1 : 0;
     [self commit];
+    if (ws && nvmtl_vk_windowserver_serial() && nvmtl_ws_nowait() && nvmtl_flips_ordered()) return self.status != MTLCommandBufferStatusError;
     if (ws && !nvmtl_flips_ordered()) [self waitUntilCompleted]; else [self waitUntilScheduled];
     return self.status != MTLCommandBufferStatusError;
 }

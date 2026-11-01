@@ -19,6 +19,11 @@
  *                                                keeps several in flight) instead of one submit-and-wait at a time.
  *                                                Its main thread spent 27% of a drag waiting to be scheduled behind
  *                                                the previous command buffer's GPU work (v18 sample). Experimental.
+ *   /Library/GPUBundles/nvmtl-ws-submit-locked   keep the command buffer class lock across a submit-ahead execbuffer, as
+ *                                                before v27. Default (absent): released around it.
+ *   /Library/GPUBundles/nvmtl-ws-nowait          with early schedule and the pipeline: WindowServer's commit does not wait
+ *                                                to be scheduled at all (NMXAccel's ordered flips hold the surface until
+ *                                                it is published). Experimental.
  */
 #include <unistd.h>
 
@@ -51,6 +56,18 @@ static inline int nvmtl_ws_pipeline(void)
 {
     static int on = -1;
     return nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-pipeline", &on);
+}
+
+static inline int nvmtl_ws_submit_unlocked(void)
+{
+    static int locked = -1;
+    return nvmtl_ws_pipeline() && !nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-submit-locked", &locked);
+}
+
+static inline int nvmtl_ws_nowait(void)
+{
+    static int on = -1;
+    return nvmtl_ws_pipeline() && nvmtl_ws_early_schedule() && nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-nowait", &on);
 }
 
 /* nvmtl_vk_buffer_create's host_visible value for a cached (non-coherent, cache-maintained) readback buffer */

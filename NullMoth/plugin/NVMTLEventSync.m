@@ -387,7 +387,14 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
         for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO)) nvmtl_buffer_sync_in(buffer);
         [self nvmtlMarkScheduled];
         if (!_legacyKernelStart) _legacyKernelStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
+        // An execbuffer takes 3-6 ms. Held across it, this lock stopped WindowServer's main thread for 18% of a drag, in
+        // commit and in encoder creation. Only the pump's serial queue submits, so order does not depend on the lock; the
+        // ahead pass (its only caller, at depth one) walks copies of what a commit can change meanwhile.
+        const BOOL unlock = nvmtl_vk_windowserver_serial() && nvmtl_ws_submit_unlocked();
+        id lockObject = [NVMTLCommandBuffer class];
+        if (unlock) objc_sync_exit(lockObject);
         const int r = nvmtl_vk_submit_begin(&part->commands, f);
+        if (unlock) objc_sync_enter(lockObject);
         _nextSubmit++;
         if (r) {
             nvmtl_vk_inflight_free(f);
@@ -413,7 +420,7 @@ static void nvmtl_gsub_ahead_pass(void) {
 }
 static void nvmtl_gsub_ahead_pass1(void) {
     NSMutableSet *queues = [NSMutableSet new];
-    for (NVMTLCommandBuffer *cb in nvmtl_pending_buffers) {
+    for (NVMTLCommandBuffer *cb in [nvmtl_pending_buffers copy]) {
         id q = cb->_queue;
         if (!q || [queues containsObject:q]) continue;
         [queues addObject:q];
