@@ -5292,8 +5292,62 @@ void nvmtl_vk_pt_note(nvk_cmdbuf *c, uint32_t fs)
     if (!c || !c->pt_open || !c->pt_pool || c->pt_n >= 128 || !fs) return;
     for (unsigned k = 0; k < 4; k++) { if (c->pt_fs[c->pt_n][k] == fs) return; if (!c->pt_fs[c->pt_n][k]) { c->pt_fs[c->pt_n][k] = fs; return; } }
 }
+/*
+ * WindowServer's render passes on the GPU, summed by kind (size, format, fragment shader): the file the tracer wrote
+ * cannot be written from WindowServer's sandbox, and release builds keep no nvlog line. While
+ * /Library/GPUBundles/nvmtl-ws-passtime exists every pass is timed, and every 4096 passes the most expensive kinds go to
+ * the system log ("pass census"), with the GPU time between passes (copies, blits, barriers, compute).
+ */
+typedef struct { uint32_t w, h, f, fs; uint64_t n; double us, max; } nvmtl_pt_kind;
+static nvmtl_pt_kind g_ptk[128]; static unsigned g_nptk;
+static double g_pt_pass_us, g_pt_gap_us; static uint64_t g_pt_cbs, g_pt_passes, g_pt_lost;
+static pthread_mutex_t g_ptk_lock = PTHREAD_MUTEX_INITIALIZER;
+static int nvmtl_pt_ws_on(void)
+{
+    static int ws = -1, on; static uint64_t next;
+    if (ws < 0) ws = nvmtl_vk_windowserver_serial();
+    if (!ws) return 0;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (now >= next) { next = now + 1000000000ull; on = access("/Library/GPUBundles/nvmtl-ws-passtime", F_OK) == 0; }
+    return on;
+}
+static int nvmtl_ptk_cmp(const void *a, const void *b)
+{
+    const double x = ((const nvmtl_pt_kind *)a)->us, y = ((const nvmtl_pt_kind *)b)->us;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static void nvmtl_pt_census(const uint64_t *r, unsigned n, const nvk_cmdbuf *c, double us, uint64_t mask)
+{
+    pthread_mutex_lock(&g_ptk_lock);
+    g_pt_cbs++;
+    for (unsigned i = 0; i < n; i++) {
+        const double gpu = (double)((r[2 * i + 1] - r[2 * i]) & mask) * us;
+        if (i) g_pt_gap_us += (double)((r[2 * i] - r[2 * i - 1]) & mask) * us;
+        g_pt_pass_us += gpu; g_pt_passes++;
+        unsigned k = 0;
+        while (k < g_nptk && !(g_ptk[k].w == c->pt_w[i] && g_ptk[k].h == c->pt_h[i] && g_ptk[k].f == c->pt_f[i] && g_ptk[k].fs == c->pt_fs[i][0])) k++;
+        if (k == g_nptk) {
+            if (g_nptk == 128) { g_pt_lost++; continue; }
+            g_ptk[g_nptk++] = (nvmtl_pt_kind){ c->pt_w[i], c->pt_h[i], c->pt_f[i], c->pt_fs[i][0], 0, 0, 0 };
+        }
+        g_ptk[k].n++; g_ptk[k].us += gpu; if (gpu > g_ptk[k].max) g_ptk[k].max = gpu;
+    }
+    if (g_pt_passes >= 4096) {
+        qsort(g_ptk, g_nptk, sizeof g_ptk[0], nvmtl_ptk_cmp);
+        syslog(LOG_ERR, "NullMoth: pass census: %llu passes in %llu command buffers: passes %.1f ms on the GPU, between passes %.1f ms; %u kinds (%llu not kept)",
+               (unsigned long long)g_pt_passes, (unsigned long long)g_pt_cbs, g_pt_pass_us / 1000, g_pt_gap_us / 1000, g_nptk,
+               (unsigned long long)g_pt_lost);
+        for (unsigned k = 0; k < g_nptk && k < 12; k++)
+            syslog(LOG_ERR, "NullMoth: pass census #%u: %ux%u fmt %u fs %08x: %llu passes, %.1f ms total, %.0f us avg, %.0f us max",
+                   k + 1, g_ptk[k].w, g_ptk[k].h, g_ptk[k].f, g_ptk[k].fs, (unsigned long long)g_ptk[k].n, g_ptk[k].us / 1000,
+                   g_ptk[k].us / (double)g_ptk[k].n, g_ptk[k].max);
+        g_nptk = 0; g_pt_pass_us = g_pt_gap_us = 0; g_pt_cbs = g_pt_passes = g_pt_lost = 0;
+    }
+    pthread_mutex_unlock(&g_ptk_lock);
+}
 int nvmtl_pt_armed(void)
 {
+    if (nvmtl_pt_ws_on()) return 1;
     static uint64_t next; uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     if (g_pt_left <= 0 && now >= next) { next = now + 250000000ull;
         if (access("/tmp/nvmtl-passtime-request", F_OK) == 0) { unlink("/tmp/nvmtl-passtime-request"); g_pt_left = 400; nvlog("passtime: ARMED for 400 passes"); } }
@@ -5644,6 +5698,7 @@ int nvmtl_vk_submit_finish(nvmtl_inflight *f)
             static FILE *pf; if (!pf) { char fp[512]; const char *td = getenv("TMPDIR"); snprintf(fp, sizeof fp, "%s/nvmtl-passtime-%d.log", td && *td ? td : "/tmp", (int)getpid()); pf = fopen(fp, "a"); }
             const double us = g_lim.timestampPeriod / 1000.0; const uint64_t mask = g_timestamp_bits >= 64 ? ~0ull : ((1ull << g_timestamp_bits) - 1);
             const uint64_t seq = ++g_pt_seq;
+            if (nvmtl_pt_ws_on()) nvmtl_pt_census(r, n, c, us, mask);
             for (unsigned i = 0; pf && i < n; i++) {
                 const double gpu = (double)((r[2 * i + 1] - r[2 * i]) & mask) * us;
                 const double gap = i ? (double)((r[2 * i] - r[2 * i - 1]) & mask) * us : 0.0;
