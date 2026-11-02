@@ -410,6 +410,37 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
     }
     return YES;
 }
+/* What WindowServer hands the pump: command buffers per present, and the parts (each its own execbuffer) they split
+   into at event waits and signals. Logged every 2048 command buffers. */
+static _Atomic unsigned long long gWsCb, gWsParts, gWsSubmits, gWsWaits, gWsSignals, gWsPresents;
+static _Atomic unsigned long long gWsCensusT0;
+void nvmtl_ws_note_present(void) { atomic_fetch_add(&gWsPresents, 1); }
+static void nvmtl_ws_submission_census(NVMTLCommandBuffer *cb) {
+    unsigned long long submits = 0, waits = 0, signals = 0;
+    for (NVMTLSubmissionPart *p in cb->_parts) {
+        if (![p isKindOfClass:[NVMTLSubmissionPart class]]) continue;
+        if (p->commands.cb) submits++;
+        if (p->waitEvent) waits++;
+        if (p->signalEvent) signals++;
+        signals += p->signals.count;
+    }
+    atomic_fetch_add(&gWsParts, cb->_parts.count); atomic_fetch_add(&gWsSubmits, submits);
+    atomic_fetch_add(&gWsWaits, waits); atomic_fetch_add(&gWsSignals, signals);
+    const unsigned long long n = atomic_fetch_add(&gWsCb, 1) + 1;
+    const unsigned long long now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    unsigned long long t0 = atomic_load(&gWsCensusT0);
+    if (!t0) { atomic_store(&gWsCensusT0, now); return; }
+    if (n % 2048) return;
+    const unsigned long long cbs = 2048, parts = atomic_exchange(&gWsParts, 0), subs = atomic_exchange(&gWsSubmits, 0);
+    const unsigned long long w = atomic_exchange(&gWsWaits, 0), s = atomic_exchange(&gWsSignals, 0);
+    const unsigned long long presents = atomic_exchange(&gWsPresents, 0);
+    atomic_store(&gWsCensusT0, now);
+    const double sec = (now - t0) * 1e-9;
+    nvlog("submission census: %llu command buffers in %.1f s (%.0f/s), %llu presents (%.0f/s, %.2f buffers each); "
+          "per buffer %.2f parts, %.2f execbuffers, %.2f event waits, %.2f signals",
+          cbs, sec, cbs / sec, presents, presents / sec, presents ? (double)cbs / presents : 0.0,
+          (double)parts / cbs, (double)subs / cbs, (double)w / cbs, (double)s / cbs);
+}
 static void nvmtl_gsub_ahead_pass1(void);
 static void nvmtl_gsub_ahead_pass(void) {
     for (int round = 0; round < 64; round++) {
@@ -527,6 +558,7 @@ static void nvmtl_gsub_ahead_pass1(void) {
         if (!__atomic_load_n(&_rep, __ATOMIC_ACQUIRE)) __atomic_store_n(&_rep, nvmtl_ep_enter(), __ATOMIC_RELEASE);
         [_completionCondition lock]; _cbstatus = MTLCommandBufferStatusCommitted; [_completionCondition unlock];
         [self nvmtlSealPartWithSignal:nil value:0 restart:NO];
+        if (nvmtl_vk_windowserver_serial()) nvmtl_ws_submission_census(self);
         nvmtl_surface_register_writes(self);
         if (!nvmtl_pending_buffers) nvmtl_pending_buffers = [NSMutableArray new];
         [nvmtl_pending_buffers addObject:self];

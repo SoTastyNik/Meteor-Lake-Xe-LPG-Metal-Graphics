@@ -3663,7 +3663,8 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 
 			/* the counter reads 0 while the GT sleeps: sampled, over the requests' own time */
 			if ((++nmx_calls & 15) == 0) {
-				const u32 f = intel_rps_read_actual_frequency(rps);
+				/* the plain read returns 0 here: it needs a runtime-pm reference "in use", which the port never reports */
+				const u32 f = intel_rps_read_actual_frequency_fw(rps);
 
 				if (f) {
 					nmx_awake++;

@@ -4887,10 +4887,12 @@ static int nvmtl_flips_ordered(void) {
     int v = 0; size_t n = sizeof v;
     return sysctlbyname("debug.nmxfb_blob_ordered", &v, &n, NULL, 0) == 0 && v == 1;
 }
+void nvmtl_ws_note_present(void);
 - (BOOL)commitAndWaitUntilSubmitted {
     static int ws = -1;
     if (ws < 0) ws = (getprogname() && !strcmp(getprogname(), "WindowServer")) ? 1 : 0;
     [self commit];
+    if (ws) nvmtl_ws_note_present();
     if (ws && nvmtl_vk_windowserver_serial() && nvmtl_ws_nowait() && nvmtl_flips_ordered()) return self.status != MTLCommandBufferStatusError;
     if (ws && !nvmtl_flips_ordered()) [self waitUntilCompleted]; else [self waitUntilScheduled];
     return self.status != MTLCommandBufferStatusError;
