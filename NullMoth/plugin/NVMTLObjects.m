@@ -2867,6 +2867,18 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
             extern int nvmtl_vk_pipeline_stats(void *pipe, char *out, size_t n);
             char st[600]; nvmtl_vk_pipeline_stats(p->_p.pipe, st, sizeof st);
             nvlog("ptpso: vs %08x fs %08x | %s", hv, hf, st);
+            // the pass census names shaders by hash only: say once which Metal functions a hash is (release keeps syslog)
+            id vf = p->_descriptor.vertexFunction, ff = p->_descriptor.fragmentFunction;
+            NSString *vn = [vf isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)vf)->_fname : nil;
+            NSString *fn = [ff isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)ff)->_fname : nil;
+            NSUInteger fspv = [ff isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)ff)->_spirv.length : 0;
+            NSUInteger ftex = 0;
+            if ([ff isKindOfClass:[NVMTLFunction class]])
+                for (id a in ((NVMTLFunction *)ff)->_arguments)
+                    if ([a respondsToSelector:@selector(type)] && [a type] == MTLArgumentTypeTexture) ftex++;
+            syslog(LOG_ERR, "NullMoth: pass shader fs %08x vs %08x: fragment %s (%lu SPIR-V bytes, %lu textures), vertex %s, pipeline \"%s\", "
+                   "blend %d | %s", hf, hv, fn.UTF8String ?: "?", (unsigned long)fspv, (unsigned long)ftex, vn.UTF8String ?: "?",
+                   p->_descriptor.label.UTF8String ?: "", (int)p->_descriptor.colorAttachments[0].blendingEnabled, st);
         }
         extern void nvmtl_vk_pt_note(nvk_cmdbuf *c, uint32_t fs);
         nvmtl_vk_pt_note(&_cb->_c, (uint32_t)(hn.unsignedLongLongValue & 0xffffffffu));
