@@ -1548,8 +1548,23 @@ SYSCTL_INT(_debug, OID_AUTO, nmxfb_blob_ordered, CTLFLAG_RW | CTLFLAG_LOCKED, &g
            "thread call; WindowServer's commit does not wait for the GPU), 0 = flip at once (WindowServer waits)");
 static int gNmxOrderedCopy = 1;
 static int gNmxGpuMinMhz = 0;
-SYSCTL_INT(_debug, OID_AUTO, nmxgpu_gt_min_mhz, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxGpuMinMhz, 0,
-           "MateBook GPU: GT frequency floor in MHz, applied by NMXGPU within ~64 submissions (0 = the driver's default)");
+// NMXGPU reads it from the GPU's PCI device (nmx_xnu_tunable): the kernel's sysctlbyname never reached it from there
+static int nmxgpu_min_mhz_sysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gNmxGpuMinMhz;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    if (v < 0 || v > 3000) return EINVAL;
+    NVAccel *a = NVAccel::gAccel;
+    IOService *pci = a ? a->getProvider() : nullptr;
+    if (!pci) return ENXIO;
+    pci->setProperty("nmxgpu-gt-min-mhz", (unsigned long long)v, 32);
+    gNmxGpuMinMhz = v;
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_gt_min_mhz, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
+            nmxgpu_min_mhz_sysctl, "I",
+            "MateBook GPU: GT frequency floor in MHz, applied by NMXGPU within ~64 submissions (0 = the driver's default)");
 static constexpr unsigned kNmxFrameBuckets = 8;
 static SInt64 gCntNmxFrameMs[kNmxFrameBuckets];
 NVACCEL_CNT(nmxfb_frames_under_9ms, gCntNmxFrameMs[0], "Frames reaching the panel under 9 ms after the previous one (120 Hz)");

@@ -3672,7 +3672,7 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 			 * debug.nmxgpu_gt_min_mhz (NMXAccel) set the floor at runtime to find out; 0 restores it.
 			 */
 			if ((nmx_calls & 63) == 0 && intel_uc_uses_guc_slpc(&to_gt(to_i915(dev))->uc)) {
-				const int want = nmx_xnu_tunable("debug.nmxgpu_gt_min_mhz");
+				const int want = nmx_xnu_tunable("nmxgpu-gt-min-mhz");
 
 				if (nmx_min_applied < 0)
 					nmx_min_default = slpc->min_freq_softlimit;

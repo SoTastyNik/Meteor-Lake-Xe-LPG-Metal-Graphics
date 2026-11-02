@@ -19,6 +19,7 @@
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSNumber.h>
 #include <mach/kmod.h>
 #include <pexpert/pexpert.h>
 #include <kern/thread.h>
@@ -224,6 +225,17 @@ static void nmx_marker_write(bool on)
     n->release();
 }
 
+/* The GPU's PCI device, for tunables NMXAccel's sysctls leave on it as properties (the kernel's sysctlbyname gave this
+   kext nothing: v30's debug.nmxgpu_gt_min_mhz never arrived) */
+static IOPCIDevice *volatile g_tunable_pci;
+
+extern "C" int nmx_xnu_tunable(const char *name)
+{
+    IOPCIDevice *pci = g_tunable_pci;
+    OSNumber *n = pci != nullptr ? OSDynamicCast(OSNumber, pci->getProperty(name)) : nullptr;
+    return n != nullptr ? (int)n->unsigned32BitValue() : -1;
+}
+
 void NMXGPU::attachNow()
 {
     int err = nmx_xnu_wait_firmware_root(300);
@@ -268,6 +280,7 @@ void NMXGPU::attachNow()
         }
     }
     nmx_marker_write(true);
+    g_tunable_pci = pci_;
     dev_ = nmx_port_attach(pci_);
     if (dev_ == nullptr) {
         nmx_marker_write(false);
@@ -316,6 +329,7 @@ void NMXGPU::attachNow()
 void NMXGPU::stop(IOService *provider)
 {
     nmx_xnu_diag_fini();
+    g_tunable_pci = nullptr;
     /* an attach still running on its thread finishes first (it holds a reference on this object meanwhile) */
     for (int i = 0; attach_ == 0 && i < 6000; i++)
         IOSleep(100);
