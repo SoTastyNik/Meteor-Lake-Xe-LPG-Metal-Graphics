@@ -207,6 +207,15 @@ extern "C" uint64_t nmx_xnu_execbuf_begin(void)
 }
 
 static uint64_t s_phase_ns[8], s_phase_max[8];
+
+/* an integer sysctl another kext publishes (NMXAccel's debug.nmxgpu_*), -1 when it is not there */
+extern "C" int sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+extern "C" int nmx_xnu_tunable(const char *name)
+{
+    int v = 0;
+    size_t n = sizeof v;
+    return sysctlbyname(name, &v, &n, nullptr, 0) == 0 && n == sizeof v ? v : -1;
+}
 static uint64_t s_vma_ns[3], s_vma_max[3], s_vma_bytes, s_vma_binds, s_vma_userptr, s_vma_user_bytes;
 
 /* A vma's first binding, the slow path of a pin: 0 its pages, 1 page table allocation, 2 the binding */

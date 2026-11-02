@@ -436,7 +436,7 @@ static void nvmtl_ws_submission_census(NVMTLCommandBuffer *cb) {
     const unsigned long long presents = atomic_exchange(&gWsPresents, 0);
     atomic_store(&gWsCensusT0, now);
     const double sec = (now - t0) * 1e-9;
-    nvlog("submission census: %llu command buffers in %.1f s (%.0f/s), %llu presents (%.0f/s, %.2f buffers each); "
+    syslog(LOG_ERR, "NullMoth: submission census: %llu command buffers in %.1f s (%.0f/s), %llu presents (%.0f/s, %.2f buffers each); "
           "per buffer %.2f parts, %.2f execbuffers, %.2f event waits, %.2f signals",
           cbs, sec, cbs / sec, presents, presents / sec, presents ? (double)cbs / presents : 0.0,
           (double)parts / cbs, (double)subs / cbs, (double)w / cbs, (double)s / cbs);

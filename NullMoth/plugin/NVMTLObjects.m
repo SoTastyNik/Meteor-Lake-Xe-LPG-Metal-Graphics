@@ -15,6 +15,7 @@ void nvlog(const char *fmt, ...);
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <objc/objc-sync.h>
+#include <syslog.h>
 static int nvmtl_trace_on(void);
 static void nvtrace_emit(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 // the arguments are evaluated only while tracing: draws pass strings converted per call (UTF8String), which cost 15% of

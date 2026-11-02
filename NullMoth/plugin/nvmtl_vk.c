@@ -9,6 +9,7 @@
 #include <mach-o/nlist.h>
 #include <mach/mach.h>
 #include <unistd.h>
+#include <syslog.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1838,7 +1839,7 @@ static void ipark_census(void)
 {
     const uint64_t n = atomic_load(&g_ipark_parked) + atomic_load(&g_ipark_reused);
     if (n & (n - 1)) return;
-    nvlog("image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB", (unsigned long long)atomic_load(&g_ipark_parked),
+    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB", (unsigned long long)atomic_load(&g_ipark_parked),
           (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted), g_ipark_n,
           (unsigned long long)(g_ipark_bytes >> 20));
 }

@@ -20,6 +20,7 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_ring.h"
 #include "gt/intel_rps.h"
+#include "gt/uc/intel_uc.h"
 
 #include "pxp/intel_pxp.h"
 
@@ -3659,7 +3660,31 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 		{
 			/* a slow GPU shows up here as waits for ring space: what frequency does it run at */
 			static unsigned int nmx_calls, nmx_top, nmx_sum, nmx_awake;
+			static int nmx_min_applied = -1;
+			static u32 nmx_min_default;
 			struct intel_rps *rps = &to_gt(to_i915(dev))->rps;
+			struct intel_guc_slpc *slpc = &to_gt(to_i915(dev))->uc.guc.slpc;
+			extern int nmx_xnu_tunable(const char *name);
+
+			/*
+			 * The GT sat at its 800 MHz floor (top 800, averages 480-620 MHz) while WindowServer's command buffers
+			 * waited 3-40 ms each for it and queued 50-250 ms deep: GuC SLPC did not raise the clock. Let
+			 * debug.nmxgpu_gt_min_mhz (NMXAccel) set the floor at runtime to find out; 0 restores it.
+			 */
+			if ((nmx_calls & 63) == 0 && intel_uc_uses_guc_slpc(&to_gt(to_i915(dev))->uc)) {
+				const int want = nmx_xnu_tunable("debug.nmxgpu_gt_min_mhz");
+
+				if (nmx_min_applied < 0)
+					nmx_min_default = slpc->min_freq_softlimit;
+				if (want >= 0 && want != nmx_min_applied) {
+					const u32 val = want ? clamp_t(u32, want, slpc->min_freq, slpc->max_freq_softlimit) : nmx_min_default;
+					const int err = intel_guc_slpc_set_min_freq(slpc, val);
+
+					drm_info(dev, "Latitude MTL: GT minimum frequency %u MHz (asked %d, default %u): %d\n",
+						 val, want, nmx_min_default, err);
+					nmx_min_applied = want;
+				}
+			}
 
 			/* the counter reads 0 while the GT sleeps: sampled, over the requests' own time */
 			if ((++nmx_calls & 15) == 0) {

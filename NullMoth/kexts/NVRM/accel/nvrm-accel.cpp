@@ -1547,6 +1547,9 @@ SYSCTL_INT(_debug, OID_AUTO, nmxfb_blob_ordered, CTLFLAG_RW | CTLFLAG_LOCKED, &g
            "VM display: 1 = a presented surface goes on the panel once its pixels are in its memory (the flip waits on a "
            "thread call; WindowServer's commit does not wait for the GPU), 0 = flip at once (WindowServer waits)");
 static int gNmxOrderedCopy = 1;
+static int gNmxGpuMinMhz = 0;
+SYSCTL_INT(_debug, OID_AUTO, nmxgpu_gt_min_mhz, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxGpuMinMhz, 0,
+           "MateBook GPU: GT frequency floor in MHz, applied by NMXGPU within ~64 submissions (0 = the driver's default)");
 static constexpr unsigned kNmxFrameBuckets = 8;
 static SInt64 gCntNmxFrameMs[kNmxFrameBuckets];
 NVACCEL_CNT(nmxfb_frames_under_9ms, gCntNmxFrameMs[0], "Frames reaching the panel under 9 ms after the previous one (120 Hz)");
@@ -1588,6 +1591,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_ord_timeout);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_front_written);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_trace);
     sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
+    sysctl_register_oid(&sysctl__debug_nmxgpu_gt_min_mhz);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_under_9ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_9_13ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);
