@@ -240,6 +240,33 @@ void NMXGPU::attachNow()
         attach_ = -1;
         return;
     }
+    /* The panel is LatitudeMTLFB's only while LatitudePanelClaim (OpenCore) holds it, from nullmoth-panel-once. Without
+       the claim the firmware framebuffer keeps the display, and it went black as soon as this driver took the GPU: four
+       boots in a night stopped at a black screen with only the keyboard lights on. Stay off then: a normal boot. */
+    {
+        /* the claim's own record of its probe (probe and start set it); compared as objects: the import list has no
+           OSString accessors */
+        OSString *started = OSString::withCString("reservation started");
+        OSObject *claim = nullptr;
+        bool held = false;
+        for (int i = 0; i < 150 && started != nullptr && !held; i++) {
+            claim = pci_->getProperty("LatitudePanelClaimProbe");
+            held = claim != nullptr && claim->isEqualTo(static_cast<const OSMetaClassBase *>(started));
+            if (!held)
+                IOSleep(100);
+        }
+        if (started != nullptr)
+            started->release();
+        if (!held) {
+            IOLog("NullMoth GPU: no panel reservation after 15 s (LatitudePanelClaimProbe %s; see the PCI device); this "
+                  "GPU stays with macOS so the firmware framebuffer keeps the picture\n", claim != nullptr ? "set" : "absent");
+            if (claim != nullptr)
+                setProperty("nullmoth-panel-claim-probe", claim);
+            setProperty("nullmoth-gpu-state", "parked: no panel reservation");
+            attach_ = -1;
+            return;
+        }
+    }
     nmx_marker_write(true);
     dev_ = nmx_port_attach(pci_);
     if (dev_ == nullptr) {
