@@ -2872,12 +2872,8 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
             NSString *vn = [vf isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)vf)->_fname : nil;
             NSString *fn = [ff isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)ff)->_fname : nil;
             NSUInteger fspv = [ff isKindOfClass:[NVMTLFunction class]] ? ((NVMTLFunction *)ff)->_spirv.length : 0;
-            NSUInteger ftex = 0;
-            if ([ff isKindOfClass:[NVMTLFunction class]])
-                for (id a in ((NVMTLFunction *)ff)->_arguments)
-                    if ([a respondsToSelector:@selector(type)] && [a type] == MTLArgumentTypeTexture) ftex++;
-            syslog(LOG_ERR, "NullMoth: pass shader fs %08x vs %08x: fragment %s (%lu SPIR-V bytes, %lu textures), vertex %s, pipeline \"%s\", "
-                   "blend %d | %s", hf, hv, fn.UTF8String ?: "?", (unsigned long)fspv, (unsigned long)ftex, vn.UTF8String ?: "?",
+            syslog(LOG_ERR, "NullMoth: pass shader fs %08x vs %08x: fragment %s (%lu SPIR-V bytes), vertex %s, pipeline \"%s\", "
+                   "blend %d | %s", hf, hv, fn.UTF8String ?: "?", (unsigned long)fspv, vn.UTF8String ?: "?",
                    p->_descriptor.label.UTF8String ?: "", (int)p->_descriptor.colorAttachments[0].blendingEnabled, st);
         }
         extern void nvmtl_vk_pt_note(nvk_cmdbuf *c, uint32_t fs);

@@ -27,6 +27,10 @@ def run(name, cmd, cwd=R, env=None):
         p = subprocess.run(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT)
     if p.returncode:
         print(log.read_text()[-8000:])
+        # build scripts that keep their compiler output in desktop-build/: keep it with the uploaded logs
+        for extra in (R / 'desktop-build').glob('build-*.log'):
+            (LOGS / extra.name).write_bytes(extra.read_bytes())
+            print(extra.read_text(errors='replace')[-4000:])
         raise SystemExit(f'{name} failed ({p.returncode})')
 
 
