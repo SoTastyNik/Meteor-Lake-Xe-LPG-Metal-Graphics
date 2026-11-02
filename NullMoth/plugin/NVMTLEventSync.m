@@ -22,6 +22,7 @@
 }
 @end
 static _Atomic unsigned gsub_inflight;
+static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds);
 static _Atomic unsigned long long gsub_ahead, gsub_peak;
 static NSMutableArray *nvmtl_quarantined_parts;
 static int nvmtl_gsub_finish(NVMTLSubmissionPart *part) {
@@ -261,6 +262,7 @@ static int nvmtl_skip_empty_on(void) {
     double deviceStart = 0, deviceEnd = 0;
     if (!error && _gpuTimingSeen && !_gpuTimingInvalid)
         (void)nvmtl_vk_interval_seconds(&_gpuTiming, &deviceStart, &deviceEnd);
+    if (nvmtl_vk_windowserver_serial()) nvmtl_ws_timing_census(self, error ? 0 : deviceEnd - deviceStart);
     nvmtl_surface_finish_writes(self);
     [_completionCondition lock];
     _gpuStart = deviceStart; _gpuEnd = deviceEnd;
@@ -440,6 +442,35 @@ static void nvmtl_ws_submission_census(NVMTLCommandBuffer *cb) {
           "per buffer %.2f parts, %.2f execbuffers, %.2f event waits, %.2f signals",
           cbs, sec, cbs / sec, presents, presents / sec, presents ? (double)cbs / presents : 0.0,
           (double)parts / cbs, (double)subs / cbs, (double)w / cbs, (double)s / cbs);
+}
+/* WindowServer's command buffers over the whole session (the slow-part trace stops after 32): time on the GPU, and
+   from commit to completion, as histograms. Logged every 512. */
+static const double kWsGpuMs[] = { 2, 4, 8, 16, 33 }, kWsLatMs[] = { 8, 16, 33, 66, 133 };
+static unsigned long long gWsGpu[6], gWsLat[6], gWsTimed, gWsUntimed;
+static double gWsGpuSum, gWsLatSum, gWsGpuMax, gWsLatMax;
+static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
+    if (!cb->_traceCommitNS) return;
+    const double lat = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - cb->_traceCommitNS) * 1e-6, gpu = gpuSeconds * 1e3;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&lock);
+    do {
+        unsigned k = 0; while (k < 5 && lat >= kWsLatMs[k]) k++;
+        gWsLat[k]++; gWsLatSum += lat; if (lat > gWsLatMax) gWsLatMax = lat;
+        if (gpu > 0 && gpu < 10000) {
+            k = 0; while (k < 5 && gpu >= kWsGpuMs[k]) k++;
+            gWsGpu[k]++; gWsGpuSum += gpu; if (gpu > gWsGpuMax) gWsGpuMax = gpu; gWsTimed++;
+        } else gWsUntimed++;
+        if ((gWsTimed + gWsUntimed) % 512) break;
+        syslog(LOG_ERR, "NullMoth: frame timing: GPU ms <2 %llu, 2-4 %llu, 4-8 %llu, 8-16 %llu, 16-33 %llu, 33+ %llu "
+               "(avg %.2f max %.1f, %llu untimed) | commit to done ms <8 %llu, 8-16 %llu, 16-33 %llu, 33-66 %llu, "
+               "66-133 %llu, 133+ %llu (avg %.1f max %.1f)",
+               gWsGpu[0], gWsGpu[1], gWsGpu[2], gWsGpu[3], gWsGpu[4], gWsGpu[5], gWsTimed ? gWsGpuSum / gWsTimed : 0.0,
+               gWsGpuMax, gWsUntimed, gWsLat[0], gWsLat[1], gWsLat[2], gWsLat[3], gWsLat[4], gWsLat[5],
+               gWsLatSum / 512, gWsLatMax);
+        memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
+        gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = 0;
+    } while (0);
+    pthread_mutex_unlock(&lock);
 }
 static void nvmtl_gsub_ahead_pass1(void);
 static void nvmtl_gsub_ahead_pass(void) {
