@@ -838,7 +838,10 @@ static int nvmtl_vk_initialize(void)
     }
     g_linmod = have[7];
     g_extfd = have[8];
-    { const char *e = getenv("NVMTL_PSTAT"); g_pstat = have[13] && e && *e == '1'; }
+    { const char *e = getenv("NVMTL_PSTAT");
+      // WindowServer gets no environment of ours: the flag file asks for compile statistics there (the pass shader lines)
+      const int wsflag = getprogname() && !strcmp(getprogname(), "WindowServer") && access("/Library/GPUBundles/nvmtl-ws-pstat", F_OK) == 0;
+      g_pstat = have[13] && ((e && *e == '1') || wsflag); }
     g_mutable = have[9] && !getenv("NVMTL_NO_TEXBUF");
     nvlog("vk: par3 VK_EXT_mutable_descriptor_type %s — texture buffers %s", have[9] ? "present" : "ABSENT",
           g_mutable ? "ON (mutable texture/storage bands)" : have[9] ? "OFF (NVMTL_NO_TEXBUF)" : "OFF");
