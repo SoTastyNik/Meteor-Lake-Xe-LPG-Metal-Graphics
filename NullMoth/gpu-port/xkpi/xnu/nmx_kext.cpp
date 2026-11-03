@@ -281,6 +281,23 @@ void NMXGPU::attachNow()
     }
     nmx_marker_write(true);
     g_tunable_pci = pci_;
+    /* nvram nullmoth-userptr-uc-mb=N: host surfaces of N MB or more skip the snooped (coherent) GPU mapping (i915 userptr,
+       see i915_gem_userptr.c). Read once per boot: WindowServer imports its display surfaces right after login. */
+    if (IODTNVRAM *n = nmx_nvram()) {
+        if (OSObject *v = n->copyProperty("nullmoth-userptr-uc-mb")) {
+            OSData *d = OSDynamicCast(OSData, v);
+            unsigned mb = 0;
+            const char *p = d != nullptr ? (const char *)d->getBytesNoCopy() : nullptr;
+            for (unsigned i = 0; p != nullptr && i < d->getLength() && i < 6 && p[i] >= '0' && p[i] <= '9'; i++)
+                mb = mb * 10 + (unsigned)(p[i] - '0');
+            if (mb) {
+                pci_->setProperty("nmxgpu-userptr-uc-mb", (unsigned long long)mb, 32);
+                IOLog("NullMoth GPU: host surfaces of %u MB and more get a non-snooped GPU mapping (nullmoth-userptr-uc-mb)\n", mb);
+            }
+            v->release();
+        }
+        n->release();
+    }
     dev_ = nmx_port_attach(pci_);
     if (dev_ == nullptr) {
         nmx_marker_write(false);

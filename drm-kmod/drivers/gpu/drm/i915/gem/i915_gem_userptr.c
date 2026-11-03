@@ -545,6 +545,26 @@ i915_gem_userptr_ioctl(struct drm_device *dev,
 	obj->read_domains = I915_GEM_DOMAIN_CPU;
 	obj->write_domain = I915_GEM_DOMAIN_CPU;
 	i915_gem_object_set_cache_coherency(obj, I915_CACHE_LLC);
+#ifdef NMXKPI
+	{
+		/*
+		 * A plain colour fill of WindowServer's 2880x1920 display surface took 1.2-2.1 ms (about 15 GB/s): every GPU
+		 * write to a host surface snoops the CPU caches (PAT 3, 1-way coherent). Experiment: surfaces of at least
+		 * nullmoth-userptr-uc-mb megabytes take PAT 0, write-back without snooping, as the GPU's own memory does.
+		 * Only the GPU writes WindowServer's display surfaces; CPU-written ones of that size would read stale.
+		 */
+		extern int nmx_xnu_tunable(const char *name);
+		static unsigned int said;
+		const int mb = nmx_xnu_tunable("nmxgpu-userptr-uc-mb");
+
+		if (mb > 0 && args->user_size >= ((u64)mb << 20)) {
+			i915_gem_object_set_pat_index(obj, 0);
+			if (said++ < 16)
+				drm_info(dev, "Latitude MTL: host surface of %llu MB mapped without snooping (PAT 0)\n",
+					 args->user_size >> 20);
+		}
+	}
+#endif
 
 	obj->userptr.ptr = args->user_ptr;
 	obj->userptr.notifier_seq = ULONG_MAX;
