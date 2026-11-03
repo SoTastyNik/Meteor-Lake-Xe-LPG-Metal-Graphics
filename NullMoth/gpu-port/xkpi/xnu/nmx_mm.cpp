@@ -208,6 +208,7 @@ extern "C" uint64_t nmx_xnu_execbuf_begin(void)
 
 static uint64_t s_phase_ns[8], s_phase_max[8];
 static uint64_t s_vma_ns[3], s_vma_max[3], s_vma_bytes, s_vma_binds, s_vma_userptr, s_vma_user_bytes;
+static uint64_t s_vma_sizes[6];   /* <64K <256K <1M <4M <16M 16M+ */
 
 /* A vma's first binding, the slow path of a pin: 0 its pages, 1 page table allocation, 2 the binding */
 extern "C" void nmx_xnu_vma_stage(int stage, uint64_t *t)
@@ -228,9 +229,15 @@ extern "C" void nmx_xnu_vma_done(uint64_t bytes, int userptr)
         __atomic_add_fetch(&s_vma_userptr, 1, __ATOMIC_RELAXED);
         __atomic_add_fetch(&s_vma_user_bytes, bytes, __ATOMIC_RELAXED);
     }
+    const int bucket = bytes < (64ull << 10) ? 0 : bytes < (256ull << 10) ? 1 : bytes < (1ull << 20) ? 2
+                     : bytes < (4ull << 20) ? 3 : bytes < (16ull << 20) ? 4 : 5;
+    __atomic_add_fetch(&s_vma_sizes[bucket], 1, __ATOMIC_RELAXED);
     const uint64_t n = __atomic_add_fetch(&s_vma_binds, 1, __ATOMIC_RELAXED);
     if (n & 255)
         return;
+    uint64_t sizes[6];
+    for (int i = 0; i < 6; i++)
+        sizes[i] = __atomic_exchange_n(&s_vma_sizes[i], 0, __ATOMIC_RELAXED);
     const uint64_t all = __atomic_exchange_n(&s_vma_bytes, 0, __ATOMIC_RELAXED);
     const uint64_t user = __atomic_exchange_n(&s_vma_userptr, 0, __ATOMIC_RELAXED);
     const uint64_t userBytes = __atomic_exchange_n(&s_vma_user_bytes, 0, __ATOMIC_RELAXED);
@@ -239,10 +246,13 @@ extern "C" void nmx_xnu_vma_done(uint64_t bytes, int userptr)
         avg[i] = __atomic_exchange_n(&s_vma_ns[i], 0, __ATOMIC_RELAXED) / 256000;
         top[i] = __atomic_exchange_n(&s_vma_max[i], 0, __ATOMIC_RELAXED) / 1000;
     }
-    IOLog("NullMoth GPU: execbuffer new bindings: 256 of %llu, %llu MB, %llu userptr (%llu MB); us avg/max: pages %llu/%llu tables %llu/%llu bind %llu/%llu\n",
+    IOLog("NullMoth GPU: execbuffer new bindings: 256 of %llu, %llu MB, %llu userptr (%llu MB); us avg/max: pages %llu/%llu tables %llu/%llu bind %llu/%llu; "
+          "sizes <64K %llu <256K %llu <1M %llu <4M %llu <16M %llu 16M+ %llu\n",
           (unsigned long long)n, (unsigned long long)(all >> 20), (unsigned long long)user,
           (unsigned long long)(userBytes >> 20), (unsigned long long)avg[0], (unsigned long long)top[0],
-          (unsigned long long)avg[1], (unsigned long long)top[1], (unsigned long long)avg[2], (unsigned long long)top[2]);
+          (unsigned long long)avg[1], (unsigned long long)top[1], (unsigned long long)avg[2], (unsigned long long)top[2],
+          (unsigned long long)sizes[0], (unsigned long long)sizes[1], (unsigned long long)sizes[2], (unsigned long long)sizes[3],
+          (unsigned long long)sizes[4], (unsigned long long)sizes[5]);
 }
 
 /* the time since *t goes to a phase: 0 object lookup, 1 engine pin and ring throttle, 2 object locks, 3 vma pins, 4 reserve and

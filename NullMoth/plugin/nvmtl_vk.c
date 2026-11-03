@@ -330,6 +330,97 @@ static int nvmtl_rebind_import(const void *inside, const char *symbol, void *rep
 
 INSTANCE_FNS(DECL) DEVICE_FNS(DECL)
 #undef DECL
+/*
+ * Memory census (v39, WindowServer only): each vkAllocateMemory of the plugin, keyed by its three callers, with a size
+ * histogram, logged every 1024 allocations. Each new memory object costs its first execbuffer a binding (the kernel's
+ * "execbuffer new bindings" lines: ~1.3 ms each while a Launchpad folder opens, up to 35 ms).
+ */
+#include <execinfo.h>
+#include <time.h>
+#define NVMTL_MC_SITES 24
+typedef struct { void *pc[3]; uint64_t n, bytes; } nvmtl_mc_site;
+static PFN_vkAllocateMemory g_mc_alloc;
+static PFN_vkFreeMemory g_mc_free;
+static pthread_mutex_t g_mc_lock = PTHREAD_MUTEX_INITIALIZER;
+static nvmtl_mc_site g_mc_site[NVMTL_MC_SITES];   // the last one collects the callers that found no slot
+static unsigned g_mc_nsites;
+static uint64_t g_mc_n, g_mc_bytes, g_mc_host, g_mc_size[6], g_mc_t0;
+static _Atomic uint64_t g_mc_frees;
+static void nvmtl_mc_name(void *pc, char *out, size_t len)
+{
+    Dl_info di;
+    if (!pc || !dladdr(pc, &di)) { snprintf(out, len, "%p", pc); return; }
+    const char *base = di.dli_fname ? strrchr(di.dli_fname, '/') : NULL;
+    const unsigned long off = (unsigned long)((char *)pc - (char *)di.dli_fbase);
+    if (di.dli_sname) snprintf(out, len, "%s+%ld (%s+0x%lx)", di.dli_sname, (long)((char *)pc - (char *)di.dli_saddr), base ? base + 1 : "?", off);
+    else snprintf(out, len, "%s+0x%lx", base ? base + 1 : "?", off);
+}
+static int nvmtl_mc_by_count(const void *a, const void *b)
+{
+    const uint64_t x = ((const nvmtl_mc_site *)a)->n, y = ((const nvmtl_mc_site *)b)->n;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL nvmtl_mc_AllocateMemory(VkDevice dev, const VkMemoryAllocateInfo *info, const VkAllocationCallbacks *allocator, VkDeviceMemory *mem)
+{
+    const VkResult r = g_mc_alloc(dev, info, allocator, mem);
+    if (r != VK_SUCCESS || !info) return r;
+    void *bt[4] = { 0 };
+    const int depth = backtrace(bt, 4);
+    void *pc[3] = { depth > 1 ? bt[1] : NULL, depth > 2 ? bt[2] : NULL, depth > 3 ? bt[3] : NULL };
+    int host = 0;
+    for (const VkBaseInStructure *s = (const VkBaseInStructure *)info->pNext; s; s = s->pNext)
+        if (s->sType == VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT) host = 1;
+    const uint64_t sz = info->allocationSize;
+    const int k = sz < (64ull << 10) ? 0 : sz < (256ull << 10) ? 1 : sz < (1ull << 20) ? 2 : sz < (4ull << 20) ? 3 : sz < (16ull << 20) ? 4 : 5;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    nvmtl_mc_site snap[NVMTL_MC_SITES]; unsigned nsnap = 0;
+    uint64_t s_size[6] = { 0 }, s_bytes = 0, s_host = 0, s_ns = 0;
+    pthread_mutex_lock(&g_mc_lock);
+    if (!g_mc_t0) g_mc_t0 = now;
+    unsigned j = 0;
+    while (j < g_mc_nsites && memcmp(g_mc_site[j].pc, pc, sizeof pc)) j++;
+    if (j == g_mc_nsites) {
+        if (g_mc_nsites < NVMTL_MC_SITES - 1) { memcpy(g_mc_site[j].pc, pc, sizeof pc); g_mc_nsites++; }
+        else j = NVMTL_MC_SITES - 1;
+    }
+    g_mc_site[j].n++; g_mc_site[j].bytes += sz;
+    g_mc_bytes += sz; g_mc_host += (uint64_t)host; g_mc_size[k]++;
+    if ((++g_mc_n & 1023) == 0) {
+        nsnap = g_mc_nsites;
+        memcpy(snap, g_mc_site, nsnap * sizeof snap[0]);
+        if (g_mc_site[NVMTL_MC_SITES - 1].n) snap[nsnap++] = g_mc_site[NVMTL_MC_SITES - 1];
+        memcpy(s_size, g_mc_size, sizeof s_size); s_bytes = g_mc_bytes; s_host = g_mc_host; s_ns = now - g_mc_t0;
+        memset(g_mc_site, 0, sizeof g_mc_site); g_mc_nsites = 0;
+        memset(g_mc_size, 0, sizeof g_mc_size); g_mc_bytes = g_mc_host = 0; g_mc_t0 = now;
+    }
+    pthread_mutex_unlock(&g_mc_lock);
+    if (nsnap) {
+        syslog(LOG_ERR, "NullMoth: memory census: 1024 allocations in %.1f s, %llu MB, %llu host imports, %llu frees so far; sizes <64K %llu <256K %llu <1M %llu <4M %llu <16M %llu 16M+ %llu",
+               (double)s_ns / 1e9, (unsigned long long)(s_bytes >> 20), (unsigned long long)s_host, (unsigned long long)atomic_load(&g_mc_frees),
+               (unsigned long long)s_size[0], (unsigned long long)s_size[1], (unsigned long long)s_size[2], (unsigned long long)s_size[3],
+               (unsigned long long)s_size[4], (unsigned long long)s_size[5]);
+        qsort(snap, nsnap, sizeof snap[0], nvmtl_mc_by_count);
+        for (unsigned i = 0; i < nsnap && i < 8; i++) {
+            char a[160], b[160], c[160];
+            nvmtl_mc_name(snap[i].pc[0], a, sizeof a); nvmtl_mc_name(snap[i].pc[1], b, sizeof b); nvmtl_mc_name(snap[i].pc[2], c, sizeof c);
+            syslog(LOG_ERR, "NullMoth: memory census #%u: %llu allocations, %llu KB avg: %s <- %s <- %s", i + 1, (unsigned long long)snap[i].n,
+                   (unsigned long long)(snap[i].bytes / snap[i].n >> 10), snap[i].pc[0] ? a : "(other callers)", b, c);
+        }
+    }
+    return r;
+}
+static VKAPI_ATTR void VKAPI_CALL nvmtl_mc_FreeMemory(VkDevice dev, VkDeviceMemory mem, const VkAllocationCallbacks *allocator)
+{
+    if (mem) atomic_fetch_add(&g_mc_frees, 1);
+    g_mc_free(dev, mem, allocator);
+}
+// after each DEVICE_FNS(LOAD_D): the loaded entry points go behind the census
+static void nvmtl_mc_install(void)
+{
+    if (strcmp(getprogname(), "WindowServer")) return;
+    if (pvkAllocateMemory != nvmtl_mc_AllocateMemory) { g_mc_alloc = pvkAllocateMemory; pvkAllocateMemory = nvmtl_mc_AllocateMemory; }
+    if (pvkFreeMemory != nvmtl_mc_FreeMemory) { g_mc_free = pvkFreeMemory; pvkFreeMemory = nvmtl_mc_FreeMemory; }
+}
 #define LOAD_I(f) do { p##f = (PFN_##f)pvkGetInstanceProcAddr(g_inst, #f); if (!p##f) { nvlog("vk: missing %s", #f); return -1; } } while (0);
 #define LOAD_D(f) do { p##f = (PFN_##f)pvkGetDeviceProcAddr(g_dev, #f);   if (!p##f) { nvlog("vk: missing %s", #f); return -1; } } while (0);
 
@@ -991,6 +1082,7 @@ static int nvmtl_vk_initialize(void)
                                1, &qci, 0, NULL, next, next ? exts : NULL, &enabled };
     VKCK(pvkCreateDevice(g_pdev, &dci, NULL, &g_dev), "vkCreateDevice");
     DEVICE_FNS(LOAD_D)
+    nvmtl_mc_install();
     {
         PFN_vkCreatePipelineCache create_cache=(PFN_vkCreatePipelineCache)pvkGetDeviceProcAddr(g_dev,"vkCreatePipelineCache");
         int enabled=g_integrated_memory && !strcmp(getprogname(),"WindowServer");
@@ -1820,10 +1912,15 @@ static VkResult nvmtl_vk_alloc_image_mem(const VkMemoryRequirements *mr, VkDevic
  * per 256 bindings, 45 ms for each 22 MB surface, and that one call held up the whole queue. A texture's contents start
  * undefined, so the same object serves the next one; like the buffer park this relies on a texture being released only
  * after the command buffers that use it. /Library/GPUBundles/nvmtl-ws-no-imagepark turns it off.
+ *
+ * v39: the memory is rounded up to one of four sizes per power of two (12% more on average), so an image that grows or
+ * shrinks a little each frame - the blur behind a Launchpad folder while it opens - finds the last frame's memory; v38
+ * matched exact sizes only and freed 58% of what it parked. 96 entries from 64 KB (was 32 from 1 MB).
+ * /Library/GPUBundles/nvmtl-ws-park-exact goes back to exact sizes.
  */
-#define NVMTL_IMGPARK_N     32
+#define NVMTL_IMGPARK_N     96
 #define NVMTL_IMGPARK_BYTES (512ull << 20)
-#define NVMTL_IMGPARK_MIN   (1ull << 20)
+#define NVMTL_IMGPARK_MIN   (64ull << 10)
 static pthread_mutex_t g_ipark_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; } g_ipark[NVMTL_IMGPARK_N];
 static unsigned g_ipark_n;
@@ -1838,22 +1935,38 @@ static int ipark_on(void)
     }
     return on;
 }
+static int ipark_exact(void)
+{
+    static int on = -1;
+    if (on < 0) on = access("/Library/GPUBundles/nvmtl-ws-park-exact", F_OK) == 0;
+    return on;
+}
 static void ipark_census(void)
 {
     const uint64_t n = atomic_load(&g_ipark_parked) + atomic_load(&g_ipark_reused);
     if (n & (n - 1)) return;
-    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB", (unsigned long long)atomic_load(&g_ipark_parked),
+    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB, %s", (unsigned long long)atomic_load(&g_ipark_parked),
           (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted), g_ipark_n,
-          (unsigned long long)(g_ipark_bytes >> 20));
+          (unsigned long long)(g_ipark_bytes >> 20), ipark_exact() ? "exact sizes" : "size buckets");
 }
-static VkDeviceMemory ipark_take(const VkMemoryRequirements *mr)
+// the size a new parkable image's memory is allocated with: four sizes per power of two (1, 1.25, 1.5, 1.75)
+static VkDeviceSize ipark_bucket(VkDeviceSize size)
+{
+    if (size < NVMTL_IMGPARK_MIN || size > NVMTL_IMGPARK_BYTES / 4 || ipark_exact() || !ipark_on()) return size;
+    VkDeviceSize p = 1;
+    while (p <= size / 2) p <<= 1;
+    const VkDeviceSize step = p / 4;
+    return (size + step - 1) / step * step;
+}
+static VkDeviceMemory ipark_take(const VkMemoryRequirements *mr, VkDeviceSize *size)
 {
     if (mr->size < NVMTL_IMGPARK_MIN || !ipark_on()) return VK_NULL_HANDLE;
+    const VkDeviceSize top = ipark_bucket(mr->size);
     VkDeviceMemory got = VK_NULL_HANDLE;
     pthread_mutex_lock(&g_ipark_lock);
     for (unsigned k = g_ipark_n; k-- > 0; )
-        if (g_ipark[k].size == mr->size && (mr->memoryTypeBits & (1u << g_ipark[k].type))) {
-            got = g_ipark[k].mem; g_ipark_bytes -= g_ipark[k].size;
+        if (g_ipark[k].size >= mr->size && g_ipark[k].size <= top && (mr->memoryTypeBits & (1u << g_ipark[k].type))) {
+            got = g_ipark[k].mem; *size = g_ipark[k].size; g_ipark_bytes -= g_ipark[k].size;
             memmove(&g_ipark[k], &g_ipark[k + 1], (g_ipark_n - k - 1) * sizeof g_ipark[0]); g_ipark_n--;
             break;
         }
@@ -1867,7 +1980,7 @@ static int ipark_put(const nvk_image *i)
     if (i->placed || !i->mem || i->sysmem || i->alloc < NVMTL_IMGPARK_MIN || i->alloc > NVMTL_IMGPARK_BYTES / 4 || !ipark_on()) return 0;
     VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, (VkImage)i->img, &mr);
     const int type = memtype(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (type < 0 || mr.size != i->alloc) return 0;
+    if (type < 0 || mr.size > i->alloc) return 0;
     VkDeviceMemory ev[NVMTL_IMGPARK_N + 1]; unsigned nev = 0;
     pthread_mutex_lock(&g_ipark_lock);
     while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES)) {
@@ -1882,14 +1995,18 @@ static int ipark_put(const nvk_image *i)
     atomic_fetch_add(&g_ipark_parked, 1); ipark_census();
     return 1;
 }
-static VkResult nvmtl_alloc_opaque_image_mem(const VkMemoryRequirements *mr, void **out, uint32_t *sysmem, const char *what)
+// *alloc: the memory object's size, which may exceed mr->size (the image park's size buckets)
+static VkResult nvmtl_alloc_opaque_image_mem(const VkMemoryRequirements *mr, void **out, uint32_t *sysmem, size_t *alloc, const char *what)
 {
-    VkDeviceMemory memory = ipark_take(mr);
-    if (memory) { *out = memory; *sysmem = 0; return VK_SUCCESS; }
-    VkResult result = nvmtl_vk_alloc_image_mem(mr, &memory, sysmem, what);
+    VkDeviceSize parked = 0;
+    VkDeviceMemory memory = ipark_take(mr, &parked);
+    if (memory) { *out = memory; *sysmem = 0; *alloc = (size_t)parked; return VK_SUCCESS; }
+    VkMemoryRequirements bucket = *mr;
+    bucket.size = ipark_bucket(mr->size);
+    VkResult result = nvmtl_vk_alloc_image_mem(&bucket, &memory, sysmem, what);
     if (result == VK_SUCCESS) {
-        *out = memory;
-        if (!*sysmem) nvmtl_vk_budget_charge(mr->size);
+        *out = memory; *alloc = (size_t)bucket.size;
+        if (!*sysmem) nvmtl_vk_budget_charge(bucket.size);
     }
     return result;
 }
@@ -1941,8 +2058,7 @@ static int nvmtl_vk_image_create_ms_lifetime_body(uint32_t w, uint32_t h, uint32
     nvmtl_vk_image_mutable(&ici, out);
     VKCK(nvmtl_opaque_CreateImage(g_dev, &ici, NULL, &out->img), "vkCreateImage(ms)");
     VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, out->img, &mr);
-    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, "multisample"), "vkAllocateMemory(ms)");
-    out->alloc = mr.size;
+    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, &out->alloc, "multisample"), "vkAllocateMemory(ms)");
     VKCK(pvkBindImageMemory(g_dev, out->img, out->mem, 0), "vkBindImageMemory(ms)");
     VkImageViewCreateInfo vci = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, NULL, 0, out->img, mtl_type == 8 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D, (VkFormat)vkfmt,
         { 0, 0, 0, 0 }, { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers } };
@@ -1979,8 +2095,7 @@ static int nvmtl_vk_image_create_typed_lifetime_body(uint32_t w, uint32_t h, uin
     nvmtl_vk_image_mutable(&ici, out);
     VKCK(nvmtl_opaque_CreateImage(g_dev, &ici, NULL, &out->img), "vkCreateImage");
     VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, out->img, &mr);
-    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, "colour"), "vkAllocateMemory(image)");
-    out->alloc = mr.size;
+    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, &out->alloc, "colour"), "vkAllocateMemory(image)");
     VKCK(pvkBindImageMemory(g_dev, out->img, out->mem, 0), "vkBindImageMemory");
     VkComponentMapping swz = a8 ? (VkComponentMapping){ VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_R }
                                 : (VkComponentMapping){ 0, 0, 0, 0 };
@@ -3217,8 +3332,7 @@ static int nvmtl_vk_depth_create_full_lifetime_body(uint32_t w, uint32_t h, uint
     VKCK(nvmtl_opaque_CreateImage(g_dev, &ici, NULL, &out->img), "vkCreateImage(depth)");
     out->usage = (uint32_t)ici.usage;
     VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, out->img, &mr);
-    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, "depth"), "vkAllocateMemory(depth)");
-    out->alloc = mr.size;
+    VKCK(nvmtl_alloc_opaque_image_mem(&mr, &out->mem, &out->sysmem, &out->alloc, "depth"), "vkAllocateMemory(depth)");
     VKCK(pvkBindImageMemory(g_dev, out->img, out->mem, 0), "vkBindImageMemory(depth)");
     VkImageViewType vt = out->mtl_type == 3 || out->mtl_type == 8 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : out->mtl_type == 5 ? VK_IMAGE_VIEW_TYPE_CUBE
                        : out->mtl_type == 6 ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
