@@ -46,6 +46,7 @@ static inline void *nvmtl_buf_cpu(NVMTLBuffer *b) { nvmtl_buf_settle(b); return 
   uint32_t _surfSeed, _surfGen; BOOL _surfSynced, _surfOwned;
   nvk_buffer _vramBuf; BOOL _vramOn;
   nvk_buffer _hostBuf; BOOL _hostOn;   // an integrated GPU's image over the IOSurface's own pages: no copies
+  nvk_image _hostAlias; BOOL _hybrid;  // v37: _i is a tiled private image, copied on the GPU to _hostAlias (over _hostBuf)
   BOOL _stex;
   uint64_t _resid;
   NSUInteger _usage;
@@ -56,6 +57,7 @@ static inline void *nvmtl_buf_cpu(NVMTLBuffer *b) { nvmtl_buf_settle(b); return 
 - (void *)nvsampleview;
 - (void)nvmtlSurfaceIn;
 - (BOOL)nvmtlSurfaceOut;
+- (void)nvmtlHybridCopied;
 @end
 @interface NVMTLFunction : NSObject <MTLFunction> { @public NSData *_spirv; NSString *_fname; NSString *_stage; NSString *_air; NSDictionary *_fc; NSArray *_embedded; unsigned char _bcHash[32]; BOOL _bcHashed;
   NSDictionary *_refl; NSDictionary *_airNames; NSArray *_arguments;

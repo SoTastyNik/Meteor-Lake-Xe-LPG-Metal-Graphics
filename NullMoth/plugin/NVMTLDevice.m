@@ -876,8 +876,48 @@ static int nvmtl_surface_host_image(NVMTLTexture *t, IOSurfaceRef surf, uint32_t
               (unsigned)IOSurfaceGetID(surf), w, h, row, vkf, g_surf_host, g_surf_host_refused);
     return 0;
 }
+/* v37 (/Library/GPUBundles/nvmtl-ws-tiled): WindowServer drew into the linear images over its display surfaces 2-3x
+   slower than into tiled ones (pass census, 2880x1920: a fill 1404 vs 598 us, CoreAnimation's textured draw 2581 vs
+   871 us, 8.2 vs 5.8 ms of GPU time per command buffer), while private images paid two CPU copies a frame instead. A
+   hybrid surface keeps the host image as _hostAlias and renders into a tiled private _i; every command buffer that wrote
+   it copies _i to _hostAlias on the GPU before it completes (nvmtlSealPartWithSignal), so the panel and other processes
+   see the frame. Only a CPU write by someone else (a new seed) is copied back in. Another process's GPU write does not
+   move the seed, so only large surfaces this process renders into qualify. */
+#include "nvmtl_ws_tuning.h"
+static _Atomic unsigned long long g_surf_hybrid, g_hybrid_out, g_hybrid_in, g_hybrid_sync;
+static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w, uint32_t h, uint32_t vkf, uint32_t bpp,
+                                 int a8, int stex, MTLTextureUsage usage)
+{
+    static int ws = -1;
+    if (ws < 0) ws = nvmtl_vk_windowserver_serial() && nvmtl_ws_tiled();
+    if (!ws || (uint64_t)w * h < 4000000u) return;
+    if (!(usage & MTLTextureUsageRenderTarget)) {
+        static unsigned said; if (said++ < 8)
+            syslog(LOG_ERR, "NullMoth: hybrid: surface %u %ux%u usage 0x%lx is not a render target - stays a host image",
+                   (unsigned)IOSurfaceGetID(surf), w, h, (unsigned long)usage);
+        return;
+    }
+    // shared by every wrapper of the surface, as a private image is: writable whenever the format can be
+    if (!stex && nvmtl_vk_format_is_storage(vkf)) stex = 1;
+    nvk_image tiled;
+    if (nvmtl_vk_image_create_typed(w, h, vkf, bpp, a8, 1, stex, 2u, 1u, &tiled)) {
+        syslog(LOG_ERR, "NullMoth: hybrid: surface %u %ux%u: no tiled image - stays a host image", (unsigned)IOSurfaceGetID(surf), w, h);
+        return;
+    }
+    if (tiled.fmt != t->_i.fmt || tiled.w != t->_i.w || tiled.h != t->_i.h) {
+        syslog(LOG_ERR, "NullMoth: hybrid: surface %u: tiled image %ux%u fmt %u does not match the host image %ux%u fmt %u",
+               (unsigned)IOSurfaceGetID(surf), tiled.w, tiled.h, tiled.fmt, t->_i.w, t->_i.h, t->_i.fmt);
+        nvmtl_vk_image_destroy(&tiled);
+        return;
+    }
+    t->_hostAlias = t->_i; t->_i = tiled; t->_hostOn = NO; t->_hybrid = YES;
+    const unsigned long long n = ++g_surf_hybrid;
+    if (n <= 32 || n % 256 == 0)
+        syslog(LOG_ERR, "NullMoth: hybrid surface %u %ux%u fmt %u usage 0x%lx row %zu: tiled image, GPU copy to its pages (#%llu)",
+               (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, IOSurfaceGetBytesPerRow(surf), n);
+}
 static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInteger plane, uint32_t w, uint32_t h,
-                                      uint32_t vkf, uint32_t bpp, int a8, int stex)
+                                      uint32_t vkf, uint32_t bpp, int a8, int stex, MTLTextureUsage usage)
 {
     if (surf && plane == 0 && IOSurfaceGetPlaneCount(surf) <= 1 && nvmtl_vk_surface_share_on()) {
         size_t row = IOSurfaceGetBytesPerRow(surf), sh = IOSurfaceGetHeight(surf);
@@ -899,7 +939,7 @@ static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInt
         }
     }
     if (surf && plane == 0 && IOSurfaceGetPlaneCount(surf) <= 1 && nvmtl_surface_host_on()) {
-        if (!nvmtl_surface_host_image(t, surf, w, h, vkf, bpp, a8, stex)) return 0;
+        if (!nvmtl_surface_host_image(t, surf, w, h, vkf, bpp, a8, stex)) { nvmtl_surface_hybrid(t, surf, w, h, vkf, bpp, a8, stex, usage); return 0; }
     }
     g_surf_private++;
     // A private image stands for the whole surface: wrappers that read it and wrappers that write it must share ONE image
@@ -930,7 +970,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
     [keep removeObjectIdenticalTo:t];
     [keep addObject:t];
     size_t bytes = 0;
-    for (NVMTLTexture *k in keep) bytes += k->_hostBuf.size;
+    for (NVMTLTexture *k in keep) bytes += k->_hostBuf.size;   // a hybrid's tiled image is as large again
     while (keep.count > 1 && (keep.count > 48 || bytes > (192u << 20))) {
         NVMTLTexture *old = keep.firstObject; bytes -= old->_hostBuf.size; [keep removeObjectAtIndex:0];
     }
@@ -974,7 +1014,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
     // whether a wrapper reads it or writes it (the image is made writable).
     // Weak entries do not pin the image after the application's last wrapper.
     if (backing && !backing->_vramOn) {
-        if (backing->_hostOn) nvmtl_host_keep(self, backing);
+        if (backing->_hostOn || backing->_hybrid) nvmtl_host_keep(self, backing);
         NVMTLTexture *alias = (NVMTLTexture *)[backing newTextureViewWithPixelFormat:d.pixelFormat];
         if (alias) {
             alias->_viewParent = nil; alias->_usage = d.usage; alias->_ropt = t->_ropt; alias->_fbo = t->_fbo;
@@ -982,7 +1022,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
             return alias;
         }
     }
-    if (nvmtl_surface_image_create(t, surf, plane, (uint32_t)w, (uint32_t)h, vkf, bpp, a8, wantStex)) {
+    if (nvmtl_surface_image_create(t, surf, plane, (uint32_t)w, (uint32_t)h, vkf, bpp, a8, wantStex, (MTLTextureUsage)d.usage)) {
         nvlog("newTextureWithDescriptor:iosurface:plane: image create FAILED (%zux%zu)", w, h); return nil; }
     t->_q = nvmtl_device_queue();
     t->_surf = surf; if (surf) { CFRetain(surf); t->_surfOwned = YES; }
@@ -992,7 +1032,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
     t->_usage = d.usage;
     nvmtl_texture_desc_swizzle(t, d);
     if (key && !t->_vramOn) [cache setObject:t forKey:key];
-    if (key && t->_hostOn) nvmtl_host_keep(self, t);
+    if (key && (t->_hostOn || t->_hybrid)) nvmtl_host_keep(self, t);
     nvlog("newTextureWithDescriptor:iosurface:%p plane:%lu -> %p (%zux%zu fmt %lu)",
           (void *)surf, (unsigned long)plane, (__bridge void *)t, w, h, (unsigned long)d.pixelFormat);
     return t; }

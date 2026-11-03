@@ -1163,6 +1163,7 @@ void nvmtl_texture_desc_swizzle(NVMTLTexture *t, MTLTextureDescriptor *d) {
     if (_stTwin.img) nvmtl_vk_image_destroy(&_stTwin);
     if (!_parent && _vramOn) { nvmtl_vk_buffer_destroy(&_vramBuf); _vramOn = NO; }
     if (!_parent && _hostOn) { nvmtl_vk_buffer_destroy(&_hostBuf); _hostOn = NO; }
+    if (!_parent && _hybrid) { nvmtl_vk_image_destroy(&_hostAlias); nvmtl_vk_buffer_destroy(&_hostBuf); _hybrid = NO; }
     if (_surfOwned && _surf) CFRelease(_surf);
     if (_subHeap) { NVMTLHeap *h = _subHeap; NSUInteger c = _subCharge; _subHeap = nil; _subCharge = 0;
                     if (_subPlaced && c) { _subPlaced = NO; [h nvmtlGiveRange:_heapOffset length:c]; }
@@ -1214,6 +1215,24 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
 - (void)nvmtlSurfaceIn {
     NVMTLTexture *r = _parent ? _parent : self;
     if (!r->_surf || r->_hostOn) return;   // a host image is the surface: nothing to copy in
+    if (r->_hybrid) {   // the tiled image is current unless someone else wrote the surface's pages from the CPU
+        if (r->_surfSynced && IOSurfaceGetSeed(r->_surf) == r->_surfSeed) return;
+        @synchronized (nvmtl_surface_sync(r)) {
+            const uint32_t seed = IOSurfaceGetSeed(r->_surf);
+            if (r->_surfSynced && seed == r->_surfSeed) return;
+            if (nvmtl_vk_copy_image(r->_q, &r->_hostAlias, 0, 0, &r->_i, 0, 0, r->_i.w, r->_i.h)) {
+                syslog(LOG_ERR, "NullMoth: hybrid surface %u: GPU copy in FAILED - retried at the next use", (unsigned)IOSurfaceGetID(r->_surf));
+                return;
+            }
+            r->_surfSeed = seed; r->_surfSynced = YES;
+            const unsigned long long n = ++g_hybrid_in;
+            if (n <= 16 || n % 512 == 0)
+                syslog(LOG_ERR, "NullMoth: hybrid surface %u %ux%u copied in on the GPU at seed %u (%llu in, %llu out, %llu synchronous out)",
+                       (unsigned)IOSurfaceGetID(r->_surf), r->_i.w, r->_i.h, seed, n, (unsigned long long)g_hybrid_out,
+                       (unsigned long long)g_hybrid_sync);
+        }
+        return;
+    }
     @synchronized (nvmtl_surface_sync(r)) {
     const uint32_t vgen = r->_vramOn ? 0 : nvmtl_vram_gen(r->_surf, r->_plane);
     if (r->_surfSynced && IOSurfaceGetSeed(r->_surf) == r->_surfSeed && (r->_vramOn || vgen == r->_surfGen)) return;
@@ -1236,11 +1255,29 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
     static unsigned n; if (n++ < 6 || n % 2000 == 0) nvlog("G13 surface-in #%u: %ux%u surface %p seed %u uploaded", n, r->_i.w, r->_i.h, (void *)r->_surf, seed);
     }
 }
+// A hybrid surface's command buffer copied its tiled image to the surface's pages before completing.
+- (void)nvmtlHybridCopied {
+    NVMTLTexture *r = _parent ? _parent : self;
+    if (r->_surf) { r->_surfSeed = IOSurfaceGetSeed(r->_surf); r->_surfSynced = YES; }
+}
 #include "nvmtl_surface_publication.h"
 #include "nvmtl_ws_tuning.h"
 - (BOOL)nvmtlSurfaceOut {
     NVMTLTexture *r = _parent ? _parent : self;
     if (!r->_surf || r->_hostOn) return YES;   // the GPU wrote the surface's own pages
+    if (r->_hybrid) {   // a write no command buffer copied out (replaceRegion, a copy the seal could not record): copy now
+        @synchronized (nvmtl_surface_sync(r)) {
+            if (nvmtl_vk_copy_image(r->_q, &r->_i, 0, 0, &r->_hostAlias, 0, 0, r->_i.w, r->_i.h)) {
+                syslog(LOG_ERR, "NullMoth: hybrid surface %u: synchronous GPU copy out FAILED", (unsigned)IOSurfaceGetID(r->_surf));
+                return NO;
+            }
+            r->_surfSeed = IOSurfaceGetSeed(r->_surf); r->_surfSynced = YES;
+            const unsigned long long n = ++g_hybrid_sync;
+            if (n <= 8 || n % 512 == 0)
+                syslog(LOG_ERR, "NullMoth: hybrid surface %u: synchronous GPU copy out (#%llu)", (unsigned)IOSurfaceGetID(r->_surf), n);
+        }
+        return YES;
+    }
     const uint64_t monitorBegin=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     @synchronized (nvmtl_surface_sync(r)) {
     const uint64_t monitorWait=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)-monitorBegin;

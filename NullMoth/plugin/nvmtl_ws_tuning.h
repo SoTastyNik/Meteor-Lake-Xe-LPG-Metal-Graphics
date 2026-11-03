@@ -24,6 +24,9 @@
  *   /Library/GPUBundles/nvmtl-ws-nowait          with early schedule and the pipeline: WindowServer's commit does not wait
  *                                                to be scheduled at all (NMXAccel's ordered flips hold the surface until
  *                                                it is published). Experimental.
+ *   /Library/GPUBundles/nvmtl-ws-tiled           with host import: WindowServer's full-screen render targets are drawn in a
+ *                                                tiled private image and copied to the surface's own pages on the GPU
+ *                                                once per command buffer (v37, NVMTLDevice.m nvmtl_surface_hybrid).
  */
 #include <unistd.h>
 
@@ -68,6 +71,12 @@ static inline int nvmtl_ws_nowait(void)
 {
     static int on = -1;
     return nvmtl_ws_pipeline() && nvmtl_ws_early_schedule() && nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-nowait", &on);
+}
+
+static inline int nvmtl_ws_tiled(void)
+{
+    static int on = -1;
+    return nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-tiled", &on);
 }
 
 /* nvmtl_vk_buffer_create's host_visible value for a cached (non-coherent, cache-maintained) readback buffer */

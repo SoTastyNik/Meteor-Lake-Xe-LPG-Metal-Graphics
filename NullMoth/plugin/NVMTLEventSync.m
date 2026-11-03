@@ -10,6 +10,7 @@
 @public
     nvk_cmdbuf commands;
     NSSet *resources, *surfaces;
+    NSSet *hybridOut;   // hybrid surfaces whose copy to their own pages this part records
     NSArray *scratch;
     id waitEvent, signalEvent;
     uint64_t value;
@@ -131,7 +132,26 @@ static int nvmtl_skip_empty_on(void) {
 - (void)nvmtlSealPartWithSignal:(id)event value:(uint64_t)value restart:(BOOL)restart {
     if (!_parts) _parts = [NSMutableArray new];
     nvmtl_g79_flush(self);
+    // Hybrid surfaces (NVMTLDevice.m nvmtl_surface_hybrid) were drawn in their tiled image: the part copies it to the
+    // surface's own pages before it completes. One full copy per command buffer that wrote the surface.
+    NSMutableSet *hybridOut = nil;
+    for (NVMTLTexture *s in _surfDirty) {
+        if (!s->_hybrid) continue;
+        if (!_c.cb || _c.in_rp || nvmtl_vk_cmd_copy_image(&_c, &s->_i, 0, 0, &s->_hostAlias, 0, 0, s->_i.w, s->_i.h)) {
+            static unsigned said; if (said++ < 8)
+                syslog(LOG_ERR, "NullMoth: hybrid surface %u: copy out not recorded (%s) - copied after completion",
+                       (unsigned)IOSurfaceGetID(s->_surf), !_c.cb ? "no recording" : _c.in_rp ? "render pass open" : "copy refused");
+            continue;
+        }
+        if (!hybridOut) hybridOut = [NSMutableSet new];
+        [hybridOut addObject:s];
+        const unsigned long long n = ++g_hybrid_out;
+        if (n <= 4 || n % 4096 == 0)
+            syslog(LOG_ERR, "NullMoth: hybrid surfaces: %llu GPU copies out, %llu copies in, %llu synchronous out, %llu surfaces made",
+                   n, (unsigned long long)g_hybrid_in, (unsigned long long)g_hybrid_sync, (unsigned long long)g_surf_hybrid);
+    }
     NVMTLSubmissionPart *part = [NVMTLSubmissionPart new];
+    part->hybridOut = hybridOut;
     part->commands = _c;
     memset(&_c, 0, sizeof(_c));
     part->resources = [(NVMTLResSet *)_resources nvmtlTakeAll]; part->surfaces = [_surfDirty copy];
@@ -538,8 +558,9 @@ static void nvmtl_gsub_ahead_pass1(void) {
         BOOL published = result == 0;
         if (published) {
             for (NVMTLTexture *texture in part->surfaces) {
-                if (![texture nvmtlSurfaceOut]) published = NO;
-                else nvmtl_mark_published(self, texture->_parent ? texture->_parent : texture);
+                if ([part->hybridOut containsObject:texture]) [texture nvmtlHybridCopied];
+                else if (![texture nvmtlSurfaceOut]) { published = NO; continue; }
+                nvmtl_mark_published(self, texture->_parent ? texture->_parent : texture);
             }
             if(phaseBegin)phaseSurfaces=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
             for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, YES)) nvmtl_buffer_sync_out(buffer);
