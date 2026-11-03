@@ -25,7 +25,7 @@
 }
 @end
 static _Atomic unsigned gsub_inflight;
-static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds);
+static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, double deviceEnd);
 static _Atomic unsigned long long gsub_ahead, gsub_peak;
 static _Atomic unsigned long long gAheadWork;   // parts the ahead pass submitted, folded or retired
 static BOOL nvmtl_split_submit_on(void);
@@ -47,13 +47,14 @@ static int nvmtl_gsub_finish(NVMTLSubmissionPart *part) {
 // Queue keys and command-buffer references are weak. An abandoned recording is
 // never registered; completion removes committed entries without retaining VRAM.
 static NSMapTable *nvmtl_surface_writers;
-static NSString *nvmtl_surface_writer_key(NVMTLTexture *t) {
-    return [NSString stringWithFormat:@"%u:%lu", (unsigned)IOSurfaceGetID(t->_surf), (unsigned long)t->_plane];
+// v40: a tagged-pointer number, not a formatted string (17 of WindowServer's main-thread samples per 1.8 s in v39)
+static NSNumber *nvmtl_surface_writer_key(NVMTLTexture *t) {
+    return @(((unsigned long long)IOSurfaceGetID(t->_surf) << 16) | (unsigned long long)(t->_plane & 0xFFFF));
 }
 static BOOL nvmtl_surface_pending_write(NVMTLCommandBuffer *cb, NVMTLTexture *t) {
     if (!cb || !t || !t->_surf) return NO;
     @synchronized ([NVMTLCommandBuffer class]) {
-        NSString *key = nvmtl_surface_writer_key(t);
+        NSNumber *key = nvmtl_surface_writer_key(t);
         for (id queue in nvmtl_surface_writers.keyEnumerator) {
             NSDictionary *writes = [nvmtl_surface_writers objectForKey:queue];
             NVMTLPendingSurfaceWrite *write = writes[key];
@@ -83,7 +84,7 @@ static void nvmtl_surface_register_writes(NVMTLCommandBuffer *cb) {
 static void nvmtl_surface_finish_writes(NVMTLCommandBuffer *cb) {
     @synchronized ([NVMTLCommandBuffer class]) {
         NSMutableDictionary *writes = [nvmtl_surface_writers objectForKey:cb->_queue];
-        for (NSString *key in [writes.allKeys copy]) {
+        for (id key in [writes.allKeys copy]) {
             NVMTLPendingSurfaceWrite *write = writes[key];
             if (!write->buffer || write->buffer == cb) [writes removeObjectForKey:key];
         }
@@ -288,7 +289,7 @@ static int nvmtl_skip_empty_on(void) {
     double deviceStart = 0, deviceEnd = 0;
     if (!error && _gpuTimingSeen && !_gpuTimingInvalid)
         (void)nvmtl_vk_interval_seconds(&_gpuTiming, &deviceStart, &deviceEnd);
-    if (nvmtl_vk_windowserver_serial()) nvmtl_ws_timing_census(self, error ? 0 : deviceEnd - deviceStart);
+    if (nvmtl_vk_windowserver_serial()) { nvmtl_ws_timing_census(self, error ? 0 : deviceStart, error ? 0 : deviceEnd); nvmtl_vk_ipark_trim(); }
     nvmtl_surface_finish_writes(self);
     [_completionCondition lock];
     _gpuStart = deviceStart; _gpuEnd = deviceEnd;
@@ -477,8 +478,14 @@ static void nvmtl_ws_submission_census(NVMTLCommandBuffer *cb) {
 static const double kWsGpuMs[] = { 2, 4, 8, 16, 33 }, kWsLatMs[] = { 8, 16, 33, 66, 133 };
 static unsigned long long gWsGpu[6], gWsLat[6], gWsTimed, gWsUntimed, gWsWindowT0;
 static double gWsGpuSum, gWsLatSum, gWsGpuMax, gWsLatMax, gWsSchedSum, gWsSchedMax;
-static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
+/* v40 frame path: commit to done split at scheduled, vkQueueSubmit's start and return, the GPU's first and last timestamp
+   and the worker seeing the fence: sched, pre-submit, execbuffer, GPU queue, GPU, signal, after */
+enum { WSP_SCHED, WSP_PRE, WSP_EXEC, WSP_QUEUE, WSP_GPU, WSP_SIGNAL, WSP_AFTER, WSP_N };
+static double gWsPathSum[WSP_N], gWsPathMax[WSP_N];
+static unsigned long long gWsPathN;
+static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, double deviceEnd) {
     if (!cb->_traceCommitNS) return;
+    const double gpuSeconds = deviceEnd > deviceStart ? deviceEnd - deviceStart : 0;
     const double lat = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - cb->_traceCommitNS) * 1e-6, gpu = gpuSeconds * 1e3;
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&lock);
@@ -488,6 +495,19 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
         if (cb->_scheduledNS > cb->_traceCommitNS) {
             const double sched = (cb->_scheduledNS - cb->_traceCommitNS) * 1e-6;
             gWsSchedSum += sched; if (sched > gWsSchedMax) gWsSchedMax = sched;
+        }
+        const nvmtl_gpu_interval *ti = &cb->_gpuTiming;
+        if (deviceStart > 0 && cb->_scheduledNS > cb->_traceCommitNS && ti->host_locked_ns && ti->host_submitted_ns && ti->host_after_ns) {
+            // the GPU interval and the submit stamps are CLOCK_UPTIME_RAW, the commit and schedule stamps CLOCK_MONOTONIC_RAW
+            const double off = (double)nowNS - (double)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            const double commit = cb->_traceCommitNS - off, sched = cb->_scheduledNS - off, now = nowNS - off;
+            const double t[WSP_N + 1] = { commit, sched, (double)ti->host_locked_ns, (double)ti->host_submitted_ns,
+                                          deviceStart * 1e9, deviceEnd * 1e9, (double)ti->host_after_ns, now };
+            for (int k = 0; k < WSP_N; k++) {
+                const double ms = (t[k + 1] - t[k]) * 1e-6;
+                gWsPathSum[k] += ms; if (ms > gWsPathMax[k]) gWsPathMax[k] = ms;
+            }
+            gWsPathN++;
         }
         unsigned k = 0; while (k < 5 && lat >= kWsLatMs[k]) k++;
         gWsLat[k]++; gWsLatSum += lat; if (lat > gWsLatMax) gWsLatMax = lat;
@@ -503,6 +523,16 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
                gWsGpuMax, gWsUntimed, gWsLat[0], gWsLat[1], gWsLat[2], gWsLat[3], gWsLat[4], gWsLat[5],
                gWsLatSum / 512, gWsLatMax, gWsSchedSum / 512, gWsSchedMax, (nowNS - gWsWindowT0) * 1e-9,
                nvmtl_split_submit_on() ? ", split submit" : "");
+        if (gWsPathN) {
+            const double n = (double)gWsPathN;
+            syslog(LOG_ERR, "NullMoth: frame timing path ms avg/max over %llu: sched %.2f/%.1f, pre-submit %.2f/%.1f, execbuffer %.2f/%.1f, "
+                   "GPU queue %.2f/%.1f, GPU %.2f/%.1f, signal %.2f/%.1f, after %.2f/%.1f", gWsPathN,
+                   gWsPathSum[WSP_SCHED] / n, gWsPathMax[WSP_SCHED], gWsPathSum[WSP_PRE] / n, gWsPathMax[WSP_PRE],
+                   gWsPathSum[WSP_EXEC] / n, gWsPathMax[WSP_EXEC], gWsPathSum[WSP_QUEUE] / n, gWsPathMax[WSP_QUEUE],
+                   gWsPathSum[WSP_GPU] / n, gWsPathMax[WSP_GPU], gWsPathSum[WSP_SIGNAL] / n, gWsPathMax[WSP_SIGNAL],
+                   gWsPathSum[WSP_AFTER] / n, gWsPathMax[WSP_AFTER]);
+        }
+        memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;
         memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
         gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = gWsSchedSum = gWsSchedMax = 0;
         gWsWindowT0 = nowNS;

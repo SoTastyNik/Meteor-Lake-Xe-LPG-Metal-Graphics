@@ -1917,15 +1917,19 @@ static VkResult nvmtl_vk_alloc_image_mem(const VkMemoryRequirements *mr, VkDevic
  * shrinks a little each frame - the blur behind a Launchpad folder while it opens - finds the last frame's memory; v38
  * matched exact sizes only and freed 58% of what it parked. 96 entries from 64 KB (was 32 from 1 MB).
  * /Library/GPUBundles/nvmtl-ws-park-exact goes back to exact sizes.
+ *
+ * v40: 128 entries and 768 MB (v39 sat at its 512 MB cap: full-screen surfaces pushed out the small ones), and memory
+ * parked for more than 10 s is freed (nvmtl_vk_ipark_trim, from WindowServer's command buffer completions).
  */
-#define NVMTL_IMGPARK_N     96
-#define NVMTL_IMGPARK_BYTES (512ull << 20)
+#define NVMTL_IMGPARK_N     128
+#define NVMTL_IMGPARK_BYTES (768ull << 20)
 #define NVMTL_IMGPARK_MIN   (64ull << 10)
+#define NVMTL_IMGPARK_AGE   10000000000ull
 static pthread_mutex_t g_ipark_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; } g_ipark[NVMTL_IMGPARK_N];
+static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; uint64_t t; } g_ipark[NVMTL_IMGPARK_N];   // oldest first
 static unsigned g_ipark_n;
 static uint64_t g_ipark_bytes;
-static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted;
+static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted, g_ipark_trimmed;
 static int ipark_on(void)
 {
     static int on = -1;
@@ -1945,8 +1949,9 @@ static void ipark_census(void)
 {
     const uint64_t n = atomic_load(&g_ipark_parked) + atomic_load(&g_ipark_reused);
     if (n & (n - 1)) return;
-    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted; %u held, %llu MB, %s", (unsigned long long)atomic_load(&g_ipark_parked),
-          (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted), g_ipark_n,
+    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted, %llu trimmed; %u held, %llu MB, %s", (unsigned long long)atomic_load(&g_ipark_parked),
+          (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted),
+          (unsigned long long)atomic_load(&g_ipark_trimmed), g_ipark_n,
           (unsigned long long)(g_ipark_bytes >> 20), ipark_exact() ? "exact sizes" : "size buckets");
 }
 // the size a new parkable image's memory is allocated with: four sizes per power of two (1, 1.25, 1.5, 1.75)
@@ -1982,18 +1987,36 @@ static int ipark_put(const nvk_image *i)
     const int type = memtype(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (type < 0 || mr.size > i->alloc) return 0;
     VkDeviceMemory ev[NVMTL_IMGPARK_N + 1]; unsigned nev = 0;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     pthread_mutex_lock(&g_ipark_lock);
-    while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES)) {
+    while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES || now - g_ipark[0].t > NVMTL_IMGPARK_AGE)) {
         ev[nev++] = g_ipark[0].mem; g_ipark_bytes -= g_ipark[0].size;
         memmove(&g_ipark[0], &g_ipark[1], (g_ipark_n - 1) * sizeof g_ipark[0]); g_ipark_n--;
     }
     g_ipark[g_ipark_n].mem = (VkDeviceMemory)i->mem; g_ipark[g_ipark_n].size = i->alloc; g_ipark[g_ipark_n].type = (uint32_t)type;
+    g_ipark[g_ipark_n].t = now;
     g_ipark_n++; g_ipark_bytes += i->alloc;
     pthread_mutex_unlock(&g_ipark_lock);
     for (unsigned k = 0; k < nev; k++) pvkFreeMemory(g_dev, ev[k], NULL);
     if (nev) atomic_fetch_add(&g_ipark_evicted, nev);
     atomic_fetch_add(&g_ipark_parked, 1); ipark_census();
     return 1;
+}
+void nvmtl_vk_ipark_trim(void)
+{
+    static _Atomic uint64_t next;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (now < atomic_load(&next) || !ipark_on()) return;
+    atomic_store(&next, now + 1000000000ull);
+    VkDeviceMemory ev[NVMTL_IMGPARK_N]; unsigned nev = 0;
+    pthread_mutex_lock(&g_ipark_lock);
+    while (g_ipark_n && now - g_ipark[0].t > NVMTL_IMGPARK_AGE) {
+        ev[nev++] = g_ipark[0].mem; g_ipark_bytes -= g_ipark[0].size;
+        memmove(&g_ipark[0], &g_ipark[1], (g_ipark_n - 1) * sizeof g_ipark[0]); g_ipark_n--;
+    }
+    pthread_mutex_unlock(&g_ipark_lock);
+    for (unsigned k = 0; k < nev; k++) pvkFreeMemory(g_dev, ev[k], NULL);
+    if (nev) atomic_fetch_add(&g_ipark_trimmed, nev);
 }
 // *alloc: the memory object's size, which may exceed mr->size (the image park's size buckets)
 static VkResult nvmtl_alloc_opaque_image_mem(const VkMemoryRequirements *mr, void **out, uint32_t *sysmem, size_t *alloc, const char *what)
@@ -5729,7 +5752,9 @@ int nvmtl_vk_submit_begin_at(nvk_cmdbuf *c, nvmtl_inflight *f, const char *who)
     if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_SUBMITTED);
     nvmtl_counter_pool_state(c,NVK_POOL_SUBMITTED);
     nvmtl_desktop_trace("queue-submit-begin",who,0);
+    c->timing.host_locked_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     result = g_state == 1 ? pvkQueueSubmit(g_queue, 1, &si, fence) : VK_ERROR_DEVICE_LOST;
+    c->timing.host_submitted_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     nvmtl_desktop_trace("queue-submit-end",who,result);
     pthread_mutex_unlock(&nvmtl_submit_mutex);
     if (nvmtl_submit_trace(f->diagnostic_id))

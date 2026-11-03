@@ -50,6 +50,7 @@ typedef struct {
 typedef struct {
     nvmtl_gpu_clock clock;
     uint64_t start_tick, end_tick, host_before_ns, host_after_ns;
+    uint64_t host_locked_ns, host_submitted_ns;   // around vkQueueSubmit (CLOCK_UPTIME_RAW), for the frame path census
     unsigned valid;
 } nvmtl_gpu_interval;
 void nvmtl_vk_clock_refresh(void);
@@ -285,6 +286,7 @@ void nvmtl_vk_cmd_dispatch_indirect(nvk_cmdbuf *c, nvk_pipeline *p, nvk_buffer *
 void nvmtl_vk_cmd_barrier(nvk_cmdbuf *c);
 void nvmtl_vk_buffer_destroy(nvk_buffer *b);
 void nvmtl_vk_image_destroy(nvk_image *i);
+void nvmtl_vk_ipark_trim(void);   // WindowServer: frees image memory parked for more than 10 s (at most once a second)
 // Finish any in-flight asynchronous texture upload to this image (NVMTL_ASYNC_TEX_UPLOAD) before its memory
 // is read back, migrated or freed. A no-op when none is pending, which is always the case with the flag off.
 void nvmtl_vk_image_upload_barrier(nvk_image *img);
