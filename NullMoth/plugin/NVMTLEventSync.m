@@ -20,11 +20,16 @@
     int aheadFailed;
     BOOL waitFolded;
     BOOL aheadEmpty;
+    BOOL submitting;      // split submit: the submit queue is in this part's execbuffer, the class lock released
+    BOOL aheadDeclined;   // the ahead pass will never submit it (host pointers, no recording): the worker does
 }
 @end
 static _Atomic unsigned gsub_inflight;
 static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds);
 static _Atomic unsigned long long gsub_ahead, gsub_peak;
+static _Atomic unsigned long long gAheadWork;   // parts the ahead pass submitted, folded or retired
+static BOOL nvmtl_split_submit_on(void);
+static void nvmtl_kick_submit(void);
 static NSMutableArray *nvmtl_quarantined_parts;
 static int nvmtl_gsub_finish(NVMTLSubmissionPart *part) {
     nvmtl_inflight *const f = part->inflight;
@@ -248,6 +253,7 @@ static int nvmtl_skip_empty_on(void) {
     [_completionCondition lock];
     if (!_wasScheduled) {
         _wasScheduled = YES; _cbstatus = MTLCommandBufferStatusScheduled;
+        if (_traceCommitNS) _scheduledNS = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         NSArray *handlers = [_scheduledHandlers copy]; [_scheduledHandlers removeAllObjects];
         [self nvmtlDispatchHandlers:handlers scheduled:YES];
         [_completionCondition broadcast];
@@ -290,7 +296,8 @@ static int nvmtl_skip_empty_on(void) {
     _cbError = error; _cbstatus = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
     _executionDone = YES;
     [_completionCondition unlock];
-    [_parts removeAllObjects];
+    if (nvmtl_split_submit_on()) { @synchronized ([NVMTLCommandBuffer class]) { [_parts removeAllObjects]; } }
+    else [_parts removeAllObjects];
     // A finished command buffer lets go of everything only its GPU work needed: the setBytes ring and the scratch
     // buffers it filled, and any resources still listed on it. Apple's command buffers do the same. An app's
     // autorelease pool can keep thousands of finished command buffers alive during a long loop (Geekbench 7 does),
@@ -374,7 +381,7 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
 }
 - (BOOL)nvmtlSubmitAhead {
     if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_pipeline()) return NO;
-    if (_executionDone || _cbError || !_committed) return NO;
+    if (_executionDone || _cbError || !_committed || _workerOwns) return NO;
     if (_nextSubmit < _nextPart) _nextSubmit = _nextPart;
     while (_nextSubmit < _parts.count) {
         if (atomic_load(&gsub_inflight) >= nvmtl_gsub_cap()) return NO;
@@ -382,7 +389,7 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
         if (![part isKindOfClass:[NVMTLSubmissionPart class]]) return NO;
         if (part->waitEvent) {
             if (!nvmtl_evfold_on() || nvmtl_evfold_promised(part->waitEvent) < part->value) return NO;
-            part->waitFolded = YES; _nextSubmit++; nvmtl_evfold_census(&gEvFold, "event waits ordered by the channel (no CPU hold)");
+            part->waitFolded = YES; _nextSubmit++; atomic_fetch_add(&gAheadWork, 1); nvmtl_evfold_census(&gEvFold, "event waits ordered by the channel (no CPU hold)");
             continue;
         }
         if (!part->commands.cb) return NO;
@@ -391,7 +398,7 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
             [self nvmtlMarkScheduled];
         if (!_legacyKernelStart) _legacyKernelStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
             nvmtl_vk_cmd_abandon(&part->commands);
-            part->aheadEmpty = YES; _nextSubmit++;
+            part->aheadEmpty = YES; _nextSubmit++; atomic_fetch_add(&gAheadWork, 1);
             nvmtl_evfold_promise_part(part);
             nvmtl_evfold_census(&gEvFoldEmpty, "empty split parts retired by the ahead pass");
             continue;
@@ -401,11 +408,11 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
             if (hold < 0) { const char *e = getenv("NVMTL_GSUB_HOSTPTR_LIFT"); hold = (e && *e && *e != '0') ? 0 : 1; }
             if (hold) {
                 for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO))
-                    if (buffer->_hostPtr) return NO;
+                    if (buffer->_hostPtr) { part->aheadDeclined = YES; return NO; }
             }
         }
         nvmtl_inflight *f = nvmtl_vk_inflight_new();
-        if (!f) return NO;
+        if (!f) { part->aheadDeclined = YES; return NO; }
         for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO)) nvmtl_buffer_sync_in(buffer);
         [self nvmtlMarkScheduled];
         if (!_legacyKernelStart) _legacyKernelStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
@@ -414,10 +421,12 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
         // ahead pass (its only caller, at depth one) walks copies of what a commit can change meanwhile.
         const BOOL unlock = nvmtl_vk_windowserver_serial() && nvmtl_ws_submit_unlocked();
         id lockObject = [NVMTLCommandBuffer class];
+        part->submitting = YES;
         if (unlock) objc_sync_exit(lockObject);
         const int r = nvmtl_vk_submit_begin(&part->commands, f);
         if (unlock) objc_sync_enter(lockObject);
-        _nextSubmit++;
+        part->submitting = NO;
+        _nextSubmit++; atomic_fetch_add(&gAheadWork, 1);
         if (r) {
             nvmtl_vk_inflight_free(f);
             part->aheadFailed = r;
@@ -466,14 +475,20 @@ static void nvmtl_ws_submission_census(NVMTLCommandBuffer *cb) {
 /* WindowServer's command buffers over the whole session (the slow-part trace stops after 32): time on the GPU, and
    from commit to completion, as histograms. Logged every 512. */
 static const double kWsGpuMs[] = { 2, 4, 8, 16, 33 }, kWsLatMs[] = { 8, 16, 33, 66, 133 };
-static unsigned long long gWsGpu[6], gWsLat[6], gWsTimed, gWsUntimed;
-static double gWsGpuSum, gWsLatSum, gWsGpuMax, gWsLatMax;
+static unsigned long long gWsGpu[6], gWsLat[6], gWsTimed, gWsUntimed, gWsWindowT0;
+static double gWsGpuSum, gWsLatSum, gWsGpuMax, gWsLatMax, gWsSchedSum, gWsSchedMax;
 static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
     if (!cb->_traceCommitNS) return;
     const double lat = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - cb->_traceCommitNS) * 1e-6, gpu = gpuSeconds * 1e3;
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&lock);
     do {
+        const uint64_t nowNS = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if (!gWsWindowT0) gWsWindowT0 = nowNS;
+        if (cb->_scheduledNS > cb->_traceCommitNS) {
+            const double sched = (cb->_scheduledNS - cb->_traceCommitNS) * 1e-6;
+            gWsSchedSum += sched; if (sched > gWsSchedMax) gWsSchedMax = sched;
+        }
         unsigned k = 0; while (k < 5 && lat >= kWsLatMs[k]) k++;
         gWsLat[k]++; gWsLatSum += lat; if (lat > gWsLatMax) gWsLatMax = lat;
         if (gpu > 0 && gpu < 10000) {
@@ -483,12 +498,14 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double gpuSeconds) {
         if ((gWsTimed + gWsUntimed) % 512) break;
         syslog(LOG_ERR, "NullMoth: frame timing: GPU ms <2 %llu, 2-4 %llu, 4-8 %llu, 8-16 %llu, 16-33 %llu, 33+ %llu "
                "(avg %.2f max %.1f, %llu untimed) | commit to done ms <8 %llu, 8-16 %llu, 16-33 %llu, 33-66 %llu, "
-               "66-133 %llu, 133+ %llu (avg %.1f max %.1f)",
+               "66-133 %llu, 133+ %llu (avg %.1f max %.1f) | commit to scheduled ms avg %.2f max %.1f | %.1f s%s",
                gWsGpu[0], gWsGpu[1], gWsGpu[2], gWsGpu[3], gWsGpu[4], gWsGpu[5], gWsTimed ? gWsGpuSum / gWsTimed : 0.0,
                gWsGpuMax, gWsUntimed, gWsLat[0], gWsLat[1], gWsLat[2], gWsLat[3], gWsLat[4], gWsLat[5],
-               gWsLatSum / 512, gWsLatMax);
+               gWsLatSum / 512, gWsLatMax, gWsSchedSum / 512, gWsSchedMax, (nowNS - gWsWindowT0) * 1e-9,
+               nvmtl_split_submit_on() ? ", split submit" : "");
         memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
-        gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = 0;
+        gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = gWsSchedSum = gWsSchedMax = 0;
+        gWsWindowT0 = nowNS;
     } while (0);
     pthread_mutex_unlock(&lock);
 }
@@ -518,6 +535,19 @@ static void nvmtl_gsub_ahead_pass1(void) {
     if (_cbError) { [self nvmtlFinishExecution:_cbError]; return YES; }
     if (_nextPart >= _parts.count) { [self nvmtlFinishExecution:nil]; return YES; }
     NVMTLSubmissionPart *part = _parts[_nextPart];
+    if (nvmtl_split_submit_on()) {
+        // The submit queue owns execbuffers: a part it is submitting, or has yet to reach, is not submitted here as well
+        // (it pumps the worker when it has). Parts it never takes (host pointers, empty ones) make the worker submit the
+        // rest of this command buffer itself, as before.
+        @synchronized ([NVMTLCommandBuffer class]) {
+            if (part->submitting) return NO;
+            if (!part->inflight && !part->aheadFailed && part->commands.cb && !_workerOwns) {
+                const BOOL empty = !part->encoders && !part->resources.count && !part->surfaces.count && !part->scratch.count && nvmtl_skip_empty_on();
+                if (!empty && !part->aheadDeclined) { nvmtl_kick_submit(); return NO; }
+                _workerOwns = YES;
+            }
+        }
+    }
     const BOOL ahead = part->inflight || part->aheadFailed;
     if (part->waitEvent && !ahead && !part->waitFolded) {
         if (![part->waitEvent respondsToSelector:@selector(signaledValue)]) {
@@ -598,7 +628,8 @@ static void nvmtl_gsub_ahead_pass1(void) {
         }
         ((void(*)(id,SEL,uint64_t))objc_msgSend)(event, @selector(setSignaledValue:), [s[1] unsignedLongLongValue]);
     }
-    _parts[_nextPart++] = [NSNull null];
+    if (nvmtl_split_submit_on()) { @synchronized ([NVMTLCommandBuffer class]) { _parts[_nextPart++] = [NSNull null]; } }
+    else _parts[_nextPart++] = [NSNull null];
     if (_nextPart == _parts.count) [self nvmtlFinishExecution:nil];
     return YES;
 }
@@ -644,7 +675,48 @@ static void nvmtl_pump_buffers_sync(void) {
 }
 
 static uint64_t nvmtl_pump_generation;
+/*
+ * v38 split submit (/Library/GPUBundles/nvmtl-ws-split-submit, WindowServer with the pipeline). One worker ran the
+ * ahead pass (the execbuffers) and then blocked in the oldest command buffer's fence wait: a frame committed meanwhile
+ * was not submitted until the previous one had finished on the GPU, and WindowServer's main thread waited for it in
+ * waitUntilScheduled. In a Launchpad animation that kept ~30 frames/s with 9 ms of GPU work each, the GPU busy 20-40%
+ * (v37 frame timing: 24 ms commit to done). Here every commit kicks a pass on its own serial queue, the only thread
+ * that submits ahead; the worker waits for completions and leaves unsubmitted parts to it.
+ */
+static BOOL nvmtl_split_submit_on(void) {
+    static int on = -1;
+    if (on < 0) on = nvmtl_vk_windowserver_serial() && nvmtl_gsub_ahead_on() && nvmtl_ws_split_submit();
+    return on;
+}
+static void nvmtl_pump_worker(void);
+static _Atomic int gSubmitKicked;
+static _Atomic unsigned long long gSplitPasses, gSplitIdle;
+static void nvmtl_kick_submit(void) {
+    static dispatch_once_t once; static dispatch_queue_t q;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("nvmtl.submit", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+        syslog(LOG_ERR, "NullMoth: split submit ON - execbuffers on their own queue, the execution worker only waits for completions");
+    });
+    if (atomic_exchange(&gSubmitKicked, 1)) return;   // a queued pass sees this commit too
+    dispatch_async(q, ^{ @autoreleasepool {
+        atomic_store(&gSubmitKicked, 0);
+        const unsigned long long before = atomic_load(&gAheadWork);
+        @synchronized ([NVMTLCommandBuffer class]) { nvmtl_gsub_ahead_pass(); }
+        const BOOL work = atomic_load(&gAheadWork) != before;
+        const unsigned long long n = atomic_fetch_add(&gSplitPasses, 1) + 1;
+        if (!work) atomic_fetch_add(&gSplitIdle, 1);
+        if (!(n & (n - 1)) && n >= 64)
+            syslog(LOG_ERR, "NullMoth: split submit: %llu passes, %llu with nothing to submit, %llu parts submitted ahead, peak %llu in flight",
+                   n, (unsigned long long)atomic_load(&gSplitIdle), (unsigned long long)atomic_load(&gsub_ahead),
+                   (unsigned long long)atomic_load(&gsub_peak));
+        if (work) nvmtl_pump_worker();   // the worker waits for what was submitted
+    } });
+}
 static void nvmtl_pump_buffers(void) {
+    if (nvmtl_split_submit_on()) nvmtl_kick_submit();
+    nvmtl_pump_worker();
+}
+static void nvmtl_pump_worker(void) {
     static dispatch_once_t once; static dispatch_queue_t worker;
     const BOOL async = nvmtl_async_commit_on();
     if (async) dispatch_once(&once, ^{ worker = dispatch_queue_create("nvmtl.execution", DISPATCH_QUEUE_SERIAL); });
@@ -658,8 +730,10 @@ static void nvmtl_pump_buffers(void) {
             for (;;) { @autoreleasepool {
                 nvmtl_vk_clock_refresh();
                 NSArray *batch; uint64_t generation;
+                const BOOL split = nvmtl_split_submit_on();
+                if (split) nvmtl_kick_submit();   // completions free in-flight capacity; the submit queue owns the ahead pass
                 @synchronized ([NVMTLCommandBuffer class]) {
-                    if (nvmtl_gsub_ahead_on()) nvmtl_gsub_ahead_pass();
+                    if (!split && nvmtl_gsub_ahead_on()) nvmtl_gsub_ahead_pass();
                     batch = [nvmtl_pending_buffers copy]; generation = nvmtl_pump_generation;
                 }
                 BOOL progress = NO;

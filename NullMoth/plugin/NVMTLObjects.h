@@ -132,6 +132,8 @@ extern id gNVMTLMainDevice;
   NSMutableArray *_parts, *_scheduledHandlers;
   NSUInteger _nextPart;
   NSUInteger _nextSubmit;
+  BOOL _workerOwns;               // split submit: the execution worker submits this buffer's remaining parts itself
+  uint64_t _scheduledNS;          // WindowServer: when it was reported scheduled (CLOCK_MONOTONIC_RAW)
   id _reservation;
   NSCondition *_completionCondition;
   dispatch_group_t _callbackGroup, _scheduledGroup;
