@@ -309,6 +309,9 @@ int  nvmtl_vk_cmd_copy_image_sub3(nvk_cmdbuf *c, nvk_image *src, uint32_t sl, ui
 int  nvmtl_vk_image_view_create_aspect(nvk_image *img, uint32_t vkfmt, uint32_t aspect, uint32_t baseLevel, uint32_t levelCount, void **out_view);
 void nvmtl_vk_heap_destroy(nvk_heap *h);
 int  nvmtl_vk_buffer_create_placed(size_t size, nvk_heap *heap, size_t offset, nvk_buffer *out);
+#define NVMTL_DRM_MOD_4_TILED 0x0100000000000009ull   /* I915_FORMAT_MOD_4_TILED */
+int  nvmtl_vk_image_create_buffer_alias_mod(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
+                                            const nvk_buffer *b, size_t offset, size_t row_pitch, uint64_t modifier, nvk_image *out);
 int  nvmtl_vk_image_create_buffer_alias(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
                                         const nvk_buffer *b, size_t offset, size_t row_pitch, nvk_image *out);
 int  nvmtl_vk_image_placed_fits(const nvk_image *img, size_t len);

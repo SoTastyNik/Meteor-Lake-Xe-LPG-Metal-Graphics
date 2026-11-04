@@ -72,15 +72,15 @@ class NMXVGAFB : public IOFramebuffer {
     IOMemoryMap *fRegsMap = nullptr;      // BAR0: plane registers
     IOMemoryMap *fPteMap = nullptr;       // the window's GGTT entries (GTTADR, BAR0 + 8 MB)
     uint64_t fWin = 0, fSlotBytes = 0;
-    uint32_t fGopSurf = 0, fGopStride = 0;
-    struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; };
+    uint32_t fGopSurf = 0, fGopStride = 0, fGopCtl = 0;
+    struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4; };
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
     IOLock *fFlipLock = nullptr;
     void latitudeFlipInit(IOPCIDevice *pci);
     void latitudeFlipFini();
-    bool latitudePlaneTo(uint32_t surf, uint32_t stride);
+    bool latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4 = false);
     IOReturn latitudeFlip(NMXScanoutSurface *r);
     IOReturn latitudeHome();
     // The hardware cursor (debug.nmxfb_hwcursor), a 256x256 ARGB plane on the panel's pipe. Without one WindowServer
@@ -839,6 +839,8 @@ void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
     const volatile uint8_t *regs = (const volatile uint8_t *)fRegsMap->getVirtualAddress();
     fGopSurf = *(const volatile uint32_t *)(regs + 0x7019c + fPlaneStep);
     fGopStride = *(const volatile uint32_t *)(regs + 0x70188 + fPlaneStep);
+    fGopCtl = *(const volatile uint32_t *)(regs + 0x70180 + fPlaneStep);
+    VFBLOG("Latitude: firmware plane CTL 0x%x (tiling %u) stride 0x%x", fGopCtl, (fGopCtl >> 10) & 7u, fGopStride);
     fWin = win; fSlotBytes = slot;
     setProperty("LatitudeScanoutFlip", kOSBooleanTrue);
     setProperty("LatitudeFlipWindow", win, 64);
@@ -859,9 +861,12 @@ void NMXVGAFB::latitudeFlipFini()
 
 // PLANE_SURF arms the plane's double-buffered registers (stride too); the switch happens at the next vblank, when
 // PLANE_SURFLIVE takes the address. Waits for that (the surface left behind is free for WindowServer only then).
-bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride)
+bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4)
 {
     volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    // v41: PLANE_CTL's tiling field (bits 12:10), armed with the rest by the PLANE_SURF write: linear as the firmware
+    // left it, or 5 = Tile4 for the plugin's zero-copy surfaces
+    *(volatile uint32_t *)(regs + 0x70180 + fPlaneStep) = (fGopCtl & ~(7u << 10)) | (tile4 ? (5u << 10) : 0u);
     *(volatile uint32_t *)(regs + 0x70188 + fPlaneStep) = stride;
     *(volatile uint32_t *)(regs + 0x7019c + fPlaneStep) = surf;
     const uint64_t t0 = mach_absolute_time();
@@ -1066,12 +1071,15 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
 {
     if (!gLatFlip || !fFlipLock || fStopping) return kIOReturnNotReady;
     IOMemoryDescriptor *md = OSDynamicCast(IOMemoryDescriptor, (OSObject *)r->md);
-    const uint64_t bytes = ((uint64_t)r->pitch * r->height + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    // v41: a Tile4 surface spans whole 32-row tiles, and its stride is counted in 128-byte tiles
+    const bool tile4 = (r->flags & NMX_SCANOUT_TILE4) != 0;
+    const uint32_t unit = tile4 ? 128u : 64u, rows = tile4 ? ((r->height + 31u) & ~31u) : r->height;
+    const uint64_t bytes = ((uint64_t)r->pitch * rows + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     // linear planes take a stride in 64-byte units; Night Shift and calibration LUTs exist only in NMXAccel's copy
     bool gamma = false;
     if (fGammaLock) { IOLockLock(fGammaLock); gamma = fGamma.active; IOLockUnlock(fGammaLock); }
     if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width ||
-        (r->pitch & 63) || r->pitch / 64 > 0x7ff || bytes > fSlotBytes - (2ull << 20) || md->getLength() < bytes || gamma) {
+        (r->pitch % unit) || r->pitch / unit > 0x7ff || bytes > fSlotBytes - (2ull << 20) || md->getLength() < bytes || gamma) {
         OSAddAtomic64(1, &gLatFlipRefused);
         return kIOReturnUnsupported;
     }
@@ -1105,7 +1113,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         if (ok) {
             (void)pte[(bytes >> 12) - 1];                       // the writes are posted: read one back
             md->retain();
-            s = { md, map, r->surfaceId, r->pitch, 0 };
+            s = { md, map, r->surfaceId, r->pitch, 0, false };
             hit = victim;
             OSAddAtomic64(1, &gLatFlipFills);
         } else {
@@ -1121,10 +1129,12 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         uint64_t fns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - f0, &fns);
         OSAddAtomic64((SInt64)(fns / 1000), &gLatFlipFlushUs);
     }
-    if (hit >= 0 && hit != fFlipCur) {
+    if (hit >= 0 && (hit != fFlipCur || fFlip[hit].tile4 != tile4)) {
         const uint32_t surf = (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
-        if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / 64))) {
-            fFlipCur = hit;
+        if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / unit), tile4)) {
+            fFlipCur = hit; fFlip[hit].tile4 = tile4;
+            static SInt32 tileLogs;
+            if (tile4 && tileLogs < 4) { tileLogs++; VFBLOG("Latitude: surface 0x%x on the panel in Tile4 (stride %u tiles)", r->surfaceId, r->pitch / 128); }
             OSAddAtomic64(1, &gLatFlips);
         } else {
             // a plane that does not latch: back to the firmware buffer, and copies from now on
@@ -1636,6 +1646,7 @@ IOReturn NMXVGAFB::scanoutSurface(NMXScanoutSurface *r)
     if (!fVirtioOn) return latitudeFlip(r);
 #endif
     if (!fVirtioOn || !fScanLock) return kIOReturnNotReady;
+    if (r->flags & NMX_SCANOUT_TILE4) return kIOReturnUnsupported;
     IOMemoryDescriptor *md = OSDynamicCast(IOMemoryDescriptor, (OSObject *)r->md);
     if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width)
         return kIOReturnUnsupported;

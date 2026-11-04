@@ -18,3 +18,6 @@ struct NMXScanoutSurface {
 // the surface's pixels are final (the accelerator ordered the flip after them): one flush now, none on later VBLs -
 // a re-flush would show whatever a later frame writes into the surface while it is still on the panel
 #define NMX_SCANOUT_FINAL 0x1u
+// v41: the surface's pages hold Tile4 (the Metal plugin's zero copy, IOSurface value "NMXTile4"): 4 KB tiles of 128 B x
+// 32 rows; the plane scans it out tiled, its stride in 128-byte tiles. A framebuffer that cannot must refuse it.
+#define NMX_SCANOUT_TILE4 0x2u

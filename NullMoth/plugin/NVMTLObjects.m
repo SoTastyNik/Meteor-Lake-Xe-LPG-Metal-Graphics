@@ -1163,6 +1163,7 @@ void nvmtl_texture_desc_swizzle(NVMTLTexture *t, MTLTextureDescriptor *d) {
     if (_stTwin.img) nvmtl_vk_image_destroy(&_stTwin);
     if (!_parent && _vramOn) { nvmtl_vk_buffer_destroy(&_vramBuf); _vramOn = NO; }
     if (!_parent && _hostOn) { nvmtl_vk_buffer_destroy(&_hostBuf); _hostOn = NO; }
+    if (!_parent && _tile4 && _surf) { IOSurfaceRemoveValue(_surf, CFSTR("NMXTile4")); _tile4 = NO; }
     if (!_parent && _hybrid) { nvmtl_vk_image_destroy(&_hostAlias); nvmtl_vk_buffer_destroy(&_hostBuf); _hybrid = NO; }
     if (_surfOwned && _surf) CFRelease(_surf);
     if (_subHeap) { NVMTLHeap *h = _subHeap; NSUInteger c = _subCharge; _subHeap = nil; _subCharge = 0;
@@ -1217,6 +1218,14 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
     if (!r->_surf || r->_hostOn) return;   // a host image is the surface: nothing to copy in
     if (r->_hybrid) {   // the tiled image is current unless someone else wrote the surface's pages from the CPU
         if (r->_surfSynced && IOSurfaceGetSeed(r->_surf) == r->_surfSeed) return;
+        if (r->_tile4) {   // v41: the Tile4 image is the pages themselves: nothing to copy in
+            const uint32_t seed = IOSurfaceGetSeed(r->_surf);
+            if (r->_surfSynced) { static unsigned said; if (said++ < 8)
+                syslog(LOG_ERR, "NullMoth: zero-copy surface %u: written by someone else (seed %u -> %u) - its Tile4 pixels are kept",
+                       (unsigned)IOSurfaceGetID(r->_surf), r->_surfSeed, seed); }
+            r->_surfSeed = seed; r->_surfSynced = YES;
+            return;
+        }
         @synchronized (nvmtl_surface_sync(r)) {
             const uint32_t seed = IOSurfaceGetSeed(r->_surf);
             if (r->_surfSynced && seed == r->_surfSeed) return;
@@ -1265,6 +1274,13 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
 - (BOOL)nvmtlSurfaceOut {
     NVMTLTexture *r = _parent ? _parent : self;
     if (!r->_surf || r->_hostOn) return YES;   // the GPU wrote the surface's own pages
+    if (r->_tile4) {    // v41: the pages are the image (Tile4): nothing to copy out, and no linear copy exists for the CPU
+        static unsigned said; if (said++ < 8)
+            syslog(LOG_ERR, "NullMoth: zero-copy surface %u: a CPU-side copy out was asked - the pages hold Tile4, not linear rows",
+                   (unsigned)IOSurfaceGetID(r->_surf));
+        r->_surfSeed = IOSurfaceGetSeed(r->_surf); r->_surfSynced = YES;
+        return YES;
+    }
     if (r->_hybrid) {   // a write no command buffer copied out (replaceRegion, a copy the seal could not record): copy now
         @synchronized (nvmtl_surface_sync(r)) {
             if (nvmtl_vk_copy_image(r->_q, &r->_i, 0, 0, &r->_hostAlias, 0, 0, r->_i.w, r->_i.h)) {

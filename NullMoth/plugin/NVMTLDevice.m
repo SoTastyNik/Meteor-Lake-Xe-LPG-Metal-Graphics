@@ -899,6 +899,32 @@ static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w,
     }
     // shared by every wrapper of the surface, as a private image is: writable whenever the format can be
     if (!stex && nvmtl_vk_format_is_storage(vkf)) stex = 1;
+    /* v41 zero copy (nvmtl-ws-zerocopy): the tiled image IS the surface's pages, in Tile4 (128 B x 32 rows per 4 KB
+       tile, no compression), and the panel's plane scans it out tiled; the "NMXTile4" value tells NMXAccel and
+       NMXVGAFB. Nothing is copied out, and the surface's pages are no longer linear pixels for anyone else. */
+    if (nvmtl_ws_zerocopy()) {
+        static _Atomic unsigned long long made;
+        const size_t row = IOSurfaceGetBytesPerRow(surf);
+        const char *why = row % 128 ? "row not a multiple of 128 bytes"
+                        : row * (((size_t)h + 31) & ~(size_t)31) > t->_hostBuf.size ? "pages end before the last 32-row tile" : NULL;
+        nvk_image t4;
+        if (!why && nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, stex, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)
+                 && (!stex || nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, 0, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)))
+            why = "no Tile4 image over its pages";
+        if (!why) {
+            t->_hostAlias = t->_i; t->_i = t4; t->_hostOn = NO; t->_hybrid = YES; t->_tile4 = YES;
+            int64_t pitch = (int64_t)row;
+            CFNumberRef v = CFNumberCreate(NULL, kCFNumberSInt64Type, &pitch);
+            IOSurfaceSetValue(surf, CFSTR("NMXTile4"), v); CFRelease(v);
+            const unsigned long long n = ++made;
+            if (n <= 32 || n % 256 == 0)
+                syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u fmt %u usage 0x%lx row %zu: Tile4 in its own pages, storage %d (#%llu)",
+                       (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, row, (int)t4.storage, n);
+            return;
+        }
+        static unsigned said; if (said++ < 8)
+            syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u row %zu: %s - a tiled private image and copies", (unsigned)IOSurfaceGetID(surf), w, h, row, why);
+    }
     nvk_image tiled;
     if (nvmtl_vk_image_create_typed(w, h, vkf, bpp, a8, 1, stex, 2u, 1u, &tiled)) {
         syslog(LOG_ERR, "NullMoth: hybrid: surface %u %ux%u: no tiled image - stays a host image", (unsigned)IOSurfaceGetID(surf), w, h);

@@ -2305,10 +2305,14 @@ static int nvmtl_dirty_only_on(void)
         nvlog("vk: dirty-only bindings %s (NVMTL_NO_DIRTYONLY=%s)", on ? "ON - unchanged descriptors are copied, unchanged argument-buffer tables skipped" : "OFF", e ? e : "unset"); }
     return on;
 }
+/* v41: sets this recording already wrote, keyed by what a pipeline reads from them (nvmtl_snapshot_set_c) */
+#define NVMTL_SETCACHE_N 16
+typedef struct { uint64_t key; VkDescriptorSet set; unsigned idx; uint32_t hi; } nvmtl_setcache;
 typedef struct { nvmtl_slot s[2][NVMTL_NBIND];
                  uint8_t dirty[2]; VkDescriptorSet last[2]; unsigned last_idx[2]; uint32_t last_hi[2]; uint64_t lastw[2][4];
                  uint64_t chg[2][4]; uint64_t texgen[2]; const void *emb_fn[2]; uint64_t emb_gen[2]; uint32_t emb_n[2];
-                 uint64_t emb_key[2][NVMTL_EMB_KEYMAX]; } nvmtl_bindtable;
+                 uint64_t emb_key[2][NVMTL_EMB_KEYMAX];
+                 nvmtl_setcache sc[2][NVMTL_SETCACHE_N]; unsigned sc_next[2]; } nvmtl_bindtable;
 
 static VkDescriptorSetLayout g_setLayout;
 #define NVMTL_MAX_POOLS 64
@@ -3214,6 +3218,55 @@ static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint
     pvkUpdateDescriptorSets(g_dev, nw, w, ncp, cp);
     return set;
 }
+/*
+ * v41 descriptor set cache (WindowServer): CoreAnimation draws the same texture and sampler pairs many times a frame,
+ * and each draw that changed a binding allocated a set and rewrote it (79 of the main thread's 1834 samples in v39).
+ * A set this recording already wrote serves again when every binding the pipeline reads (its mask, its storage
+ * textures) holds what it held then. /Library/GPUBundles/nvmtl-ws-no-setcache turns it off.
+ */
+static int nvmtl_setcache_on(void)
+{
+    static int on = -1;
+    if (on < 0) on = nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-no-setcache", F_OK) != 0;
+    return on;
+}
+static inline uint64_t nvmtl_set_mix(uint64_t h, uint64_t v)
+{
+    h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    h *= 0xbf58476d1ce4e5b9ull;
+    return h ^ (h >> 31);
+}
+static uint64_t nvmtl_set_key(const nvmtl_bindtable *t, uint32_t which, const uint64_t *pm, uint32_t hi)
+{
+    uint64_t h = nvmtl_set_mix(which + 1, hi);
+    for (int k = 0; k < 4; k++) {
+        uint64_t bits = pm[k];
+        h = nvmtl_set_mix(h, bits);
+        while (bits) {
+            const uint32_t i = (uint32_t)k * 64 + (uint32_t)__builtin_ctzll(bits);
+            bits &= bits - 1;
+            if (i >= NVMTL_STEX_BASE) break;   // storage textures: by hi, below
+            const nvmtl_slot *sl = &t->s[which][i];
+            h = nvmtl_set_mix(nvmtl_set_mix(h, ((uint64_t)i << 8) | sl->kind), (uint64_t)(uintptr_t)sl->h ^ ((uint64_t)sl->off * 0x100000001b3ull));
+        }
+    }
+    if (hi > NVMTL_NSTEX) hi = NVMTL_NSTEX;
+    for (uint32_t j = 0; j < hi; j++) {
+        const nvmtl_slot *sl = &t->s[which][NVMTL_STEX_BASE + j];
+        h = nvmtl_set_mix(nvmtl_set_mix(h, sl->kind), (uint64_t)(uintptr_t)sl->h);
+    }
+    return h ? h : 1;
+}
+static _Atomic uint64_t g_sc_hits, g_sc_new;
+static void nvmtl_setcache_note(int hit)
+{
+    const uint64_t h = hit ? atomic_fetch_add(&g_sc_hits, 1) + 1 : atomic_load(&g_sc_hits);
+    const uint64_t n = hit ? atomic_load(&g_sc_new) : atomic_fetch_add(&g_sc_new, 1) + 1;
+    const uint64_t all = h + n;
+    if (all >= 4096 && !(all & (all - 1)))
+        syslog(LOG_ERR, "NullMoth: descriptor set cache: %llu of %llu sets reused (%.0f%%)", (unsigned long long)h,
+               (unsigned long long)all, 100.0 * (double)h / (double)all);
+}
 static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const nvk_pipeline *p)
 {
     nvmtl_bindtable *t = (nvmtl_bindtable *)c->table;
@@ -3227,6 +3280,20 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
         int covered = 1;
         for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
         if (covered) { nvmtl_enc78_count(E78C_SETREUSE, 1); return t->last[which]; }
+    }
+    uint64_t sckey = 0;
+    if ((p->bmask_ok || (p->gmask_ok && which < 2)) && !NVMTL_E78_HAS(pm, NVMTL_ADDRESS_BINDING) && nvmtl_setcache_on()) {
+        sckey = nvmtl_set_key(t, which, pm, hi);
+        for (unsigned k = 0; k < NVMTL_SETCACHE_N; k++) {
+            const nvmtl_setcache *e = &t->sc[which][k];
+            if (e->key != sckey || !e->set || e->hi != hi || e->idx >= c->nsets || (VkDescriptorSet)c->sets[e->idx].set != e->set) continue;
+            // only the bindings the key covered are known to match: later incremental sets copy just those from it
+            t->last[which] = e->set; t->last_idx[which] = e->idx; t->last_hi[which] = hi; t->dirty[which] = 0;
+            memset(t->chg[which], 0, sizeof t->chg[which]);
+            memcpy(t->lastw[which], pm, sizeof t->lastw[which]);
+            nvmtl_setcache_note(1);
+            return e->set;
+        }
     }
     uint64_t m[4];
     for (int k = 0; k < 4; k++) m[k] = pm[k] | (live ? t->lastw[which][k] : 0);
@@ -3243,6 +3310,11 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
     }
     VkDescriptorSet s = nvmtl_snapshot_set_md(c, which, hi, m, NULL, from, from ? cm : NULL);
     if (!s) return s;
+    if (sckey) {
+        nvmtl_setcache *e = &t->sc[which][t->sc_next[which]++ % NVMTL_SETCACHE_N];
+        e->key = sckey; e->set = s; e->idx = c->nsets - 1; e->hi = p->stex_hi[which];
+        nvmtl_setcache_note(0);
+    }
     t->last[which] = s; t->last_idx[which] = c->nsets - 1; t->last_hi[which] = hi; t->dirty[which] = 0;
     memset(t->chg[which], 0, sizeof t->chg[which]);
     memcpy(t->lastw[which], m, sizeof m);
@@ -7438,33 +7510,43 @@ int nvmtl_vk_buffer_create_placed(size_t size, nvk_heap *heap, size_t offset, nv
 }
 
 static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
-                                       const nvk_buffer *b, size_t offset, size_t row_pitch, nvk_image *out);
+                                       const nvk_buffer *b, size_t offset, size_t row_pitch, uint64_t modifier, nvk_image *out);
 int nvmtl_vk_image_create_buffer_alias(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
                                        const nvk_buffer *b, size_t offset, size_t row_pitch, nvk_image *out)
 {
+    return nvmtl_vk_image_create_buffer_alias_mod(w, h, vkfmt, bpp, a8, storage, render, b, offset, row_pitch, 0, out);
+}
+int nvmtl_vk_image_create_buffer_alias_mod(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
+                                           const nvk_buffer *b, size_t offset, size_t row_pitch, uint64_t modifier, nvk_image *out)
+{
     nvk_image pending = {0};
-    int result = nvmtl_vk_image_create_buffer_alias_lifetime_body(w, h, vkfmt, bpp, a8, storage, render, b, offset, row_pitch, &pending);
+    int result = nvmtl_vk_image_create_buffer_alias_lifetime_body(w, h, vkfmt, bpp, a8, storage, render, b, offset, row_pitch, modifier, &pending);
     if (result) { nvmtl_failed_image(&pending); memset(out, 0, sizeof *out); }
     else { nvmtl_commit_image(&pending); *out = pending; }
     return result;
 }
 static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t h, uint32_t vkfmt, uint32_t bpp, int a8, int storage, int render,
-                                       const nvk_buffer *b, size_t offset, size_t row_pitch, nvk_image *out)
+                                       const nvk_buffer *b, size_t offset, size_t row_pitch, uint64_t modifier, nvk_image *out)
 {
+    // modifier 0: the linear alias of a buffer texture; otherwise that layout over the buffer (v41: Tile4 for zero copy)
+    const int tiled = modifier != 0;
+    if (tiled && !g_linmod) { nvlog("buffer texture: a tiled alias needs VK_EXT_image_drm_format_modifier"); return -1; }
     if (nvmtl_vk_init() || !b || !b->buf || !b->mem || !w || !h) { nvlog("buffer texture: no buffer memory to alias (%ux%u)", w, h); return -1; }
     { uint32_t bw = 0, bh = 0, bb = 0;
       if (nvmtl_vk_format_block(vkfmt, &bw, &bh, &bb)) { nvlog("buffer texture: VkFormat %u is block-compressed; a linear alias of it is not built", vkfmt); return -1; } }
     if (!bpp) bpp = 4;
     if (row_pitch < (size_t)w * bpp || row_pitch > UINT32_MAX || row_pitch % bpp) {
         nvlog("buffer texture: bytesPerRow %zu cannot hold %u texels of %u B", row_pitch, w, bpp); return -1; }
-    if (g_linmod && row_pitch % 32) {
+    if (g_linmod && row_pitch % (tiled ? 128 : 32)) {
         nvlog("buffer texture: bytesPerRow %zu is not a multiple of 32 B (the texture header's linear pitch unit)", row_pitch); return -1; }
     if (offset > b->size || (size_t)row_pitch * (h - 1) + (size_t)w * bpp > b->size - offset) {
         nvlog("buffer texture: %ux%u at offset %zu pitch %zu overruns the %zu-byte buffer", w, h, offset, row_pitch, b->size); return -1; }
     PFN_vkGetPhysicalDeviceFormatProperties gfp = (PFN_vkGetPhysicalDeviceFormatProperties)pvkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceFormatProperties");
     VkFormatProperties fp; memset(&fp, 0, sizeof fp);
     if (gfp) gfp(g_pdev, (VkFormat)vkfmt, &fp);
-    VkFormatFeatureFlags lf = fp.linearTilingFeatures;
+    VkFormatFeatureFlags lf = tiled ? fp.optimalTilingFeatures : fp.linearTilingFeatures;
+    if (tiled && (size_t)row_pitch * ((h + 31u) & ~31u) > b->size - offset) {
+        nvlog("buffer texture: a tiled %ux%u alias at pitch %zu needs whole 32-row tiles, past the %zu-byte buffer", w, h, row_pitch, b->size); return -1; }
     if (!(lf & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) { nvlog("buffer texture: VkFormat %u cannot be sampled LINEAR (features 0x%x)", vkfmt, (unsigned)lf); return -1; }
     int wantS = storage, wantR = render;
     storage = storage && !a8 && (lf & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
@@ -7475,7 +7557,7 @@ static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t
     out->storage = storage ? 1 : 0; out->mtl_type = 2; out->layers = 1;
     VkSubresourceLayout pl = { 0, 0, (VkDeviceSize)row_pitch, 0, 0 };
     VkImageDrmFormatModifierExplicitCreateInfoEXT eci = { VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT, NULL,
-        0 , 1, &pl };
+        modifier, 1, &pl };
     VkImageCreateInfo ici = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, g_linmod ? (void *)&eci : NULL, 0, VK_IMAGE_TYPE_2D, (VkFormat)vkfmt,
         { w, h, 1 }, 1, 1, VK_SAMPLE_COUNT_1_BIT, g_linmod ? VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT : VK_IMAGE_TILING_LINEAR,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
@@ -7490,11 +7572,11 @@ static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t
             pvkGetInstanceProcAddr(g_inst, "vkGetPhysicalDeviceImageFormatProperties2");
         VkImageFormatListCreateInfo qfl = { VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO, NULL, 2, vfl };
         VkPhysicalDeviceImageDrmFormatModifierInfoEXT qmi = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT, &qfl,
-            0 , VK_SHARING_MODE_EXCLUSIVE, 0, NULL };
+            modifier, VK_SHARING_MODE_EXCLUSIVE, 0, NULL };
         VkPhysicalDeviceImageFormatInfo2 qi = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2, g_linmod ? (void *)&qmi : (void *)&qfl,
             ici.format, ici.imageType, ici.tiling, ici.usage, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT };
         VkImageFormatProperties2 qo; memset(&qo, 0, sizeof qo); qo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
-        VkResult qr = !(pp.linearTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? VK_ERROR_FORMAT_NOT_SUPPORTED
+        VkResult qr = !((tiled ? pp.optimalTilingFeatures : pp.linearTilingFeatures) & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? VK_ERROR_FORMAT_NOT_SUPPORTED
                     : gif ? gif(g_pdev, &qi, &qo) : VK_ERROR_EXTENSION_NOT_PRESENT;
         if (qr == VK_SUCCESS) { ici.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT; ici.pNext = &fl; }
         else { nvlog("buffer texture: VkFormat %u stays single-format - its sRGB/linear view format %u is refused (linear features 0x%x, VkResult %d%s)",
@@ -7534,7 +7616,7 @@ static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t
     VKCK(nvmtl_opaque_CreateImageView(g_dev, &vci, NULL, &out->view), "vkCreateImageView(buffer texture)");
 
     nvlog("buffer texture: %ux%u VkFormat %u pitch %zu bound at %zu (%s, align %llu, size %llu, storage %d, render %d, view pair %u)", w, h, vkfmt, row_pitch, at,
-          g_linmod ? "DRM linear" : "LINEAR", (unsigned long long)mr.alignment, (unsigned long long)mr.size, storage, render, out->vpair);
+          tiled ? "DRM tiled" : g_linmod ? "DRM linear" : "LINEAR", (unsigned long long)mr.alignment, (unsigned long long)mr.size, storage, render, out->vpair);
     return 0;
 }
 

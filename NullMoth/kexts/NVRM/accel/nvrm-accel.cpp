@@ -1018,7 +1018,45 @@ void NVDisplayPipe::iopDropSources()
 static IOLock *gNmxFrontLock = nullptr;
 static thread_call_t gNmxFrontTimer = nullptr;
 static struct { const NVDisplayPipe *pipe; const volatile unsigned *src; unsigned w, h, pitch;
-                volatile unsigned *dst; unsigned dpitch; IOSurface *surface; uint64_t published; IOService *framebuffer; uint64_t gamma; } gNmxFront;
+                volatile unsigned *dst; unsigned dpitch; IOSurface *surface; uint64_t published; IOService *framebuffer; uint64_t gamma;
+                const volatile unsigned *tsrc; } gNmxFront;   // tsrc: the Tile4 pages src is untiled from (v41), or null
+/*
+ * v41 zero copy (the plugin's nvmtl-ws-zerocopy): WindowServer draws its display surfaces in Tile4 straight into their
+ * own pages (IOSurface value "NMXTile4" = the row pitch) and NMXVGAFB scans them out tiled. A frame that is copied
+ * instead (Night Shift's LUT, a refused flip) is untiled first, into one shadow buffer the copies read. Tile4: 4 KB
+ * tiles of 128 B x 32 rows, row-major across the surface; inside a tile, 64 B cells of 16 B x 4 rows in the order
+ * Mesa's isl_tiled_memcpy.c draws (byte x, row y: (y/8)*1024 + (x/64)*512 + ((y/4)%2)*256 + ((x/16)%4)*64 + (y%4)*16).
+ */
+static unsigned *gNmxUntiled;
+static size_t gNmxUntiledBytes;
+static SInt64 gCntNmxUntiled;
+static const volatile unsigned *nmxUntile(const volatile unsigned *src, unsigned w, unsigned h, unsigned pitch)
+{
+    if (!src || !w || !h || (pitch & 127) || 4ull * w > pitch) return nullptr;
+    const size_t bytes = (size_t)pitch * h;
+    if (gNmxUntiledBytes < bytes) {
+        if (gNmxUntiled) IOFreeAligned(gNmxUntiled, gNmxUntiledBytes);
+        gNmxUntiled = (unsigned *)IOMallocAligned(bytes, PAGE_SIZE);
+        gNmxUntiledBytes = gNmxUntiled ? bytes : 0;
+        if (!gNmxUntiled) return nullptr;
+    }
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t *d = (uint8_t *)gNmxUntiled;
+    const size_t tileRow = (size_t)(pitch / 128) * 4096;
+    for (unsigned y = 0; y < h; y++) {
+        const uint8_t *tiles = s + (size_t)(y >> 5) * tileRow;
+        const unsigned ty = y & 31, yo = ((ty >> 3) << 10) | (((ty >> 2) & 1) << 8) | ((ty & 3) << 4);
+        uint8_t *row = d + (size_t)y * pitch;
+        for (unsigned x = 0; x < pitch; x += 16) {
+            const unsigned tx = x & 127;
+            memcpy(row + x, tiles + (size_t)(x >> 7) * 4096 + (yo | ((tx >> 6) << 9) | (((tx >> 4) & 3) << 6)), 16);
+        }
+    }
+    const SInt64 n = OSAddAtomic64(1, &gCntNmxUntiled);
+    if (n < 4 || n == 600) ALOG("iop: untiled a Tile4 surface %ux%u pitch %u for a copy (#%lld)", w, h, pitch, (long long)n + 1);
+    return (const volatile unsigned *)gNmxUntiled;
+}
+static uint64_t nmxSurfaceNumber(IOSurface *s, const char *key);
 static SInt64 gCntNmxFrontCopies;
 // the MateBook panel refreshes at 119.5 Hz: a frame whose pixels land after its transaction waits at most one refresh
 static int gNmxFrontHz = 120;
@@ -1053,7 +1091,9 @@ static void nmxFrontCopyLocked()
 {
     if (!gNmxFront.src || !gNmxFront.dst) return;
     uint64_t start=mach_absolute_time();
-    if(!nmxCopyWithGamma(gNmxFront.framebuffer,gNmxFront.dst,gNmxFront.src,gNmxFront.w,gNmxFront.h,gNmxFront.dpitch,gNmxFront.pitch,&gNmxFront.gamma))return;
+    const volatile unsigned *src = gNmxFront.src;
+    if (gNmxFront.tsrc && !(src = nmxUntile(gNmxFront.tsrc, gNmxFront.w, gNmxFront.h, gNmxFront.pitch))) return;
+    if(!nmxCopyWithGamma(gNmxFront.framebuffer,gNmxFront.dst,src,gNmxFront.w,gNmxFront.h,gNmxFront.dpitch,gNmxFront.pitch,&gNmxFront.gamma))return;
     uint64_t elapsed=0;absolutetime_to_nanoseconds(mach_absolute_time()-start,&elapsed);
     OSAddAtomic64((SInt64)elapsed,&gNmxFrontCopyNs);
     if(elapsed>(uint64_t)gNmxFrontCopyMaxNs)gNmxFrontCopyMaxNs=(SInt64)elapsed;
@@ -1208,6 +1248,7 @@ static int nmxIopBlobFlip(IOService *fb, unsigned head, IOSurface *s, bool final
     q.width = (unsigned)s->getWidth(); q.height = (unsigned)s->getHeight(); q.pitch = (unsigned)s->getBytesPerRow();
     q.format = s->getPixelFormat();
     q.flags = final ? NMX_SCANOUT_FINAL : 0u;
+    if (nmxSurfaceNumber(s, "NMXTile4")) q.flags |= NMX_SCANOUT_TILE4;
     const OSSymbol *sym = OSSymbol::withCStringNoCopy(NMX_SCANOUT_FN_SURFACE);
     IOReturn rr = sym ? fb->callPlatformFunction(sym, false, &q, nullptr, nullptr, nullptr) : kIOReturnNoMemory;
     OSSafeReleaseNULL(sym);
@@ -1255,8 +1296,12 @@ int NVDisplayPipe::nmxCopySurface(IOService *fb, unsigned head, IOSurface *s, bo
         return 0;
     uint64_t gamma = 0;
     const bool copy = ready && nvAccelSurfCopyReady(s, head);
+    // v41: a Tile4 surface (zero copy) is untiled for the copy, and again by each front re-copy (tsrc)
+    const volatile unsigned *tiled = nmxSurfaceNumber(s, "NMXTile4") ? src : nullptr;
+    const volatile unsigned *lin = src;
+    if (tiled && copy && !(lin = nmxUntile(tiled, (unsigned)W, (unsigned)H, (unsigned)P))) return 0;
     if (!copy) OSAddAtomic64(1, &gNmxIncompleteHeld);
-    else if (!nmxCopyWithGamma(fb, (volatile unsigned *)q.kva, src, (unsigned)W, (unsigned)H, q.pitch, (unsigned)P, &gamma))
+    else if (!nmxCopyWithGamma(fb, (volatile unsigned *)q.kva, lin, (unsigned)W, (unsigned)H, q.pitch, (unsigned)P, &gamma))
         return 0;
     // the plane back from a flipped surface once the firmware buffer holds this frame (not a stale one meanwhile)
     nvAccelIopHome(fb, head);
@@ -1269,7 +1314,7 @@ int NVDisplayPipe::nmxCopySurface(IOService *fb, unsigned head, IOSurface *s, bo
         if (gNmxFront.framebuffer) gNmxFront.framebuffer->release();
         gNmxFront.framebuffer = fb; fb->retain();
     }
-    gNmxFront.pipe = this; gNmxFront.src = src; gNmxFront.w = (unsigned)W; gNmxFront.h = (unsigned)H;
+    gNmxFront.pipe = this; gNmxFront.src = src; gNmxFront.w = (unsigned)W; gNmxFront.h = (unsigned)H; gNmxFront.tsrc = tiled;
     gNmxFront.pitch = (unsigned)P; gNmxFront.dst = (volatile unsigned *)q.kva; gNmxFront.dpitch = q.pitch;
     gNmxFront.gamma = gamma; gNmxFront.published = published;
     if (!copy) return 2;
@@ -1336,6 +1381,9 @@ IOReturn NVDisplayPipe::performTransactionCopy(IOAccelDisplayPipeTransaction2 *t
         // (1.13-1.14.1), nvaccel_iop_blank about half of every copied frame, never on machines whose frames all flip.
         // Such a frame now keeps the previous picture on the panel instead.
         if (!nvAccelSurfCopyReady(s, head)) return kIOReturnSuccess;
+#ifdef NMX_ACCEL
+        if (nmxSurfaceNumber(s, "NMXTile4")) return kIOReturnSuccess;   // v41: Tile4 is untiled on the ordered path only
+#endif
         const unsigned fmt = s->getPixelFormat();
         if (fmt != 0x42475241u) NVIOP_FAIL(kIOReturnUnsupported, "surface 0x%x format 0x%08x is not BGRA", s->getSurfaceID(), fmt);
         const unsigned long long W = s->getWidth(), H = s->getHeight(), P = s->getBytesPerRow();
@@ -1380,7 +1428,7 @@ IOReturn NVDisplayPipe::performTransactionCopy(IOAccelDisplayPipeTransaction2 *t
     // the copy source of a VM display becomes its front buffer (a resource's memory can go away under us: not those)
     if (gNmxVmDisplay && gNmxFrontLock) {
         if (fromRes) {gNmxFront.src=nullptr;if(gNmxFront.surface){((OSObject *)gNmxFront.surface)->release();gNmxFront.surface=nullptr;}if(gNmxFront.framebuffer){gNmxFront.framebuffer->release();gNmxFront.framebuffer=nullptr;}}
-        else { gNmxFront.pipe = this; gNmxFront.src = src; gNmxFront.w = w; gNmxFront.h = h; gNmxFront.pitch = pitch;
+        else { gNmxFront.pipe = this; gNmxFront.src = src; gNmxFront.w = w; gNmxFront.h = h; gNmxFront.pitch = pitch; gNmxFront.tsrc = nullptr;
                gNmxFront.dst = (volatile unsigned *)q.kva; gNmxFront.dpitch = q.pitch;
                if(gNmxFront.surface!=s){if(gNmxFront.surface){((OSObject *)gNmxFront.surface)->release();gNmxFront.surface=nullptr;}if(gNmxFront.framebuffer){gNmxFront.framebuffer->release();gNmxFront.framebuffer=nullptr;}gNmxFront.surface=s;if(s)((OSObject *)s)->retain();}
                if(gNmxFront.framebuffer!=fb){if(gNmxFront.framebuffer)gNmxFront.framebuffer->release();gNmxFront.framebuffer=fb;if(fb)fb->retain();}

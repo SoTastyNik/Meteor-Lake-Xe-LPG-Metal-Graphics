@@ -30,6 +30,10 @@
  *   /Library/GPUBundles/nvmtl-ws-tiled           with host import: WindowServer's full-screen render targets are drawn in a
  *                                                tiled private image and copied to the surface's own pages on the GPU
  *                                                once per command buffer (v37, NVMTLDevice.m nvmtl_surface_hybrid).
+ *   /Library/GPUBundles/nvmtl-ws-zerocopy        with tiled: those surfaces are drawn in Tile4 straight into their own
+ *                                                pages and the panel scans them out tiled (IOSurface value "NMXTile4";
+ *                                                NMXVGAFB programs the plane, NMXAccel untiles a frame it has to copy).
+ *                                                No copy, no private image (v41). Experimental.
  */
 #include <unistd.h>
 
@@ -86,6 +90,12 @@ static inline int nvmtl_ws_tiled(void)
 {
     static int on = -1;
     return nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-tiled", &on);
+}
+
+static inline int nvmtl_ws_zerocopy(void)
+{
+    static int on = -1;
+    return nvmtl_ws_tiled() && nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-zerocopy", &on);
 }
 
 /* nvmtl_vk_buffer_create's host_visible value for a cached (non-coherent, cache-maintained) readback buffer */

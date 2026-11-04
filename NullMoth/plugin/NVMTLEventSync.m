@@ -143,6 +143,11 @@ static int nvmtl_skip_empty_on(void) {
     NSMutableSet *hybridOut = nil;
     for (NVMTLTexture *s in _surfDirty) {
         if (!s->_hybrid) continue;
+        if (s->_tile4) {   // v41 zero copy: drawn in place; completion only marks it published
+            if (!hybridOut) hybridOut = [NSMutableSet new];
+            [hybridOut addObject:s];
+            continue;
+        }
         if (!_c.cb || _c.in_rp || nvmtl_vk_cmd_copy_image(&_c, &s->_i, 0, 0, &s->_hostAlias, 0, 0, s->_i.w, s->_i.h)) {
             static unsigned said; if (said++ < 8)
                 syslog(LOG_ERR, "NullMoth: hybrid surface %u: copy out not recorded (%s) - copied after completion",
