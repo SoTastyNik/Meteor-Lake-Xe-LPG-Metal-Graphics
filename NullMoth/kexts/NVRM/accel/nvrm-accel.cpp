@@ -1623,6 +1623,37 @@ NVACCEL_CNT(nmxfb_frames_25_34ms, gCntNmxFrameMs[4], "Frames 25-34 ms after the 
 NVACCEL_CNT(nmxfb_frames_34_50ms, gCntNmxFrameMs[5], "Frames 34-50 ms after the previous one");
 NVACCEL_CNT(nmxfb_frames_50_100ms, gCntNmxFrameMs[6], "Frames 50-100 ms after the previous one");
 NVACCEL_CNT(nmxfb_frames_over_100ms, gCntNmxFrameMs[7], "Frames 100-250 ms after the previous one");
+/*
+ * v41: the CPU's RAPL energy counters, raw, for gfx-bench.sh's energy per variant (what powermetrics reads on an Intel
+ * Mac). unit: MSR_RAPL_POWER_UNIT (bits 12:8 = energy in 1/2^n J); pkg, cores, gt: the 32-bit counters of the package,
+ * its cores (PP0) and the graphics (PP1), which wrap - a reader takes differences modulo 2^32. Intel CPUs only.
+ */
+static bool nmxRaplIntel()
+{
+    static int intel = -1;
+    if (intel < 0) {
+        uint32_t a, b, c, d;
+        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0u), "c"(0u));
+        intel = b == 0x756e6547u && d == 0x49656e69u && c == 0x6c65746eu;   // GenuineIntel
+    }
+    return intel == 1;
+}
+static int nmxRaplSysctl SYSCTL_HANDLER_ARGS
+{
+    if (!nmxRaplIntel()) return ENODEV;
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"((uint32_t)arg2));
+    SInt64 v = (SInt64)(((uint64_t)hi << 32) | lo);
+    return sysctl_handle_quad(oidp, &v, 0, req);
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmx_rapl_unit, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0x606, nmxRaplSysctl, "Q",
+            "RAPL power unit MSR (energy unit 1/2^((v >> 8) & 31) J)");
+SYSCTL_PROC(_debug, OID_AUTO, nmx_rapl_pkg, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0x611, nmxRaplSysctl, "Q",
+            "RAPL package energy counter (32-bit, wraps)");
+SYSCTL_PROC(_debug, OID_AUTO, nmx_rapl_cores, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0x639, nmxRaplSysctl, "Q",
+            "RAPL CPU cores (PP0) energy counter (32-bit, wraps)");
+SYSCTL_PROC(_debug, OID_AUTO, nmx_rapl_gt, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, nullptr, 0x641, nmxRaplSysctl, "Q",
+            "RAPL graphics (PP1) energy counter (32-bit, wraps)");
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_ordered_copy, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxOrderedCopy, 0,
            "MateBook panel: 1 = a presented surface is flipped or copied on a thread call once its pixels are in place "
            "(the transaction completes then), 0 = copied at once, a late frame by the front timer");
@@ -1659,6 +1690,8 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_50_100ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_over_100ms);
+    sysctl_register_oid(&sysctl__debug_nmx_rapl_unit); sysctl_register_oid(&sysctl__debug_nmx_rapl_pkg);
+    sysctl_register_oid(&sysctl__debug_nmx_rapl_cores); sysctl_register_oid(&sysctl__debug_nmx_rapl_gt);
 #else
     sysctl_register_oid(&sysctl__debug_nvaccel_headless);
 #endif
