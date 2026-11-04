@@ -72,7 +72,10 @@ class NMXVGAFB : public IOFramebuffer {
     IOMemoryMap *fRegsMap = nullptr;      // BAR0: plane registers
     IOMemoryMap *fPteMap = nullptr;       // the window's GGTT entries (GTTADR, BAR0 + 8 MB)
     uint64_t fWin = 0, fSlotBytes = 0;
-    uint32_t fGopSurf = 0, fGopStride = 0, fGopCtl = 0;
+    uint32_t fGopSurf = 0, fGopStride = 0, fGopCtl = 0, fGopWm0 = 0, fGopWmSagv = 0;
+    bool fTileWm = false;                 // v42: the plane's watermarks raised for Tile4 (kept from then on)
+    void latitudeTileWatermarks();
+    void latitudeTileCheck(int slot, uint32_t surfaceId);
     struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4; };
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
@@ -840,6 +843,8 @@ void NMXVGAFB::latitudeFlipInit(IOPCIDevice *pci)
     fGopSurf = *(const volatile uint32_t *)(regs + 0x7019c + fPlaneStep);
     fGopStride = *(const volatile uint32_t *)(regs + 0x70188 + fPlaneStep);
     fGopCtl = *(const volatile uint32_t *)(regs + 0x70180 + fPlaneStep);
+    fGopWm0 = *(const volatile uint32_t *)(regs + 0x70240 + fPlaneStep);
+    fGopWmSagv = *(const volatile uint32_t *)(regs + 0x70258 + fPlaneStep);
     VFBLOG("Latitude: firmware plane CTL 0x%x (tiling %u) stride 0x%x", fGopCtl, (fGopCtl >> 10) & 7u, fGopStride);
     fWin = win; fSlotBytes = slot;
     setProperty("LatitudeScanoutFlip", kOSBooleanTrue);
@@ -1067,6 +1072,60 @@ IOReturn NMXVGAFB::latitudeHome()
     return ret;
 }
 
+/*
+ * v42: the plane's watermarks for Tile4. The firmware programmed them for its linear plane (level 0: 2 lines, 49 blocks
+ * on the MateBook), and a Tile4 plane fetches whole 4-row tile lines: with those, v41's Tile4 surfaces latched and the
+ * panel stayed black but for the cursor. As i915's skl_compute_plane_wm does for a Y/4-tiled plane: 4 minimum
+ * scanlines, (pitch * 4 / 512 + 1) blocks per 4 lines (y_tile_minimum), level 0 and SAGV at least that + 1 block and
+ * 4 lines. Raised once and kept for linear frames too (more than they need, never less).
+ */
+void NMXVGAFB::latitudeTileWatermarks()
+{
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    const uint32_t yTileMin = (fRowBytes * 4 + 511) / 512 + 1, minBlocks = yTileMin + 1, minLines = 4;
+    const uint32_t buf = *(const volatile uint32_t *)(regs + 0x7027c + fPlaneStep);
+    const uint32_t ddb = ((buf >> 16) & 0xfffu) - (buf & 0xfffu) + 1;
+    uint32_t v[2] = { fGopWm0, fGopWmSagv };
+    const uint32_t off[2] = { 0x70240, 0x70258 };
+    for (int i = 0; i < 2; i++) {
+        if (!(v[i] & (1u << 31))) continue;                       // a level the firmware left off stays off
+        uint32_t lines = (v[i] >> 14) & 0x1fffu, blocks = v[i] & 0xfffu;
+        if (lines < minLines) lines = minLines;
+        if (blocks < minBlocks) blocks = minBlocks;
+        if (blocks >= ddb) blocks = ddb - 1;
+        v[i] = (v[i] & ~((0x1fffu << 14) | 0xfffu)) | (lines << 14) | blocks;
+        *(volatile uint32_t *)(regs + off[i] + fPlaneStep) = v[i];
+    }
+    fTileWm = true;
+    VFBLOG("Latitude: Tile4 watermarks: level 0 0x%x -> 0x%x, SAGV 0x%x -> 0x%x (y-tile minimum %u blocks, plane DDB %u blocks)",
+           fGopWm0, v[0], fGopWmSagv, v[1], yTileMin, ddb);
+}
+
+// v42: what the panel shows after a Tile4 flip: the pipe's FIFO underrun bit (DE_PIPE ISR/IIR bit 31) and whether the
+// surface's pages hold a picture at all (64 samples), two frames later. The first three Tile4 flips only.
+void NMXVGAFB::latitudeTileCheck(int slot, uint32_t surfaceId)
+{
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    const uint32_t pipeOff = 0x10u * (fPlaneStep / 0x1000u);
+    const uint32_t isr0 = *(const volatile uint32_t *)(regs + 0x44400 + pipeOff), iir0 = *(const volatile uint32_t *)(regs + 0x44408 + pipeOff);
+    IOSleep(40);
+    const uint32_t isr1 = *(const volatile uint32_t *)(regs + 0x44400 + pipeOff), iir1 = *(const volatile uint32_t *)(regs + 0x44408 + pipeOff);
+    unsigned nonzero = 0, distinct = 0; uint32_t first = 0;
+    if (slot >= 0 && fFlip[slot].map) {
+        const volatile uint32_t *p = (const volatile uint32_t *)fFlip[slot].map->getVirtualAddress();
+        const uint64_t words = fFlip[slot].map->getLength() / 4;
+        for (unsigned i = 0; i < 64; i++) {
+            const uint32_t w = p[(words * (2 * i + 1)) / 128];
+            if (!i) first = w;
+            if (w) nonzero++;
+            if (w != first) distinct++;
+        }
+    }
+    VFBLOG("Latitude: Tile4 check surface 0x%x: pipe ISR 0x%x -> 0x%x, IIR 0x%x -> 0x%x (bit 31 = FIFO underrun); pages: %u of 64 samples non-zero, %u differ; CTL 0x%x STRIDE 0x%x WM0 0x%x",
+           surfaceId, isr0, isr1, iir0, iir1, nonzero, distinct, *(const volatile uint32_t *)(regs + 0x70180 + fPlaneStep),
+           *(const volatile uint32_t *)(regs + 0x70188 + fPlaneStep), *(const volatile uint32_t *)(regs + 0x70240 + fPlaneStep));
+}
+
 IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
 {
     if (!gLatFlip || !fFlipLock || fStopping) return kIOReturnNotReady;
@@ -1129,12 +1188,15 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         uint64_t fns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - f0, &fns);
         OSAddAtomic64((SInt64)(fns / 1000), &gLatFlipFlushUs);
     }
+    if (hit >= 0 && tile4 && !fTileWm) latitudeTileWatermarks();
     if (hit >= 0 && (hit != fFlipCur || fFlip[hit].tile4 != tile4)) {
         const uint32_t surf = (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
         if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / unit), tile4)) {
             fFlipCur = hit; fFlip[hit].tile4 = tile4;
             static SInt32 tileLogs;
             if (tile4 && tileLogs < 4) { tileLogs++; VFBLOG("Latitude: surface 0x%x on the panel in Tile4 (stride %u tiles)", r->surfaceId, r->pitch / 128); }
+            static SInt32 tileChecks;
+            if (tile4 && tileChecks < 3) { tileChecks++; latitudeTileCheck(hit, r->surfaceId); }
             OSAddAtomic64(1, &gLatFlips);
         } else {
             // a plane that does not latch: back to the firmware buffer, and copies from now on
