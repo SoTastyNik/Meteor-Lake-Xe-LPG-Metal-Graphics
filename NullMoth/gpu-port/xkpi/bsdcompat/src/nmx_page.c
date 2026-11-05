@@ -289,13 +289,21 @@ void vm_page_wire(vm_page_t m)
  * The release can block (xnu unwires the range), so put_page on a pinned user page must come from thread context,
  * which is where Linux drivers release userptr pages.
  */
-struct user_pin {
-    void *handle;                          /* nmx_xnu_user_wire handle */
-    volatile u_int remaining;              /* page puts still to come */
-};
+/*
+ * v50: a request's refs come in one block with it, and its page records are looked up and made in batches
+ * (nmx_phys_to_pages). Before, each page cost three allocations and four spin lock round trips, and a 21 MB surface is
+ * 5184 pages. A popped ref is no longer freed by itself: the request is freed with all of its refs at its last put, and by
+ * then every one of them has been popped (each pop of one of its refs is one of its puts).
+ */
+struct user_pin;
 struct pin_ref {
     struct user_pin *pin;
     struct pin_ref *next;
+};
+struct user_pin {
+    void *handle;                          /* nmx_xnu_user_wire handle */
+    volatile u_int remaining;              /* page puts still to come */
+    struct pin_ref refs[];                 /* one per page of the request */
 };
 
 static void pin_put(struct user_pin *pin)
@@ -317,62 +325,114 @@ static struct user_pin *page_pop_pin(vm_page_t m)
     lck_spin_unlock(pg_lock);
     if (r == NULL)
         return NULL;
-    struct user_pin *pin = r->pin;
-    free(r, M_NMXPAGE);
-    return pin;
+    return r->pin;                         /* r lives in its request's block */
 }
 
+static u_int reg_count;                    /* page records in the registry (fictitious ones are never taken out) */
+/*
+ * The records of npages physical pages (a user pin): looked up under one lock hold per 256 pages; the missing ones are made
+ * as one fictitious block with one registry entry array, inserted the same way. A page another thread registered in the
+ * meantime (or one met twice in the run) takes the record already there; the spare record in the block stays unused.
+ * Fictitious records are never freed (vm_page_free ignores them), so neither is the block.
+ */
+static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages, int *fresh)
+{
+    int missing = 0;
+    *fresh = 0;
+    for (int i = 0; i < npages;) {
+        const int end = npages - i > 256 ? i + 256 : npages;
+        lck_spin_lock(pg_lock);
+        for (; i < end; i++)
+            if ((pages[i] = reg_find_locked(phys[i] >> PAGE_SHIFT)) == NULL)
+                missing++;
+        lck_spin_unlock(pg_lock);
+    }
+    if (missing == 0)
+        return 0;
+    struct backing *bk = malloc(sizeof(*bk) + sizeof(struct vm_page) * (size_t)missing, M_NMXPAGE, M_WAITOK | M_ZERO);
+    struct reg_entry *ents = malloc(sizeof(*ents) * (size_t)missing, M_NMXPAGE, M_WAITOK);
+    if (bk == NULL || ents == NULL) {
+        free(bk, M_NMXPAGE);
+        free(ents, M_NMXPAGE);
+        return ENOMEM;
+    }
+    bk->kind = BK_FICTITIOUS;
+    bk->npages = (size_t)missing;
+    for (int i = 0, k = 0; i < npages; i++) {
+        if (pages[i] != NULL)
+            continue;
+        page_record_init(&bk->pages[k], bk, (phys[i] >> PAGE_SHIFT) << PAGE_SHIFT, NULL);
+        bk->pages[k].flags = PG_FICTITIOUS;
+        bk->pages[k].ref_count = 1;
+        k++;
+    }
+    for (int i = 0, k = 0, used = 0; i < npages;) {
+        const int end = npages - i > 256 ? i + 256 : npages;
+        lck_spin_lock(pg_lock);
+        for (; i < end; i++) {
+            if (pages[i] != NULL)
+                continue;
+            struct vm_page *m = reg_find_locked(phys[i] >> PAGE_SHIFT);
+            if (m == NULL) {
+                reg_insert_locked(&bk->pages[k], &ents[used++]);
+                reg_count++;
+                m = &bk->pages[k];
+                (*fresh)++;
+            }
+            pages[i] = m;
+            k++;
+        }
+        lck_spin_unlock(pg_lock);
+    }
+    if (*fresh == 0) {                     /* every one was registered meanwhile: nothing of the block is used */
+        free(bk, M_NMXPAGE);
+        free(ents, M_NMXPAGE);
+    }
+    return 0;
+}
+
+uint64_t nmx_xnu_execbuf_begin(void);
+void nmx_xnu_pin_parts(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3, int fresh, u_int records);
 int nmx_user_pages_pin(void *mm, uintptr_t start, int npages, int write, vm_page_t *pages)
 {
     if (npages <= 0)
         return 0;
+    const uint64_t t0 = nmx_xnu_execbuf_begin();
     uint64_t *phys = malloc(sizeof(uint64_t) * (size_t)npages, M_NMXPAGE, M_WAITOK);
-    struct user_pin *pin = malloc(sizeof(*pin), M_NMXPAGE, M_WAITOK | M_ZERO);
-    struct pin_ref **refs = malloc(sizeof(*refs) * (size_t)npages, M_NMXPAGE, M_WAITOK | M_ZERO);
-    int err = ENOMEM, i;
-    if (phys == NULL || pin == NULL || refs == NULL)
+    struct user_pin *pin = malloc(sizeof(*pin) + sizeof(struct pin_ref) * (size_t)npages, M_NMXPAGE, M_WAITOK | M_ZERO);
+    int err = ENOMEM, fresh = 0, i;
+    if (phys == NULL || pin == NULL)
         goto fail;
-    for (i = 0; i < npages; i++)
-        if ((refs[i] = malloc(sizeof(struct pin_ref), M_NMXPAGE, M_WAITOK)) == NULL)
-            goto fail;
     err = nmx_xnu_user_wire(mm, start, (size_t)npages, write, phys, &pin->handle);
     if (err != 0)
         goto fail;
-    for (i = 0; i < npages; i++) {
-        pages[i] = nmx_phys_to_page(phys[i]);
-        if (pages[i] == NULL) {
-            /* no record could be made: give back the pins already placed, then the wiring */
-            pin->remaining = (u_int)i + 1;
-            for (int k = 0; k < i; k++) {
-                __atomic_sub_fetch(&pages[k]->ref_count, 1, __ATOMIC_SEQ_CST);
-                pin_put(page_pop_pin(pages[k]));
-            }
-            pin_put(pin);
-            pin = NULL;
-            for (int k = i; k < npages; k++)
-                free(refs[k], M_NMXPAGE);
-            free(refs, M_NMXPAGE);
-            free(phys, M_NMXPAGE);
-            return -ENOMEM;
-        }
+    const uint64_t t1 = nmx_xnu_execbuf_begin();
+    if (nmx_phys_to_pages(phys, npages, pages, &fresh) != 0) {
+        /* no records could be made: no pin was placed yet, so only the wiring goes back */
+        nmx_xnu_user_unwire(pin->handle);
+        free(pin, M_NMXPAGE);
+        free(phys, M_NMXPAGE);
+        return -ENOMEM;
     }
+    const uint64_t t2 = nmx_xnu_execbuf_begin();
     pin->remaining = (u_int)npages;
-    for (i = 0; i < npages; i++) {
-        refs[i]->pin = pin;
+    for (i = 0; i < npages;) {
+        const int end = npages - i > 256 ? i + 256 : npages;
+        for (int k = i; k < end; k++)
+            pin->refs[k].pin = pin;
         lck_spin_lock(pg_lock);
-        refs[i]->next = pages[i]->nmx_pins;
-        pages[i]->nmx_pins = refs[i];
+        for (; i < end; i++) {
+            pin->refs[i].next = pages[i]->nmx_pins;
+            pages[i]->nmx_pins = &pin->refs[i];
+        }
         lck_spin_unlock(pg_lock);
-        vm_page_wire(pages[i]);
     }
-    free(refs, M_NMXPAGE);
+    for (i = 0; i < npages; i++)
+        vm_page_wire(pages[i]);
     free(phys, M_NMXPAGE);
+    nmx_xnu_pin_parts(t0, t1, t2, nmx_xnu_execbuf_begin(), fresh, reg_count);
     return npages;
 fail:
-    if (refs != NULL)
-        for (i = 0; i < npages; i++)
-            free(refs[i], M_NMXPAGE);
-    free(refs, M_NMXPAGE);
     free(pin, M_NMXPAGE);
     free(phys, M_NMXPAGE);
     return -err;
@@ -546,6 +606,7 @@ vm_page_t nmx_phys_to_page(vm_paddr_t pa)
     m = reg_find_locked(pfn);
     if (m == NULL) {
         reg_insert_locked(&bk->pages[0], e);
+        reg_count++;
         m = &bk->pages[0];
         bk = NULL;
         e = NULL;

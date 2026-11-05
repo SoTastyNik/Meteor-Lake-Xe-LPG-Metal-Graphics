@@ -683,7 +683,11 @@ static int nvmtl_pixfmt(MTLPixelFormat f, uint32_t *vk, uint32_t *bpp, int *a8)
     }
     static MTLPixelFormat seen[32]; static int nseen;
     int dup = 0; for (int i = 0; i < nseen; i++) if (seen[i] == f) dup = 1;
-    if (!dup) { if (nseen < 32) seen[nseen++] = f; nvlog("pixel format %lu is NOT carried by this driver yet (compressed / depth-stencil / packed YUV) — nil", (unsigned long)f); }
+    if (!dup) {
+        if (nseen < 32) seen[nseen++] = f;
+        // v50: in release builds too - an app that shows black may be asking for one of these
+        syslog(LOG_ERR, "NullMoth: %s: pixel format %lu unsupported (compressed / depth-stencil / packed YUV) - nil", getprogname(), (unsigned long)f);
+    }
     return -1;
 }
 int nvmtl_pixfmt_public(MTLPixelFormat f, uint32_t *vk, uint32_t *bpp, int *a8) { return nvmtl_pixfmt(f, vk, bpp, a8); }
@@ -1045,6 +1049,26 @@ static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInt
 }
 
 static char nvmtl_surface_cache_key;
+/* v50: the first IOSurface textures of every process but WindowServer go to the system log with the path they took, so an
+   app that shows black (OBS, Photo Booth, a Telegram screen share) says what it wrapped: the surface's own pixel format and
+   planes, what Metal asked for, and whether the texture is the surface's pages, a private copy, or nothing */
+static void nvmtl_app_surface_note(IOSurfaceRef surf, NSUInteger plane, size_t w, size_t h, MTLTextureDescriptor *d,
+                                   NVMTLTexture *t, const char *fail)
+{
+    static _Atomic unsigned said;
+    static int ws = -1;
+    if (ws < 0) ws = !strcmp(getprogname(), "WindowServer");
+    if (ws || !surf || atomic_fetch_add(&said, 1) >= 48) return;
+    const OSType f = IOSurfaceGetPixelFormat(surf);
+    char cc[5] = { (char)(f >> 24), (char)(f >> 16), (char)(f >> 8), (char)f, 0 };
+    for (int i = 0; i < 4; i++) if (cc[i] < 32 || cc[i] > 126) cc[i] = '?';
+    syslog(LOG_ERR, "NullMoth: app surface: %s surface %u '%s' %zux%zu, %zu plane(s), row %zu; texture plane %lu %zux%zu fmt %lu usage 0x%lx "
+           "storage %lu -> %s", getprogname(), (unsigned)IOSurfaceGetID(surf), cc, IOSurfaceGetWidth(surf), IOSurfaceGetHeight(surf),
+           IOSurfaceGetPlaneCount(surf), IOSurfaceGetBytesPerRowOfPlane(surf, (uint32_t)plane), (unsigned long)plane, w, h,
+           (unsigned long)d.pixelFormat, (unsigned long)d.usage, (unsigned long)d.storageMode,
+           fail ? fail : !t ? "nil" : t->_vramOn ? "family VRAM" : t->_hybrid ? "hybrid (private tiled + copies)"
+           : t->_hostOn ? "the surface's own pages" : "a private image, copied in and out");
+}
 /* CoreAnimation wraps the same IOSurfaces in new textures every frame (its flatten cache, layer contents) and drops
    them right after; with the weak cache alone each wrapper was a fresh host import (a userptr VM_BIND, 12% of
    WindowServer's main thread while dragging a window). The most recently used host images stay alive here, which also
@@ -1085,7 +1109,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
              | ((MTLResourceOptions)d.storageMode << MTLResourceStorageModeShift);
     t->_fbo = nvmtl_desc_fbo(d);
     uint32_t vkf = 0, bpp = 0; int a8 = 0;
-    if (nvmtl_pixfmt(d.pixelFormat, &vkf, &bpp, &a8)) return nil;
+    if (nvmtl_pixfmt(d.pixelFormat, &vkf, &bpp, &a8)) { nvmtl_app_surface_note(surf, plane, w, h, d, nil, "pixel format unsupported"); return nil; }
     if(surf && (w<512 || h<128)){
         static _Atomic unsigned glyphLayouts;
         if(atomic_fetch_add(&glyphLayouts,1)<32)
@@ -1111,6 +1135,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
         }
     }
     if (nvmtl_surface_image_create(t, surf, plane, (uint32_t)w, (uint32_t)h, vkf, bpp, a8, wantStex, (MTLTextureUsage)d.usage)) {
+        nvmtl_app_surface_note(surf, plane, w, h, d, nil, "image create FAILED");
         nvlog("newTextureWithDescriptor:iosurface:plane: image create FAILED (%zux%zu)", w, h); return nil; }
     t->_q = nvmtl_device_queue();
     t->_surf = surf; if (surf) { CFRetain(surf); t->_surfOwned = YES; }
@@ -1123,6 +1148,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
     if (key && (t->_hostOn || t->_hybrid)) nvmtl_host_keep(self, t);
     nvlog("newTextureWithDescriptor:iosurface:%p plane:%lu -> %p (%zux%zu fmt %lu)",
           (void *)surf, (unsigned long)plane, (__bridge void *)t, w, h, (unsigned long)d.pixelFormat);
+    nvmtl_app_surface_note(surf, plane, w, h, d, t, NULL);
     return t; }
 
 - (id<MTLLibrary>)nvmtlNewLibraryWithSPIRV:(NSDictionary<NSString *, NSData *> *)fns {
