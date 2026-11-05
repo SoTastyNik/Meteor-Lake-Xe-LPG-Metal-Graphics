@@ -463,9 +463,29 @@ int sched_is_bound(struct thread *td) { return 0; }
 void sched_bind(struct thread *td, int cpu) { }
 void sched_unbind(struct thread *td) { }
 
+/*
+ * LinuxKPI's cond_resched() and sched_yield(). Linux gives the CPU up there only when the scheduler asks for it; here
+ * every call slept on mi_switch's 1 us timer, and i915 calls cond_resched once per page while it gathers a new object's
+ * pages (shmem_sg_alloc_table): 7-9 us a page, 2 ms per MB, the 15-50 ms binding stalls behind Launchpad's folder
+ * animation (v46 logs). xnu preempts kernel threads anyway, so a thread now yields at most once per 2 ms of these calls
+ * (by the thread, in a small table; a collision only moves one yield).
+ */
+#define NMX_RELINQUISH_SLOTS 64
+static struct { thread_t thread; uint64_t since; } nmx_relinquish[NMX_RELINQUISH_SLOTS];
 void sched_relinquish(struct thread *td)
 {
+    const thread_t me = current_thread();
+    const uint64_t now = mach_absolute_time();
+    const unsigned k = (unsigned)(((uintptr_t)me >> 7) % NMX_RELINQUISH_SLOTS);
+    if (nmx_relinquish[k].thread != me) {
+        nmx_relinquish[k].thread = me;
+        nmx_relinquish[k].since = now;
+        return;
+    }
+    if (abs_to_ns(now - nmx_relinquish[k].since) < 2000000ULL)
+        return;
     mi_switch(SW_VOL);
+    nmx_relinquish[k].since = mach_absolute_time();
 }
 
 void kern_yield(int prio)
