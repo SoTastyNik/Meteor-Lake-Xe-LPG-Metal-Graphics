@@ -76,7 +76,10 @@ class NMXVGAFB : public IOFramebuffer {
     bool fTileWm = false;                 // v42: the plane's watermarks raised for Tile4 (kept from then on)
     void latitudeTileWatermarks();
     void latitudeTileCheck(int slot, uint32_t surfaceId);
-    struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4; };
+    void latitudeDropSlot(FlipSlot &s);
+    IOBufferMemoryDescriptor *latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt);
+    struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4;
+                      IOBufferMemoryDescriptor *dpt; uint32_t dptGgtt; };   // v44: a Tile4 surface's display page table
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
@@ -859,7 +862,7 @@ void NMXVGAFB::latitudeFlipFini()
 {
     latitudeCursorFini();
     if (fFlipLock && fRegsMap) latitudeHome();
-    for (auto &s : fFlip) if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
+    for (auto &s : fFlip) latitudeDropSlot(s);
     OSSafeReleaseNULL(fPteMap);
     OSSafeReleaseNULL(fRegsMap);
     if (fFlipLock) { IOLockFree(fFlipLock); fFlipLock = nullptr; }
@@ -1080,6 +1083,59 @@ IOReturn NMXVGAFB::latitudeHome()
  * scanlines, (pitch * 4 / 512 + 1) blocks per 4 lines (y_tile_minimum), level 0 and SAGV at least that + 1 block and
  * 4 lines. Raised once and kept for linear frames too (more than they need, never less).
  */
+void NMXVGAFB::latitudeDropSlot(FlipSlot &s)
+{
+    if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); }
+    if (s.dpt) { s.dpt->complete(); s.dpt->release(); }
+    s = {};
+}
+
+/*
+ * v44: display page tables. From display 13 (ADL-P, and so Meteor Lake) a tiled plane does not read its surface through
+ * the GGTT: PLANE_SURF holds the GGTT address of a DPT, a page of gen8 PTEs per 512 surface pages that the plane walks
+ * (i915: intel_dpt.c, skl_surf_address's offset >> 9; enable_dpt=0 is an unsafe parameter and a tiled firmware FB is
+ * not taken over without one). v41-v43's Tile4 planes were pointed at the surface itself, so the plane took pixels for
+ * page table entries: black, while the same picture linear showed. The DPT here lists the surface's pages in order
+ * (PAT 2, as the GGTT entries) and is mapped at the top of the slot's GGTT range, above the frame (2 MB there are free;
+ * the cursor uses the last slot's top 1 MB).
+ */
+IOBufferMemoryDescriptor *NMXVGAFB::latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt)
+{
+    const uint64_t pages = (bytes + PAGE_SIZE - 1) >> 12;
+    const uint64_t dptBytes = ((pages + 16) * 8 + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (!md || slot < 0 || dptBytes > (1ull << 20)) return nullptr;
+    IOBufferMemoryDescriptor *dpt = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut, dptBytes,
+                                                                                     0x0000003FFFFFF000ull);
+    if (!dpt) return nullptr;
+    if (dpt->prepare() != kIOReturnSuccess) { dpt->release(); return nullptr; }
+    volatile uint64_t *e = (volatile uint64_t *)dpt->getBytesNoCopy();
+    uint64_t n = 0;
+    for (uint64_t off = 0; off < pages * PAGE_SIZE; ) {
+        IOByteCount len = 0;
+        const addr64_t pa = md->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
+        if (!pa || (pa & 0xfff) || len < PAGE_SIZE || pa >= (1ull << 46)) { dpt->complete(); dpt->release(); return nullptr; }
+        for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < pages * PAGE_SIZE; o += PAGE_SIZE, off += PAGE_SIZE)
+            e[n++] = (pa + o) | 1ull | (1ull << 53);
+    }
+    for (; n < dptBytes / 8; n++) e[n] = e[n - 1];      // the plane may fetch a little past the end
+    latitudeFlushLines((const volatile uint8_t *)e, dptBytes);
+    const uint64_t at = (uint64_t)slot * fSlotBytes + fSlotBytes - (2ull << 20);
+    volatile uint64_t *pte = (volatile uint64_t *)fPteMap->getVirtualAddress() + (at >> 12);
+    for (uint64_t off = 0, k = 0; off < dptBytes; ) {
+        IOByteCount len = 0;
+        const addr64_t pa = dpt->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
+        if (!pa || (pa & 0xfff) || len < PAGE_SIZE) { dpt->complete(); dpt->release(); return nullptr; }
+        for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < dptBytes; o += PAGE_SIZE, off += PAGE_SIZE)
+            pte[k++] = (pa + o) | 1ull | (1ull << 53);
+    }
+    (void)pte[0];
+    *ggtt = (uint32_t)(fWin + at);
+    static SInt32 logs;
+    if (logs < 4) { logs++; VFBLOG("Latitude: DPT for slot %d: %llu surface pages in %llu bytes at GGTT 0x%x", slot,
+                                   (unsigned long long)pages, (unsigned long long)dptBytes, *ggtt); }
+    return dpt;
+}
+
 void NMXVGAFB::latitudeTileWatermarks()
 {
     volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
@@ -1170,7 +1226,7 @@ int NMXVGAFB::latitudeTileTest(int mode)
     const int prev = fFlipCur;
     const int slot = prev < 0 ? 0 : (prev + 1) % (int)kFlipSlots;   // never the one on the panel
     FlipSlot &s = fFlip[slot];
-    if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
+    latitudeDropSlot(s);
     volatile uint64_t *pte = (volatile uint64_t *)fPteMap->getVirtualAddress() + (uint64_t)slot * (fSlotBytes >> 12);
     int err = 0;
     for (uint64_t off = 0; !err && off < bytes; ) {
@@ -1180,11 +1236,13 @@ int NMXVGAFB::latitudeTileTest(int mode)
         for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < bytes; o += PAGE_SIZE, off += PAGE_SIZE)
             pte[off >> 12] = (pa + o) | 1ull | (1ull << 53);
     }
-    uint32_t isr = 0, ctl = 0, live = 0;
+    uint32_t isr = 0, ctl = 0, live = 0, dptGgtt = 0;
+    IOBufferMemoryDescriptor *dpt = (!err && tile4) ? latitudeDpt(buf, bytes, slot, &dptGgtt) : nullptr;
+    if (tile4 && !dpt && !err) err = ENOMEM;
     if (!err) {
         (void)pte[(bytes >> 12) - 1];
         if (tile4 && !fTileWm) latitudeTileWatermarks();
-        const uint32_t surf = (uint32_t)(fWin + (uint64_t)slot * fSlotBytes);
+        const uint32_t surf = tile4 ? dptGgtt : (uint32_t)(fWin + (uint64_t)slot * fSlotBytes);
         if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (pitch / unit), tile4)) {
             IOSleep(5000);
             volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
@@ -1196,12 +1254,13 @@ int NMXVGAFB::latitudeTileTest(int mode)
         bool back;
         if (prev >= 0) {
             const bool t4 = fFlip[prev].tile4;
-            back = latitudePlaneTo((fGopSurf & 0xfffu) | (uint32_t)(fWin + (uint64_t)prev * fSlotBytes),
+            back = latitudePlaneTo((fGopSurf & 0xfffu) | (t4 && fFlip[prev].dpt ? fFlip[prev].dptGgtt : (uint32_t)(fWin + (uint64_t)prev * fSlotBytes)),
                                    (fGopStride & ~0x7ffu) | (fFlip[prev].pitch / (t4 ? 128u : 64u)), t4);
         } else back = latitudePlaneTo(fGopSurf, fGopStride);
         if (!back) VFBLOG("Latitude: Tile4 test: the plane did not go back to %d", prev);
     }
     IOLockUnlock(fFlipLock);
+    if (dpt) { dpt->complete(); dpt->release(); }
     buf->complete();
     buf->release();
     VFBLOG("Latitude: %s test pattern (%ux%u pitch %u) on the panel for 5 s: %d; pipe ISR 0x%x CTL 0x%x SURFLIVE 0x%x",
@@ -1248,7 +1307,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
     IOReturn ret = kIOReturnSuccess;
     if (hit < 0 && victim >= 0) {
         FlipSlot &s = fFlip[victim];
-        if (s.md) { OSSafeReleaseNULL(s.map); s.md->complete(); s.md->release(); s = {}; }
+        latitudeDropSlot(s);
         // the surface's pages, wired while it holds the slot, become the slot's GGTT entries (uncached, PAT 2,
         // as i915 maps display buffers)
         bool ok = md->prepare() == kIOReturnSuccess;
@@ -1282,9 +1341,14 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         uint64_t fns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - f0, &fns);
         OSAddAtomic64((SInt64)(fns / 1000), &gLatFlipFlushUs);
     }
+    if (hit >= 0 && tile4 && !fFlip[hit].dpt) {
+        fFlip[hit].dpt = latitudeDpt(fFlip[hit].md, bytes, hit, &fFlip[hit].dptGgtt);
+        if (!fFlip[hit].dpt) { OSAddAtomic64(1, &gLatFlipRefused); IOLockUnlock(fFlipLock); return kIOReturnUnsupported; }
+    }
     if (hit >= 0 && tile4 && !fTileWm) latitudeTileWatermarks();
     if (hit >= 0 && (hit != fFlipCur || fFlip[hit].tile4 != tile4)) {
-        const uint32_t surf = (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
+        // a tiled plane reads its surface through a DPT: PLANE_SURF is the DPT's GGTT address (v44)
+        const uint32_t surf = tile4 ? fFlip[hit].dptGgtt : (uint32_t)(fWin + (uint64_t)hit * fSlotBytes);
         if (latitudePlaneTo((fGopSurf & 0xfffu) | surf, (fGopStride & ~0x7ffu) | (r->pitch / unit), tile4)) {
             fFlipCur = hit; fFlip[hit].tile4 = tile4;
             static SInt32 tileLogs;
