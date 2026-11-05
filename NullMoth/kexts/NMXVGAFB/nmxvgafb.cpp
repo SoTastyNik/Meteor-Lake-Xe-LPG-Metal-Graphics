@@ -79,7 +79,7 @@ class NMXVGAFB : public IOFramebuffer {
     struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4;
                       IOBufferMemoryDescriptor *dpt; uint32_t dptGgtt; };   // v44: a Tile4 surface's display page table
     void latitudeDropSlot(FlipSlot &s);
-    IOBufferMemoryDescriptor *latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt);
+    IOBufferMemoryDescriptor *latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, uint32_t pitch, int slot, uint32_t *ggtt);
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
@@ -1095,29 +1095,43 @@ void NMXVGAFB::latitudeDropSlot(FlipSlot &s)
  * the GGTT: PLANE_SURF holds the GGTT address of a DPT, a page of gen8 PTEs per 512 surface pages that the plane walks
  * (i915: intel_dpt.c, skl_surf_address's offset >> 9; enable_dpt=0 is an unsafe parameter and a tiled firmware FB is
  * not taken over without one). v41-v43's Tile4 planes were pointed at the surface itself, so the plane took pixels for
- * page table entries: black, while the same picture linear showed. The DPT here lists the surface's pages in order
- * (PAT 2, as the GGTT entries) and is mapped at the top of the slot's GGTT range, above the frame (2 MB there are free;
- * the cursor uses the last slot's top 1 MB).
+ * page table entries: black, while the same picture linear showed. The DPT is mapped at the top of the slot's GGTT
+ * range, above the frame (2 MB there are free; the cursor uses the last slot's top 1 MB), its entries PAT 2 as the
+ * GGTT's.
+ *
+ * v45: display 14 walks a DPT with a power-of-two stride (i915 intel_fb_needs_pot_stride_remap and
+ * plane_view_dst_stride_tiles: the remapped view; PLANE_STRIDE stays the surface's own tile count): tile row r of the
+ * surface starts at DPT entry r * roundup_pow_of_two(tiles per row), here 128 for 90, and the rest of each row's entries
+ * are padding. v44 listed the pages in order, and every tile row showed 38 tiles further on (the user's photo). A Tile4
+ * tile is 4 KB, one page, so a tile row of the surface is that many consecutive pages of it.
  */
-IOBufferMemoryDescriptor *NMXVGAFB::latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt)
+IOBufferMemoryDescriptor *NMXVGAFB::latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, uint32_t pitch, int slot, uint32_t *ggtt)
 {
-    const uint64_t pages = (bytes + PAGE_SIZE - 1) >> 12;
-    const uint64_t dptBytes = ((pages + 16) * 8 + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
-    if (!md || slot < 0 || dptBytes > (1ull << 20)) return nullptr;
+    const uint32_t tiles = pitch / 128;
+    if (!md || slot < 0 || !tiles || pitch % 128) return nullptr;
+    uint32_t pot = 8;
+    while (pot < tiles) pot <<= 1;
+    const uint64_t tileRows = bytes / ((uint64_t)tiles * PAGE_SIZE);
+    const uint64_t dptBytes = ((tileRows * pot + 16) * 8 + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
+    if (!tileRows || dptBytes > (1ull << 20)) return nullptr;
     IOBufferMemoryDescriptor *dpt = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut, dptBytes,
                                                                                      0x0000003FFFFFF000ull);
     if (!dpt) return nullptr;
     if (dpt->prepare() != kIOReturnSuccess) { dpt->release(); return nullptr; }
     volatile uint64_t *e = (volatile uint64_t *)dpt->getBytesNoCopy();
-    uint64_t n = 0;
-    for (uint64_t off = 0; off < pages * PAGE_SIZE; ) {
-        IOByteCount len = 0;
-        const addr64_t pa = md->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
-        if (!pa || (pa & 0xfff) || len < PAGE_SIZE || pa >= (1ull << 46)) { dpt->complete(); dpt->release(); return nullptr; }
-        for (IOByteCount o = 0; o + PAGE_SIZE <= len && off < pages * PAGE_SIZE; o += PAGE_SIZE, off += PAGE_SIZE)
-            e[n++] = (pa + o) | 1ull | (1ull << 53);
-    }
-    for (; n < dptBytes / 8; n++) e[n] = e[n - 1];      // the plane may fetch a little past the end
+    uint64_t last = 0;
+    for (uint64_t r = 0; r < tileRows; r++)
+        for (uint32_t c = 0; c < pot; c++) {
+            if (c < tiles) {
+                IOByteCount len = 0;
+                const addr64_t pa = md->getPhysicalSegment((r * tiles + c) * PAGE_SIZE, &len, kIOMemoryMapperNone);
+                if (!pa || (pa & 0xfff) || len < PAGE_SIZE || pa >= (1ull << 46)) { dpt->complete(); dpt->release(); return nullptr; }
+                last = pa | 1ull | (1ull << 53);
+            }
+            e[r * pot + c] = last;                       // padding: the row's last tile again
+        }
+    for (uint64_t n = tileRows * pot; n < dptBytes / 8; n++) e[n] = last;   // the plane may fetch a little past the end
+    const uint64_t pages = tileRows * tiles;
     latitudeFlushLines((const volatile uint8_t *)e, dptBytes);
     const uint64_t at = (uint64_t)slot * fSlotBytes + fSlotBytes - (2ull << 20);
     volatile uint64_t *pte = (volatile uint64_t *)fPteMap->getVirtualAddress() + (at >> 12);
@@ -1237,7 +1251,7 @@ int NMXVGAFB::latitudeTileTest(int mode)
             pte[off >> 12] = (pa + o) | 1ull | (1ull << 53);
     }
     uint32_t isr = 0, ctl = 0, live = 0, dptGgtt = 0;
-    IOBufferMemoryDescriptor *dpt = (!err && tile4) ? latitudeDpt(buf, bytes, slot, &dptGgtt) : nullptr;
+    IOBufferMemoryDescriptor *dpt = (!err && tile4) ? latitudeDpt(buf, bytes, pitch, slot, &dptGgtt) : nullptr;
     if (tile4 && !dpt && !err) err = ENOMEM;
     if (!err) {
         (void)pte[(bytes >> 12) - 1];
@@ -1342,7 +1356,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         OSAddAtomic64((SInt64)(fns / 1000), &gLatFlipFlushUs);
     }
     if (hit >= 0 && tile4 && !fFlip[hit].dpt) {
-        fFlip[hit].dpt = latitudeDpt(fFlip[hit].md, bytes, hit, &fFlip[hit].dptGgtt);
+        fFlip[hit].dpt = latitudeDpt(fFlip[hit].md, bytes, r->pitch, hit, &fFlip[hit].dptGgtt);
         if (!fFlip[hit].dpt) { OSAddAtomic64(1, &gLatFlipRefused); IOLockUnlock(fFlipLock); return kIOReturnUnsupported; }
     }
     if (hit >= 0 && tile4 && !fTileWm) latitudeTileWatermarks();
