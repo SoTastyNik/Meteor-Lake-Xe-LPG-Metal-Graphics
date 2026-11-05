@@ -1163,7 +1163,10 @@ void nvmtl_texture_desc_swizzle(NVMTLTexture *t, MTLTextureDescriptor *d) {
     if (_stTwin.img) nvmtl_vk_image_destroy(&_stTwin);
     if (!_parent && _vramOn) { nvmtl_vk_buffer_destroy(&_vramBuf); _vramOn = NO; }
     if (!_parent && _hostOn) { nvmtl_vk_buffer_destroy(&_hostBuf); _hostOn = NO; }
-    if (!_parent && _tile4 && _surf) { IOSurfaceRemoveValue(_surf, CFSTR("NMXTile4")); _tile4 = NO; }
+    // only the wrapper that made the surface zero-copy unmarks it: a reader's (a screenshot's) end left the panel
+    // taking the Tile4 pages for linear ones
+    if (!_parent && _tile4Owner && _surf) IOSurfaceRemoveValue(_surf, CFSTR("NMXTile4"));
+    _tile4 = _tile4Owner = NO;
     if (!_parent && _hybrid) { nvmtl_vk_image_destroy(&_hostAlias); nvmtl_vk_buffer_destroy(&_hostBuf); _hybrid = NO; }
     if (_surfOwned && _surf) CFRelease(_surf);
     if (_subHeap) { NVMTLHeap *h = _subHeap; NSUInteger c = _subCharge; _subHeap = nil; _subCharge = 0;

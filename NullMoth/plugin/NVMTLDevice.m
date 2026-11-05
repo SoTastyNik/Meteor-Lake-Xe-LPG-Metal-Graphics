@@ -885,6 +885,19 @@ static int nvmtl_surface_host_image(NVMTLTexture *t, IOSurfaceRef surf, uint32_t
    move the seed, so only large surfaces this process renders into qualify. */
 #include "nvmtl_ws_tuning.h"
 static _Atomic unsigned long long g_surf_hybrid, g_hybrid_out, g_hybrid_in, g_hybrid_sync;
+/* t's image becomes Tile4 over the surface's own pages (its host import, t->_hostBuf); NULL, or why not */
+static const char *nvmtl_surface_tile4(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w, uint32_t h, uint32_t vkf, uint32_t bpp, int a8, int stex)
+{
+    const size_t row = IOSurfaceGetBytesPerRow(surf);
+    if (row % 128) return "row not a multiple of 128 bytes";
+    if (row * (((size_t)h + 31) & ~(size_t)31) > t->_hostBuf.size) return "pages end before the last 32-row tile";
+    nvk_image t4;
+    if (nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, stex, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)
+        && (!stex || nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, 0, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)))
+        return "no Tile4 image over its pages";
+    t->_hostAlias = t->_i; t->_i = t4; t->_hostOn = NO; t->_hybrid = YES; t->_tile4 = YES;
+    return NULL;
+}
 static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w, uint32_t h, uint32_t vkf, uint32_t bpp,
                                  int a8, int stex, MTLTextureUsage usage)
 {
@@ -905,21 +918,21 @@ static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w,
     if (nvmtl_ws_zerocopy()) {
         static _Atomic unsigned long long made;
         const size_t row = IOSurfaceGetBytesPerRow(surf);
-        const char *why = row % 128 ? "row not a multiple of 128 bytes"
-                        : row * (((size_t)h + 31) & ~(size_t)31) > t->_hostBuf.size ? "pages end before the last 32-row tile" : NULL;
-        nvk_image t4;
-        if (!why && nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, stex, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)
-                 && (!stex || nvmtl_vk_image_create_buffer_alias_mod(w, h, vkf, bpp, a8, 0, 1, &t->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)))
-            why = "no Tile4 image over its pages";
+        const char *why = nvmtl_surface_tile4(t, surf, w, h, vkf, bpp, a8, stex);
         if (!why) {
-            t->_hostAlias = t->_i; t->_i = t4; t->_hostOn = NO; t->_hybrid = YES; t->_tile4 = YES;
-            int64_t pitch = (int64_t)row;
-            CFNumberRef v = CFNumberCreate(NULL, kCFNumberSInt64Type, &pitch);
-            IOSurfaceSetValue(surf, CFSTR("NMXTile4"), v); CFRelease(v);
+            CFTypeRef was = IOSurfaceCopyValue(surf, CFSTR("NMXTile4"));
+            if (was) CFRelease(was);
+            else {
+                int64_t pitch = (int64_t)row;
+                CFNumberRef v = CFNumberCreate(NULL, kCFNumberSInt64Type, &pitch);
+                IOSurfaceSetValue(surf, CFSTR("NMXTile4"), v); CFRelease(v);
+                t->_tile4Owner = YES;
+            }
             const unsigned long long n = ++made;
             if (n <= 32 || n % 256 == 0)
-                syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u fmt %u usage 0x%lx row %zu: Tile4 in its own pages, storage %d (#%llu)",
-                       (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, row, (int)t4.storage, n);
+                syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u fmt %u usage 0x%lx row %zu: Tile4 in its own pages, storage %d%s (#%llu)",
+                       (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, row, (int)t->_i.storage,
+                       t->_tile4Owner ? "" : ", already marked", n);
             return;
         }
         static unsigned said; if (said++ < 8)
@@ -979,7 +992,17 @@ static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInt
             // a wrapper made before the surface became zero-copy is not seen here; one made after is
             CFTypeRef was = IOSurfaceCopyValue(surf, CFSTR("NMXTile4"));
             nvmtl_surface_hybrid(t, surf, w, h, vkf, bpp, a8, stex, usage);
-            if (was) { CFRelease(was); if (!t->_tile4) nvmtl_zerocopy_other_wrapper(surf, w, h, vkf, usage, t->_hybrid); }
+            if (was) {
+                CFRelease(was);
+                // v48: any other wrapper (a screenshot's, a screen recording's) reads and writes the pages as Tile4 too;
+                // v45-v47 gave it a linear image over them, and captures came out as streaks
+                const char *why = (t->_tile4 || t->_hybrid) ? NULL : nvmtl_surface_tile4(t, surf, w, h, vkf, bpp, a8, stex);
+                static unsigned said;
+                if (!t->_tile4) nvmtl_zerocopy_other_wrapper(surf, w, h, vkf, usage, t->_hybrid);
+                else if (said++ < 16)
+                    syslog(LOG_ERR, "NullMoth: zero-copy surface %u: another wrapper %ux%u fmt %u usage 0x%lx reads it as Tile4%s%s",
+                           (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, why ? " - " : "", why ? why : "");
+            }
             return 0;
         }
     }
