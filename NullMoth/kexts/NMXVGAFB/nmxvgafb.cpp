@@ -76,10 +76,10 @@ class NMXVGAFB : public IOFramebuffer {
     bool fTileWm = false;                 // v42: the plane's watermarks raised for Tile4 (kept from then on)
     void latitudeTileWatermarks();
     void latitudeTileCheck(int slot, uint32_t surfaceId);
-    void latitudeDropSlot(FlipSlot &s);
-    IOBufferMemoryDescriptor *latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt);
     struct FlipSlot { IOMemoryDescriptor *md; IOMemoryMap *map; uint32_t surfaceId, pitch; uint64_t lastUse; bool tile4;
                       IOBufferMemoryDescriptor *dpt; uint32_t dptGgtt; };   // v44: a Tile4 surface's display page table
+    void latitudeDropSlot(FlipSlot &s);
+    IOBufferMemoryDescriptor *latitudeDpt(IOMemoryDescriptor *md, uint64_t bytes, int slot, uint32_t *ggtt);
     static constexpr unsigned kFlipSlots = 4;
     FlipSlot fFlip[kFlipSlots] = {};
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
