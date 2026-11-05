@@ -942,6 +942,16 @@ static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w,
         syslog(LOG_ERR, "NullMoth: hybrid surface %u %ux%u fmt %u usage 0x%lx row %zu: tiled image, GPU copy to its pages (#%llu)",
                (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, IOSurfaceGetBytesPerRow(surf), n);
 }
+// v43: another wrapper of a zero-copy surface that did not get its Tile4 image reads or writes the pages its own way
+static void nvmtl_zerocopy_other_wrapper(IOSurfaceRef surf, uint32_t w, uint32_t h, uint32_t vkf, MTLTextureUsage usage, BOOL hybrid)
+{
+    CFTypeRef v = IOSurfaceCopyValue(surf, CFSTR("NMXTile4"));
+    if (!v) return;
+    CFRelease(v);
+    static unsigned said; if (said++ < 16)
+        syslog(LOG_ERR, "NullMoth: zero-copy surface %u: another wrapper %ux%u fmt %u usage 0x%lx made a %s image over its Tile4 pages",
+               (unsigned)IOSurfaceGetID(surf), w, h, vkf, (unsigned long)usage, hybrid ? "hybrid (private tiled + copies)" : "LINEAR");
+}
 static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInteger plane, uint32_t w, uint32_t h,
                                       uint32_t vkf, uint32_t bpp, int a8, int stex, MTLTextureUsage usage)
 {
@@ -965,7 +975,13 @@ static int nvmtl_surface_image_create(NVMTLTexture *t, IOSurfaceRef surf, NSUInt
         }
     }
     if (surf && plane == 0 && IOSurfaceGetPlaneCount(surf) <= 1 && nvmtl_surface_host_on()) {
-        if (!nvmtl_surface_host_image(t, surf, w, h, vkf, bpp, a8, stex)) { nvmtl_surface_hybrid(t, surf, w, h, vkf, bpp, a8, stex, usage); return 0; }
+        if (!nvmtl_surface_host_image(t, surf, w, h, vkf, bpp, a8, stex)) {
+            // a wrapper made before the surface became zero-copy is not seen here; one made after is
+            CFTypeRef was = IOSurfaceCopyValue(surf, CFSTR("NMXTile4"));
+            nvmtl_surface_hybrid(t, surf, w, h, vkf, bpp, a8, stex, usage);
+            if (was) { CFRelease(was); if (!t->_tile4) nvmtl_zerocopy_other_wrapper(surf, w, h, vkf, usage, t->_hybrid); }
+            return 0;
+        }
     }
     g_surf_private++;
     // A private image stands for the whole surface: wrappers that read it and wrappers that write it must share ONE image

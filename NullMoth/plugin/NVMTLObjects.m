@@ -4865,6 +4865,13 @@ destinationBytesPerImage:(NSUInteger)img options:(MTLBlitOption)opt {
             sr->_surf ? (unsigned)IOSurfaceGetID(sr->_surf) : 0u, e->_target->_parent != nil, (unsigned long)d.colorAttachments[0].loadAction,
             (unsigned long)d.colorAttachments[0].storeAction, d.colorAttachments[0].clearColor.red, d.colorAttachments[0].clearColor.green,
             d.colorAttachments[0].clearColor.blue, d.colorAttachments[0].clearColor.alpha, d.depthAttachment.texture != nil);
+        if (sr->_tile4) {   // v43: what WindowServer draws into its zero-copy surfaces
+            static _Atomic unsigned long long passes; const unsigned long long k = ++passes;
+            if (k <= 8 || !(k & (k - 1)))
+                syslog(LOG_ERR, "NullMoth: zero-copy: render pass #%llu into Tile4 surface %u (view %d, format %lu, load %lu, store %lu)", k,
+                       (unsigned)IOSurfaceGetID(sr->_surf), e->_target->_parent != nil, (unsigned long)e->_target->_fmt,
+                       (unsigned long)d.colorAttachments[0].loadAction, (unsigned long)d.colorAttachments[0].storeAction);
+        }
         if (sr->_surf) {
             if (d.colorAttachments[0].loadAction == MTLLoadActionClear) nvmtl_surface_overwrite_recorded(self, sr);
             else nvmtl_surface_in_for_cb(self, sr);
