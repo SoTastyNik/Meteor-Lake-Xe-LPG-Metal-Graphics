@@ -96,8 +96,16 @@ static void i915_gem_object_userptr_drop_ref(struct drm_i915_gem_object *obj)
 	}
 }
 
+#ifdef NMXKPI
+extern u64 nmx_xnu_execbuf_begin(void);
+extern void nmx_xnu_pages_part(int part, u64 *t);
+extern void nmx_xnu_pin_done(u64 bytes, u64 t0);
+#endif
 static int i915_gem_userptr_get_pages(struct drm_i915_gem_object *obj)
 {
+#ifdef NMXKPI
+	u64 nmx_pt = nmx_xnu_execbuf_begin();
+#endif
 	unsigned int max_segment = i915_sg_segment_size(obj->base.dev->dev);
 	struct sg_table *st;
 	struct page **pvec;
@@ -124,10 +132,16 @@ alloc_table:
 	ret = sg_alloc_table_from_pages_segment(st, pvec, num_pages, 0,
 						num_pages << PAGE_SHIFT,
 						max_segment, GFP_KERNEL);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(0, &nmx_pt);
+#endif
 	if (ret)
 		goto err;
 
 	ret = i915_gem_gtt_prepare_pages(obj, st);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(1, &nmx_pt);
+#endif
 	if (ret) {
 		sg_free_table(st);
 
@@ -144,6 +158,9 @@ alloc_table:
 		obj->cache_dirty = true;
 
 	__i915_gem_object_set_pages(obj, st);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(2, &nmx_pt);
+#endif
 
 	return 0;
 
@@ -265,6 +282,9 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 		gup_flags |= FOLL_WRITE;
 
 	pinned = 0;
+#ifdef NMXKPI
+	{ u64 nmx_pin_t0 = nmx_xnu_execbuf_begin();
+#endif
 	while (pinned < num_pages) {
 #ifdef NMXKPI
 		/*
@@ -288,6 +308,9 @@ int i915_gem_object_userptr_submit_init(struct drm_i915_gem_object *obj)
 
 		pinned += ret;
 	}
+#ifdef NMXKPI
+	nmx_xnu_pin_done((u64)num_pages << PAGE_SHIFT, nmx_pin_t0); }
+#endif
 
 	ret = i915_gem_object_lock_interruptible(obj, NULL);
 	if (ret)

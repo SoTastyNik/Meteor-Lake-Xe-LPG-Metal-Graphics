@@ -255,6 +255,51 @@ extern "C" void nmx_xnu_vma_done(uint64_t bytes, int userptr)
           (unsigned long long)sizes[4], (unsigned long long)sizes[5]);
 }
 
+/*
+ * v46: where a large object's first binding goes. Opening a Launchpad folder bound new 16-25 MB objects whose "pages"
+ * took up to 64 ms each (285 ms execbuffers). Parts of i915's get_pages, summed until the binding reports: 0 page
+ * allocation (shmem) or the page list (userptr), 1 dma mapping, 2 set_pages (the clflush of a new object); a userptr's
+ * pinning happens earlier, in execbuffer's lookup, and is logged by itself. Not thread-safe: diagnostics only.
+ */
+static uint64_t s_pg_part[3];
+extern "C" void nmx_xnu_pages_part(int part, uint64_t *t)
+{
+    const uint64_t now = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(now - *t, &ns);
+    if (part >= 0 && part < 3)
+        s_pg_part[part] += ns;
+    *t = now;
+}
+extern "C" void nmx_xnu_pages_reset(void)
+{
+    s_pg_part[0] = s_pg_part[1] = s_pg_part[2] = 0;
+}
+extern "C" void nmx_xnu_vma_big(uint64_t bytes, int userptr, uint64_t t0, uint64_t tpages)
+{
+    static int logs;
+    if (bytes < (8ull << 20) || logs >= 400)
+        return;
+    logs++;
+    uint64_t pages = 0, total = 0;
+    absolutetime_to_nanoseconds(tpages - t0, &pages);
+    absolutetime_to_nanoseconds(mach_absolute_time() - t0, &total);
+    IOLog("NullMoth GPU: new binding %llu MB %s: pages %llu us (alloc %llu, dma %llu, set+clflush %llu), total %llu us\n",
+          (unsigned long long)(bytes >> 20), userptr ? "userptr" : "shmem", (unsigned long long)(pages / 1000),
+          (unsigned long long)(s_pg_part[0] / 1000), (unsigned long long)(s_pg_part[1] / 1000),
+          (unsigned long long)(s_pg_part[2] / 1000), (unsigned long long)(total / 1000));
+}
+extern "C" void nmx_xnu_pin_done(uint64_t bytes, uint64_t t0)
+{
+    static int logs;
+    if (bytes < (8ull << 20) || logs >= 200)
+        return;
+    logs++;
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+    IOLog("NullMoth GPU: userptr pin %llu MB: %llu us\n", (unsigned long long)(bytes >> 20), (unsigned long long)(ns / 1000));
+}
+
 /* the time since *t goes to a phase: 0 object lookup, 1 engine pin and ring throttle, 2 object locks, 3 vma pins, 4 reserve and
    parse, 5 request, 6 move to GPU, 7 add to the engine */
 extern "C" void nmx_xnu_execbuf_mark(int phase, uint64_t *t)

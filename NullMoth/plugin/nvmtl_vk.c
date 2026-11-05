@@ -1925,6 +1925,8 @@ static VkResult nvmtl_vk_alloc_image_mem(const VkMemoryRequirements *mr, VkDevic
 #define NVMTL_IMGPARK_BYTES (768ull << 20)
 #define NVMTL_IMGPARK_MIN   (64ull << 10)
 #define NVMTL_IMGPARK_AGE   10000000000ull
+#define NVMTL_IMGPARK_AGE_BIG 120000000000ull   // v46: 16 MB and more (full-screen surfaces): a new one cost up to 64 ms to bind
+static inline uint64_t ipark_age(VkDeviceSize size) { return size >= (16ull << 20) ? NVMTL_IMGPARK_AGE_BIG : NVMTL_IMGPARK_AGE; }
 static pthread_mutex_t g_ipark_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; uint64_t t; } g_ipark[NVMTL_IMGPARK_N];   // oldest first
 static unsigned g_ipark_n;
@@ -1989,7 +1991,7 @@ static int ipark_put(const nvk_image *i)
     VkDeviceMemory ev[NVMTL_IMGPARK_N + 1]; unsigned nev = 0;
     const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     pthread_mutex_lock(&g_ipark_lock);
-    while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES || now - g_ipark[0].t > NVMTL_IMGPARK_AGE)) {
+    while (g_ipark_n && (g_ipark_n >= NVMTL_IMGPARK_N || g_ipark_bytes + i->alloc > NVMTL_IMGPARK_BYTES || now - g_ipark[0].t > ipark_age(g_ipark[0].size))) {
         ev[nev++] = g_ipark[0].mem; g_ipark_bytes -= g_ipark[0].size;
         memmove(&g_ipark[0], &g_ipark[1], (g_ipark_n - 1) * sizeof g_ipark[0]); g_ipark_n--;
     }
@@ -2010,9 +2012,10 @@ void nvmtl_vk_ipark_trim(void)
     atomic_store(&next, now + 1000000000ull);
     VkDeviceMemory ev[NVMTL_IMGPARK_N]; unsigned nev = 0;
     pthread_mutex_lock(&g_ipark_lock);
-    while (g_ipark_n && now - g_ipark[0].t > NVMTL_IMGPARK_AGE) {
-        ev[nev++] = g_ipark[0].mem; g_ipark_bytes -= g_ipark[0].size;
-        memmove(&g_ipark[0], &g_ipark[1], (g_ipark_n - 1) * sizeof g_ipark[0]); g_ipark_n--;
+    for (unsigned k = 0; k < g_ipark_n; ) {          // each by its own age: a big block outlives the small ones behind it
+        if (now - g_ipark[k].t <= ipark_age(g_ipark[k].size)) { k++; continue; }
+        ev[nev++] = g_ipark[k].mem; g_ipark_bytes -= g_ipark[k].size;
+        memmove(&g_ipark[k], &g_ipark[k + 1], (g_ipark_n - k - 1) * sizeof g_ipark[0]); g_ipark_n--;
     }
     pthread_mutex_unlock(&g_ipark_lock);
     for (unsigned k = 0; k < nev; k++) pvkFreeMemory(g_dev, ev[k], NULL);

@@ -1433,13 +1433,15 @@ static void vma_unbind_pages(struct i915_vma *vma)
 extern u64 nmx_xnu_execbuf_begin(void);
 extern void nmx_xnu_vma_stage(int stage, u64 *t);
 extern void nmx_xnu_vma_done(u64 bytes, int userptr);
+extern void nmx_xnu_pages_reset(void);
+extern void nmx_xnu_vma_big(u64 bytes, int userptr, u64 t0, u64 tpages);
 #endif
 
 int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		    u64 size, u64 alignment, u64 flags)
 {
 #ifdef NMXKPI
-	u64 nmx_t;
+	u64 nmx_t, nmx_t0, nmx_tp;
 #endif
 	struct i915_vma_work *work = NULL;
 	struct dma_fence *moving = NULL;
@@ -1461,11 +1463,13 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 		return 0;
 
 #ifdef NMXKPI
-	nmx_t = nmx_xnu_execbuf_begin();
+	nmx_t = nmx_t0 = nmx_xnu_execbuf_begin();
+	nmx_xnu_pages_reset();
 #endif
 	err = i915_vma_get_pages(vma);
 #ifdef NMXKPI
 	nmx_xnu_vma_stage(0, &nmx_t);
+	nmx_tp = nmx_t;
 #endif
 	if (err)
 		return err;
@@ -1589,6 +1593,7 @@ int i915_vma_pin_ww(struct i915_vma *vma, struct i915_gem_ww_ctx *ww,
 #ifdef NMXKPI
 	nmx_xnu_vma_stage(2, &nmx_t);
 	nmx_xnu_vma_done(vma->size, i915_gem_object_is_userptr(vma->obj));
+	nmx_xnu_vma_big(vma->size, i915_gem_object_is_userptr(vma->obj), nmx_t0, nmx_tp);
 #endif
 	if (err)
 		goto err_remove;

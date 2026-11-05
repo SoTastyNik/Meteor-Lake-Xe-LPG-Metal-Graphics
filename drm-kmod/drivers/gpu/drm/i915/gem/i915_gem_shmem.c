@@ -224,8 +224,15 @@ err_sg:
 	return ret;
 }
 
+#ifdef NMXKPI
+extern u64 nmx_xnu_execbuf_begin(void);
+extern void nmx_xnu_pages_part(int part, u64 *t);
+#endif
 static int shmem_get_pages(struct drm_i915_gem_object *obj)
 {
+#ifdef NMXKPI
+	u64 nmx_pt;
+#endif
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	struct intel_memory_region *mem = obj->mm.region;
 #ifdef __FreeBSD__
@@ -246,16 +253,25 @@ static int shmem_get_pages(struct drm_i915_gem_object *obj)
 	GEM_BUG_ON(obj->write_domain & I915_GEM_GPU_DOMAINS);
 
 rebuild_st:
+#ifdef NMXKPI
+	nmx_pt = nmx_xnu_execbuf_begin();
+#endif
 	st = kmalloc(sizeof(*st), GFP_KERNEL | __GFP_NOWARN);
 	if (!st)
 		return -ENOMEM;
 
 	ret = shmem_sg_alloc_table(i915, st, obj->base.size, mem, mapping,
 				   max_segment);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(0, &nmx_pt);
+#endif
 	if (ret)
 		goto err_st;
 
 	ret = i915_gem_gtt_prepare_pages(obj, st);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(1, &nmx_pt);
+#endif
 	if (ret) {
 		/*
 		 * DMA remapping failed? One possible cause is that
@@ -283,6 +299,9 @@ rebuild_st:
 		obj->cache_dirty = true;
 
 	__i915_gem_object_set_pages(obj, st);
+#ifdef NMXKPI
+	nmx_xnu_pages_part(2, &nmx_pt);
+#endif
 
 	return 0;
 
