@@ -1057,6 +1057,38 @@ static const volatile unsigned *nmxUntile(const volatile unsigned *src, unsigned
     return (const volatile unsigned *)gNmxUntiled;
 }
 static uint64_t nmxSurfaceNumber(IOSurface *s, const char *key);
+/*
+ * v49: the surfaces the panel showed in the last 10 s (debug.nmxfb_scanout_ids, 8 IOSurface IDs, 0 = none). The
+ * plugin's zero copy makes only those Tile4: v45-v48 made every full-screen render target of WindowServer Tile4,
+ * screenshot buffers too, which the screenshot app then read on the CPU as linear rows (streaks). An ID drops out after
+ * 10 s without a present, so a later surface given a freed ID is not taken for a framebuffer.
+ */
+static struct { uint32_t id; uint64_t at; } gNmxScanout[8];
+static void nmxScanoutNote(IOSurface *s)
+{
+    if (!s) return;
+    const uint32_t id = s->getSurfaceID();
+    const uint64_t now = mach_absolute_time();
+    unsigned victim = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        if (gNmxScanout[i].id == id) { gNmxScanout[i].at = now; return; }
+        if (gNmxScanout[i].at < gNmxScanout[victim].at) victim = i;
+    }
+    gNmxScanout[victim].id = id;
+    gNmxScanout[victim].at = now;
+}
+static int nmxScanoutSysctl SYSCTL_HANDLER_ARGS
+{
+    uint32_t out[8];
+    uint64_t window = 0;
+    nanoseconds_to_absolutetime(10ull * NSEC_PER_SEC, &window);
+    const uint64_t now = mach_absolute_time();
+    for (unsigned i = 0; i < 8; i++)
+        out[i] = (gNmxScanout[i].id && now - gNmxScanout[i].at < window) ? gNmxScanout[i].id : 0;
+    return SYSCTL_OUT(req, out, sizeof out);
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxfb_scanout_ids, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_ANYBODY, nullptr, 0,
+            nmxScanoutSysctl, "S", "MateBook panel: IOSurface IDs presented in the last 10 s (the plugin's zero-copy candidates)");
 static SInt64 gCntNmxFrontCopies;
 // the MateBook panel refreshes at 119.5 Hz: a frame whose pixels land after its transaction waits at most one refresh
 static int gNmxFrontHz = 120;
@@ -1239,6 +1271,7 @@ static bool nmxFbLatitude(IOService *fb) { return fb && fb->getProperty("Latitud
 static int nmxIopBlobFlip(IOService *fb, unsigned head, IOSurface *s, bool final = false)
 {
     if (!gNmxBlobScanout || !fb || !s || !nmxFbFlips(fb)) return 0;
+    nmxScanoutNote(s);
     if (!nvAccelSurfCopyReady(s, head)) return 2;
     IOMemoryDescriptor *md = s->getMemoryDescriptor();
     if (!md) return 0;
@@ -1690,6 +1723,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_50_100ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_over_100ms);
+    sysctl_register_oid(&sysctl__debug_nmxfb_scanout_ids);
     sysctl_register_oid(&sysctl__debug_nmx_rapl_unit); sysctl_register_oid(&sysctl__debug_nmx_rapl_pkg);
     sysctl_register_oid(&sysctl__debug_nmx_rapl_cores); sysctl_register_oid(&sysctl__debug_nmx_rapl_gt);
 #else
@@ -2326,6 +2360,7 @@ static bool nmxOrderedStart(void *pipe, IOService *fb, unsigned head, IOSurface 
     if (!e->call) e->call = thread_call_allocate(nmxOrderedRun, e);
     if (!e->call) return false;
     ((OSObject *)s)->retain();
+    nmxScanoutNote(s);
     e->pipe = pipe; e->fb = fb; e->head = head; e->s = s; e->tSubmit = mach_absolute_time(); e->latitude = latitude;
     __atomic_store_n(&e->busy, 1, __ATOMIC_RELEASE);
     thread_call_enter(e->call);

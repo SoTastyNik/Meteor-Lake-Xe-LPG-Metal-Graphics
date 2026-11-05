@@ -46,7 +46,7 @@ static inline void *nvmtl_buf_cpu(NVMTLBuffer *b) { nvmtl_buf_settle(b); return 
   uint32_t _surfSeed, _surfGen; BOOL _surfSynced, _surfOwned;
   nvk_buffer _vramBuf; BOOL _vramOn;
   nvk_buffer _hostBuf; BOOL _hostOn;   // an integrated GPU's image over the IOSurface's own pages: no copies
-  nvk_image _hostAlias; BOOL _hybrid; BOOL _tile4; BOOL _tile4Owner;   // v48 _tile4Owner: this wrapper set "NMXTile4"   // v41 _tile4: _i is Tile4 over the surface's own pages (zero copy)  // v37: _i is a tiled private image, copied on the GPU to _hostAlias (over _hostBuf)
+  nvk_image _hostAlias; BOOL _hybrid; BOOL _tile4; BOOL _tile4Owner; BOOL _zcCandidate;   // v49 _zcCandidate: hybrid until the panel shows it   // v48 _tile4Owner: this wrapper set "NMXTile4"   // v41 _tile4: _i is Tile4 over the surface's own pages (zero copy)  // v37: _i is a tiled private image, copied on the GPU to _hostAlias (over _hostBuf)
   BOOL _stex;
   uint64_t _resid;
   NSUInteger _usage;

@@ -885,6 +885,25 @@ static int nvmtl_surface_host_image(NVMTLTexture *t, IOSurfaceRef surf, uint32_t
    move the seed, so only large surfaces this process renders into qualify. */
 #include "nvmtl_ws_tuning.h"
 static _Atomic unsigned long long g_surf_hybrid, g_hybrid_out, g_hybrid_in, g_hybrid_sync;
+/* v49: whether the panel showed this IOSurface in the last 10 s (NMXAccel's debug.nmxfb_scanout_ids, read at most every
+   100 ms). Only those become zero copy; a screenshot's buffer, read by another process's CPU, stays linear. */
+static int nvmtl_scanout_has(uint32_t id)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static uint32_t ids[8];
+    static uint64_t next;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    int hit = 0;
+    pthread_mutex_lock(&lock);
+    if (now >= next) {
+        size_t n = sizeof ids;
+        if (sysctlbyname("debug.nmxfb_scanout_ids", ids, &n, NULL, 0) != 0 || n != sizeof ids) memset(ids, 0, sizeof ids);
+        next = now + 100000000ull;
+    }
+    for (int i = 0; i < 8; i++) if (id && ids[i] == id) hit = 1;
+    pthread_mutex_unlock(&lock);
+    return hit;
+}
 /* t's image becomes Tile4 over the surface's own pages (its host import, t->_hostBuf); NULL, or why not */
 static const char *nvmtl_surface_tile4(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w, uint32_t h, uint32_t vkf, uint32_t bpp, int a8, int stex)
 {
@@ -918,7 +937,11 @@ static void nvmtl_surface_hybrid(NVMTLTexture *t, IOSurfaceRef surf, uint32_t w,
     if (nvmtl_ws_zerocopy()) {
         static _Atomic unsigned long long made;
         const size_t row = IOSurfaceGetBytesPerRow(surf);
-        const char *why = nvmtl_surface_tile4(t, surf, w, h, vkf, bpp, a8, stex);
+        // v49: only a surface the panel shows; others (and framebuffers before their first frame) are hybrid surfaces that
+        // the seal promotes once the panel has shown them (NVMTLEventSync.m nvmtl_surface_promote)
+        const BOOL shown = nvmtl_scanout_has((uint32_t)IOSurfaceGetID(surf));
+        const char *why = shown ? nvmtl_surface_tile4(t, surf, w, h, vkf, bpp, a8, stex) : "not on the panel (yet)";
+        if (!shown) t->_zcCandidate = YES;
         if (!why) {
             CFTypeRef was = IOSurfaceCopyValue(surf, CFSTR("NMXTile4"));
             if (was) CFRelease(was);

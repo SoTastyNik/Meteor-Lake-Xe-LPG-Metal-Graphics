@@ -5009,6 +5009,7 @@ int nvmtl_vk_cmd_begin_pass(nvk_cmdbuf *c, const nvk_pass *ps, nvk_pipeline *p)
               VkQueryPool qp; if (pvkCreateQueryPool(g_dev, &qi, NULL, &qp) == VK_SUCCESS) { pvkCmdResetQueryPool(c->cb, qp, 0, 256); c->pt_pool = (void *)qp; } }
           if (c->pt_pool) { pvkCmdWriteTimestamp(c->cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkQueryPool)c->pt_pool, 2 * c->pt_n);
               c->pt_w[c->pt_n] = ps->w; c->pt_h[c->pt_n] = ps->h; c->pt_f[c->pt_n] = ncol ? cf[0] : (p->has_depth ? 1000u + p->dfmt : 0u); c->pt_open = 1;
+              c->pt_t[c->pt_n] = (uint8_t)((ncol && ps->col[0]) ? ps->col[0]->tiling : 0);
               memset(c->pt_fs[c->pt_n], 0, sizeof c->pt_fs[c->pt_n]); }
       } }
     pvkCmdBeginRenderPass(c->cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
@@ -5513,7 +5514,7 @@ void nvmtl_vk_pt_note(nvk_cmdbuf *c, uint32_t fs)
  * /Library/GPUBundles/nvmtl-ws-passtime exists every pass is timed, and every 4096 passes the most expensive kinds go to
  * the system log ("pass census"), with the GPU time between passes (copies, blits, barriers, compute).
  */
-typedef struct { uint32_t w, h, f, fs; uint64_t n; double us, max; } nvmtl_pt_kind;
+typedef struct { uint32_t w, h, f, fs; uint64_t n; double us, max, gap; uint8_t t; } nvmtl_pt_kind;   // v49: gap before, target tiling
 static nvmtl_pt_kind g_ptk[128]; static unsigned g_nptk;
 static double g_pt_pass_us, g_pt_gap_us; static uint64_t g_pt_cbs, g_pt_passes, g_pt_lost;
 static pthread_mutex_t g_ptk_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -5537,15 +5538,17 @@ static void nvmtl_pt_census(const uint64_t *r, unsigned n, const nvk_cmdbuf *c, 
     g_pt_cbs++;
     for (unsigned i = 0; i < n; i++) {
         const double gpu = (double)((r[2 * i + 1] - r[2 * i]) & mask) * us;
-        if (i) g_pt_gap_us += (double)((r[2 * i] - r[2 * i - 1]) & mask) * us;
+        const double gap = i ? (double)((r[2 * i] - r[2 * i - 1]) & mask) * us : 0.0;
+        g_pt_gap_us += gap;
         g_pt_pass_us += gpu; g_pt_passes++;
         unsigned k = 0;
-        while (k < g_nptk && !(g_ptk[k].w == c->pt_w[i] && g_ptk[k].h == c->pt_h[i] && g_ptk[k].f == c->pt_f[i] && g_ptk[k].fs == c->pt_fs[i][0])) k++;
+        while (k < g_nptk && !(g_ptk[k].w == c->pt_w[i] && g_ptk[k].h == c->pt_h[i] && g_ptk[k].f == c->pt_f[i] && g_ptk[k].fs == c->pt_fs[i][0] &&
+                               g_ptk[k].t == c->pt_t[i])) k++;
         if (k == g_nptk) {
             if (g_nptk == 128) { g_pt_lost++; continue; }
-            g_ptk[g_nptk++] = (nvmtl_pt_kind){ c->pt_w[i], c->pt_h[i], c->pt_f[i], c->pt_fs[i][0], 0, 0, 0 };
+            g_ptk[g_nptk++] = (nvmtl_pt_kind){ c->pt_w[i], c->pt_h[i], c->pt_f[i], c->pt_fs[i][0], 0, 0, 0, 0, c->pt_t[i] };
         }
-        g_ptk[k].n++; g_ptk[k].us += gpu; if (gpu > g_ptk[k].max) g_ptk[k].max = gpu;
+        g_ptk[k].n++; g_ptk[k].us += gpu; g_ptk[k].gap += gap; if (gpu > g_ptk[k].max) g_ptk[k].max = gpu;
     }
     if (g_pt_passes >= 4096) {
         qsort(g_ptk, g_nptk, sizeof g_ptk[0], nvmtl_ptk_cmp);
@@ -5553,9 +5556,10 @@ static void nvmtl_pt_census(const uint64_t *r, unsigned n, const nvk_cmdbuf *c, 
                (unsigned long long)g_pt_passes, (unsigned long long)g_pt_cbs, g_pt_pass_us / 1000, g_pt_gap_us / 1000, g_nptk,
                (unsigned long long)g_pt_lost);
         for (unsigned k = 0; k < g_nptk && k < 12; k++)
-            syslog(LOG_ERR, "NullMoth: pass census #%u: %ux%u fmt %u fs %08x: %llu passes, %.1f ms total, %.0f us avg, %.0f us max",
+            syslog(LOG_ERR, "NullMoth: pass census #%u: %ux%u fmt %u fs %08x: %llu passes, %.1f ms total, %.0f us avg, %.0f us max, %.0f us before, target %s",
                    k + 1, g_ptk[k].w, g_ptk[k].h, g_ptk[k].f, g_ptk[k].fs, (unsigned long long)g_ptk[k].n, g_ptk[k].us / 1000,
-                   g_ptk[k].us / (double)g_ptk[k].n, g_ptk[k].max);
+                   g_ptk[k].us / (double)g_ptk[k].n, g_ptk[k].max, g_ptk[k].gap / (double)g_ptk[k].n,
+                   g_ptk[k].t == 2 ? "Tile4" : g_ptk[k].t == 1 ? "LINEAR" : "tiled");
         g_nptk = 0; g_pt_pass_us = g_pt_gap_us = 0; g_pt_cbs = g_pt_passes = g_pt_lost = 0;
     }
     pthread_mutex_unlock(&g_ptk_lock);
@@ -7587,7 +7591,7 @@ static int nvmtl_vk_image_create_buffer_alias_lifetime_body(uint32_t w, uint32_t
     }
     VKCK(nvmtl_opaque_CreateImage(g_dev, &ici, NULL, &out->img), "vkCreateImage(buffer texture)");
     out->layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-    out->vkflags = (uint32_t)ici.flags; out->usage = (uint32_t)ici.usage; out->vpair = vp;
+    out->vkflags = (uint32_t)ici.flags; out->usage = (uint32_t)ici.usage; out->vpair = vp; out->tiling = tiled ? 2 : 1;
     if (!g_linmod) {
         PFN_vkGetImageSubresourceLayout gsl = (PFN_vkGetImageSubresourceLayout)pvkGetInstanceProcAddr(g_inst, "vkGetImageSubresourceLayout");
         VkImageSubresource sr = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 }; VkSubresourceLayout got; memset(&got, 0, sizeof got);

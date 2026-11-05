@@ -11,6 +11,7 @@
     nvk_cmdbuf commands;
     NSSet *resources, *surfaces;
     NSSet *hybridOut;   // hybrid surfaces whose copy to their own pages this part records
+    NSSet *tile4Mark;   // v49: surfaces this part made zero copy; completion marks them "NMXTile4" before publishing
     NSArray *scratch;
     id waitEvent, signalEvent;
     uint64_t value;
@@ -135,17 +136,66 @@ static int nvmtl_skip_empty_on(void) {
     if (_reservation) [_queue->_reservations removeObjectIdenticalTo:_reservation];
     _reservation = nil;
 }
+/*
+ * v49: a hybrid surface the panel has now shown becomes zero copy. Its tiled private image is copied into a Tile4 image
+ * over the surface's own pages, which it draws into from then on; the private image lives until this command buffer
+ * completes (a texture holding it rides in its resources) and then goes to the image park. Not while a view of the
+ * surface exists: a view holds an image view of the private image. The frame showing the switch may show once with
+ * the plane still linear; the next flip, after completion marked the surface, is Tile4.
+ */
+static BOOL nvmtl_surface_promote(NVMTLCommandBuffer *cb, NVMTLTexture *s)
+{
+    if (s->_parent || !s->_surf || __atomic_load_n(&s->_nviews, __ATOMIC_ACQUIRE) ||
+        !nvmtl_scanout_has((uint32_t)IOSurfaceGetID(s->_surf))) return NO;
+    const size_t row = IOSurfaceGetBytesPerRow(s->_surf);
+    const uint32_t w = s->_i.w, h = s->_i.h;
+    nvk_image t4;
+    if (row % 128 || row * (((size_t)h + 31) & ~(size_t)31) > s->_hostBuf.size ||
+        (nvmtl_vk_image_create_buffer_alias_mod(w, h, s->_i.fmt, s->_i.bpp, 0, s->_i.storage ? 1 : 0, 1, &s->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4)
+         && nvmtl_vk_image_create_buffer_alias_mod(w, h, s->_i.fmt, s->_i.bpp, 0, 0, 1, &s->_hostBuf, 0, row, NVMTL_DRM_MOD_4_TILED, &t4))) {
+        s->_zcCandidate = NO;
+        syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u row %zu: no Tile4 image over its pages - stays hybrid",
+               (unsigned)IOSurfaceGetID(s->_surf), w, h, row);
+        return NO;
+    }
+    if (nvmtl_vk_cmd_copy_image(&cb->_c, &s->_i, 0, 0, &t4, 0, 0, w, h)) { nvmtl_vk_image_destroy(&t4); return NO; }   // the next frame tries again
+    NVMTLTexture *old = [NVMTLTexture new];
+    old->_i = s->_i;
+    if (!cb->_resources) cb->_resources = [NVMTLResSet new];
+    [(NVMTLResSet *)cb->_resources addObject:old];
+    s->_i = t4; s->_tile4 = YES; s->_zcCandidate = NO; s->_stex = t4.storage != 0;
+    static unsigned said; if (said++ < 32)
+        syslog(LOG_ERR, "NullMoth: zero-copy surface %u %ux%u: on the panel now - its frame copied into Tile4 in its own pages, drawn there from now on",
+               (unsigned)IOSurfaceGetID(s->_surf), w, h);
+    return YES;
+}
+static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
+{
+    CFTypeRef was = IOSurfaceCopyValue(t->_surf, CFSTR("NMXTile4"));
+    if (was) { CFRelease(was); return; }
+    int64_t pitch = (int64_t)IOSurfaceGetBytesPerRow(t->_surf);
+    CFNumberRef v = CFNumberCreate(NULL, kCFNumberSInt64Type, &pitch);
+    IOSurfaceSetValue(t->_surf, CFSTR("NMXTile4"), v); CFRelease(v);
+    t->_tile4Owner = YES;
+}
 - (void)nvmtlSealPartWithSignal:(id)event value:(uint64_t)value restart:(BOOL)restart {
     if (!_parts) _parts = [NSMutableArray new];
     nvmtl_g79_flush(self);
     // Hybrid surfaces (NVMTLDevice.m nvmtl_surface_hybrid) were drawn in their tiled image: the part copies it to the
     // surface's own pages before it completes. One full copy per command buffer that wrote the surface.
-    NSMutableSet *hybridOut = nil;
+    NSMutableSet *hybridOut = nil, *tile4Mark = nil;
     for (NVMTLTexture *s in _surfDirty) {
         if (!s->_hybrid) continue;
         if (s->_tile4) {   // v41 zero copy: drawn in place; completion only marks it published
             if (!hybridOut) hybridOut = [NSMutableSet new];
             [hybridOut addObject:s];
+            continue;
+        }
+        if (s->_zcCandidate && _c.cb && !_c.in_rp && nvmtl_surface_promote(self, s)) {
+            if (!hybridOut) hybridOut = [NSMutableSet new];
+            [hybridOut addObject:s];
+            if (!tile4Mark) tile4Mark = [NSMutableSet new];
+            [tile4Mark addObject:s];
             continue;
         }
         if (!_c.cb || _c.in_rp || nvmtl_vk_cmd_copy_image(&_c, &s->_i, 0, 0, &s->_hostAlias, 0, 0, s->_i.w, s->_i.h)) {
@@ -163,6 +213,7 @@ static int nvmtl_skip_empty_on(void) {
     }
     NVMTLSubmissionPart *part = [NVMTLSubmissionPart new];
     part->hybridOut = hybridOut;
+    part->tile4Mark = tile4Mark;
     part->commands = _c;
     memset(&_c, 0, sizeof(_c));
     part->resources = [(NVMTLResSet *)_resources nvmtlTakeAll]; part->surfaces = [_surfDirty copy];
@@ -623,6 +674,7 @@ static void nvmtl_gsub_ahead_pass1(void) {
         BOOL published = result == 0;
         if (published) {
             for (NVMTLTexture *texture in part->surfaces) {
+                if ([part->tile4Mark containsObject:texture]) nvmtl_surface_mark_tile4(texture);
                 if ([part->hybridOut containsObject:texture]) [texture nvmtlHybridCopied];
                 else if (![texture nvmtlSurfaceOut]) { published = NO; continue; }
                 nvmtl_mark_published(self, texture->_parent ? texture->_parent : texture);
