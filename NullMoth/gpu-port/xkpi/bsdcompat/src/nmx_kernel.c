@@ -73,12 +73,14 @@ unsigned long nmx_jiffies(void)
 
 /* ---- per-thread and per-process records ---------------------------------------------------------------------------- */
 
-#define NMX_THREAD_BUCKETS 256
+#define NMX_THREAD_BUCKETS 4096    /* v51: was 256; user threads keep their records, so chains grew with uptime */
 struct nmx_thread_rec {
     struct thread td;               /* first member: a struct thread * is a struct nmx_thread_rec * */
     struct nmx_thread_rec *next;
     int transient;                  /* created by a system-call entry; freed when that entry returns */
     uint64_t xtid;                  /* xnu's thread id (thread_tid): unique, unlike the thread_t a later thread can reuse */
+    int crit_nest;                  /* v51: critical section nesting of this thread (nmx_critical_enter) */
+    boolean_t crit_saved;           /* the interrupt state its outermost critical section restores */
 };
 static struct nmx_thread_rec *nmx_threads[NMX_THREAD_BUCKETS];
 static lck_spin_t *nmx_thread_lock;
@@ -186,7 +188,7 @@ static int nmx_thread_unlink_stale(thread_t xt, uint64_t xtid)
     unsigned b = bucket_of(xt, NMX_THREAD_BUCKETS);
     for (struct nmx_thread_rec **pp = &nmx_threads[b]; *pp; ) {
         if ((*pp)->td.td_xnu == xt && (*pp)->xtid != xtid) {
-            *pp = (*pp)->next;
+            __atomic_store_n(pp, (*pp)->next, __ATOMIC_RELEASE);
             nmx_thread_count--;
             n++;
         } else
@@ -195,14 +197,36 @@ static int nmx_thread_unlink_stale(thread_t xt, uint64_t xtid)
     return n;
 }
 
+/*
+ * v51: the calling thread's record without the global lock. Every curthread (LinuxKPI's current, lock owners) took
+ * nmx_thread_lock, and so did every critical section (every LinuxKPI spin lock pins through one): i915 spent ~3 us per
+ * object of an execbuffer, ~1000 objects per WindowServer submission. A record is published at a bucket's head with a
+ * release store after it is complete, and is never freed while linked or after (a dropped or stale record is only
+ * unlinked), so a walk without the lock always reads whole records and valid next pointers. A thread's own record
+ * cannot be unlinked while the thread runs; a walk that a concurrent unlink sends elsewhere misses at worst, and the
+ * caller then takes the lock. The hop limit bounds a walk that was sent along other chains.
+ */
+static struct nmx_thread_rec *nmx_thread_find_fast(thread_t xt, uint64_t xtid)
+{
+    unsigned hops = 0;
+    for (struct nmx_thread_rec *r = __atomic_load_n(&nmx_threads[bucket_of(xt, NMX_THREAD_BUCKETS)], __ATOMIC_ACQUIRE);
+         r != NULL && hops < 64; r = __atomic_load_n(&r->next, __ATOMIC_ACQUIRE), hops++)
+        if (r->td.td_xnu == xt && r->xtid == xtid)
+            return r;
+    return NULL;
+}
+
 /* the record for the calling thread, created on first use; 'transient' marks one made by a system-call entry */
 static struct thread *nmx_thread_get(int transient, int *created)
 {
     thread_t xt = current_thread();
     const uint64_t xtid = thread_tid(xt);
     *created = 0;
+    struct nmx_thread_rec *r = nmx_thread_find_fast(xt, xtid);
+    if (r)
+        return &r->td;
     lck_spin_lock(nmx_thread_lock);
-    struct nmx_thread_rec *r = nmx_thread_find(xt, xtid);
+    r = nmx_thread_find(xt, xtid);
     lck_spin_unlock(nmx_thread_lock);
     if (r)
         return &r->td;
@@ -225,7 +249,7 @@ static struct thread *nmx_thread_get(int transient, int *created)
         stale = nmx_thread_unlink_stale(xt, xtid);
         unsigned b = bucket_of(xt, NMX_THREAD_BUCKETS);
         nr->next = nmx_threads[b];
-        nmx_threads[b] = nr;
+        __atomic_store_n(&nmx_threads[b], nr, __ATOMIC_RELEASE);   /* complete before it is seen (nmx_thread_find_fast) */
         nmx_thread_count++;
         r = nr;
         nr = NULL;
@@ -251,7 +275,9 @@ struct thread *nmx_curthread(void)
     return td;
 }
 
-/* removes and frees the calling thread's record; LinuxKPI's task_struct must already be released by the caller */
+/* removes the calling thread's record; LinuxKPI's task_struct must already be released by the caller. v51: the record
+   stays allocated, like a stale one, since a walk without the lock (nmx_thread_find_fast) may be on it; only port
+   threads that exit come here */
 static void nmx_thread_drop_current(void)
 {
     thread_t xt = current_thread();
@@ -262,14 +288,13 @@ static void nmx_thread_drop_current(void)
     for (struct nmx_thread_rec **pp = &nmx_threads[b]; *pp; pp = &(*pp)->next) {
         if ((*pp)->td.td_xnu == xt && (*pp)->xtid == xtid) {
             found = *pp;
-            *pp = found->next;
+            __atomic_store_n(pp, found->next, __ATOMIC_RELEASE);
             nmx_thread_count--;
             break;
         }
     }
     lck_spin_unlock(nmx_thread_lock);
-    if (found)
-        IOFree(found, sizeof(*found));
+    (void)found;
 }
 
 /*
@@ -358,10 +383,22 @@ static int crit_find(thread_t th)
     return -1;
 }
 
+/*
+ * v51: a thread that has a record keeps its nesting there, found without a lock (nmx_thread_find_fast); only a thread
+ * with none yet uses the table and its global lock. Every LinuxKPI spin lock and RCU read section comes here twice.
+ * Mixed nesting stays ordered: an exit takes the record's level while it has one, else the table's, and a record
+ * made inside a table section only ever holds the inner levels.
+ */
 void nmx_critical_enter(void)
 {
     boolean_t was = ml_set_interrupts_enabled(FALSE);
     thread_t me = current_thread();
+    struct nmx_thread_rec *rec = nmx_thread_find_fast(me, thread_tid(me));
+    if (rec != NULL) {
+        if (rec->crit_nest++ == 0)
+            rec->crit_saved = was;
+        return;
+    }
     crit_lock();
     int k = crit_find(me);
     if (k < 0) {
@@ -399,6 +436,12 @@ void nmx_critical_exit(void)
 {
     (void)ml_set_interrupts_enabled(FALSE);
     thread_t me = current_thread();
+    struct nmx_thread_rec *rec = nmx_thread_find_fast(me, thread_tid(me));
+    if (rec != NULL && rec->crit_nest > 0) {
+        if (--rec->crit_nest == 0)
+            ml_set_interrupts_enabled(rec->crit_saved);
+        return;
+    }
     crit_lock();
     int k = crit_find(me);
     if (k < 0) {
@@ -421,6 +464,11 @@ int nmx_in_critical(void)
     if (ml_at_interrupt_context())
         return 1;
     boolean_t was = ml_set_interrupts_enabled(FALSE);
+    struct nmx_thread_rec *rec = nmx_thread_find_fast(current_thread(), thread_tid(current_thread()));
+    if (rec != NULL && rec->crit_nest > 0) {
+        ml_set_interrupts_enabled(was);
+        return 1;
+    }
     crit_lock();
     int in = crit_find(current_thread()) >= 0;
     crit_unlock();

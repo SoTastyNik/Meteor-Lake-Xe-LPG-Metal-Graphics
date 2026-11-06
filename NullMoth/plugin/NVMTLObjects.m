@@ -1382,7 +1382,15 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
     }
     if (c) { if (p) [h nvmtlGiveRange:o length:c]; [h nvmtlReleaseSubAllocation:c]; }
 }
-- (MTLTextureUsage)usage { if (_usage) return (MTLTextureUsage)_usage; if (_parent) return [_parent usage]; return MTLTextureUsageShaderRead; }
+// v51: an IOSurface texture made with MTLTextureUsageUnknown (CoreVideo's texture cache makes them) answers every usage, as
+// Metal allows it any: CoreImage refused to render into one that answered ShaderRead ("texture usage must include
+// MTLTextureUsageShaderWrite", Photo Booth showed black). Writes into it go through nvmtl_storage_view_for.
+- (MTLTextureUsage)usage {
+    if (_usage) return (MTLTextureUsage)_usage;
+    if (_parent) return [_parent usage];
+    return _surf ? (MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView)
+                 : MTLTextureUsageShaderRead;
+}
 - (id<MTLBuffer>)buffer { return _backBuf ? _backBuf : _parent ? [_parent buffer] : nil; }
 - (NSUInteger)bufferOffset { return _backBuf ? _backOff : _parent ? [_parent bufferOffset] : 0; }
 - (NSUInteger)bufferBytesPerRow { return _backBuf ? _backBPR : _parent ? [_parent bufferBytesPerRow] : 0; }
