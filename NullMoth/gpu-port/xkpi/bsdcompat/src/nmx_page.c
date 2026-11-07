@@ -314,26 +314,45 @@ static void pin_put(struct user_pin *pin)
     }
 }
 
-/* takes one pin entry off a page, if it has any; the request it named, or NULL */
-static struct user_pin *page_pop_pin(vm_page_t m)
+static u_int reg_count;                    /* page records in the registry */
+/*
+ * v52: a user pin's page records are freed again with their last pin. v50/v51 kept every fictitious record, and the
+ * registry grew by ~5000 records (~0.7 MB) for each new 21 MB surface: 287,000 after a few minutes of Launchpad tests,
+ * on its way to one per page of RAM. A record made for a pin is marked (nmx_pinrec); when a put leaves it with only the
+ * registry's own wiring and no pin, it leaves the registry under the registry lock, and its block goes once the last
+ * record of the block has. Every wiring of such a record is taken under that same lock (nmx_phys_to_pages), so a
+ * record being freed is never handed out. debug.nmxgpu_pin_reclaim=0 (NMXAccel) keeps new records again.
+ */
+static int nmx_pin_reclaim = 1;
+static uint64_t nmx_pin_reclaimed;         /* records freed that way */
+int nmx_xnu_tunable(const char *name);
+
+/* drops one wiring of a fictitious record (pg_lock held); returns its block when this freed the block's last record */
+static struct backing *record_unwire_locked(vm_page_t m)
 {
-    struct pin_ref *r;
-    lck_spin_lock(pg_lock);
-    r = m->nmx_pins;
-    if (r != NULL)
-        m->nmx_pins = r->next;
-    lck_spin_unlock(pg_lock);
-    if (r == NULL)
+    const u_int rc = __atomic_sub_fetch(&m->ref_count, 1, __ATOMIC_SEQ_CST);
+    if (!m->nmx_pinrec || rc != 1 || m->nmx_pins != NULL || !nmx_pin_reclaim)
         return NULL;
-    return r->pin;                         /* r lives in its request's block */
+    (void)reg_remove_locked(m->phys_addr >> PAGE_SHIFT);
+    reg_count--;
+    nmx_pin_reclaimed++;
+    m->nmx_pinrec = 0;
+    m->ref_count = 0;
+    struct backing *bk = m->nmx_alloc;
+    return --bk->live == 0 ? bk : NULL;
 }
 
-static u_int reg_count;                    /* page records in the registry (fictitious ones are never taken out) */
+static void record_block_free(struct backing *bk)
+{
+    free(bk->kva, M_NMXPAGE);              /* the block's registry entries */
+    free(bk, M_NMXPAGE);
+}
+
 /*
- * The records of npages physical pages (a user pin): looked up under one lock hold per 256 pages; the missing ones are made
- * as one fictitious block with one registry entry array, inserted the same way. A page another thread registered in the
- * meantime (or one met twice in the run) takes the record already there; the spare record in the block stays unused.
- * Fictitious records are never freed (vm_page_free ignores them), so neither is the block.
+ * The records of npages physical pages (a user pin), each wired once more for it: looked up under one lock hold per 256
+ * pages; the missing ones are made as one fictitious block with one registry entry array, inserted the same way. A page
+ * another thread registered in the meantime (or one met twice in the run) takes the record already there; the spare
+ * record in the block stays unused.
  */
 static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages, int *fresh)
 {
@@ -342,9 +361,12 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
     for (int i = 0; i < npages;) {
         const int end = npages - i > 256 ? i + 256 : npages;
         lck_spin_lock(pg_lock);
-        for (; i < end; i++)
+        for (; i < end; i++) {
             if ((pages[i] = reg_find_locked(phys[i] >> PAGE_SHIFT)) == NULL)
                 missing++;
+            else
+                __atomic_add_fetch(&pages[i]->ref_count, 1, __ATOMIC_SEQ_CST);
+        }
         lck_spin_unlock(pg_lock);
     }
     if (missing == 0)
@@ -354,16 +376,25 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
     if (bk == NULL || ents == NULL) {
         free(bk, M_NMXPAGE);
         free(ents, M_NMXPAGE);
+        /* give the wirings back; a record left with none but the registry's stays (this path is out of memory anyway) */
+        lck_spin_lock(pg_lock);
+        for (int i = 0; i < npages; i++)
+            if (pages[i] != NULL)
+                __atomic_sub_fetch(&pages[i]->ref_count, 1, __ATOMIC_SEQ_CST);
+        lck_spin_unlock(pg_lock);
         return ENOMEM;
     }
     bk->kind = BK_FICTITIOUS;
     bk->npages = (size_t)missing;
+    bk->kva = ents;                        /* freed with the block (record_block_free) */
+    const uint8_t pinrec = nmx_pin_reclaim ? 1 : 0;
     for (int i = 0, k = 0; i < npages; i++) {
         if (pages[i] != NULL)
             continue;
         page_record_init(&bk->pages[k], bk, (phys[i] >> PAGE_SHIFT) << PAGE_SHIFT, NULL);
         bk->pages[k].flags = PG_FICTITIOUS;
-        bk->pages[k].ref_count = 1;
+        bk->pages[k].ref_count = 2;        /* the registry's wiring and this pin's */
+        bk->pages[k].nmx_pinrec = pinrec;
         k++;
     }
     for (int i = 0, k = 0, used = 0; i < npages;) {
@@ -376,28 +407,29 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
             if (m == NULL) {
                 reg_insert_locked(&bk->pages[k], &ents[used++]);
                 reg_count++;
+                bk->live++;
                 m = &bk->pages[k];
                 (*fresh)++;
-            }
+            } else
+                __atomic_add_fetch(&m->ref_count, 1, __ATOMIC_SEQ_CST);
             pages[i] = m;
             k++;
         }
         lck_spin_unlock(pg_lock);
     }
-    if (*fresh == 0) {                     /* every one was registered meanwhile: nothing of the block is used */
-        free(bk, M_NMXPAGE);
-        free(ents, M_NMXPAGE);
-    }
+    if (*fresh == 0)                       /* every one was registered meanwhile: nothing of the block is used */
+        record_block_free(bk);
     return 0;
 }
 
 uint64_t nmx_xnu_execbuf_begin(void);
-void nmx_xnu_pin_parts(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3, int fresh, u_int records);
+void nmx_xnu_pin_parts(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3, int fresh, u_int records, uint64_t reclaimed);
 int nmx_user_pages_pin(void *mm, uintptr_t start, int npages, int write, vm_page_t *pages)
 {
     if (npages <= 0)
         return 0;
     const uint64_t t0 = nmx_xnu_execbuf_begin();
+    nmx_pin_reclaim = nmx_xnu_tunable("nmxgpu-pin-reclaim") != 0;   /* absent (-1): on */
     uint64_t *phys = malloc(sizeof(uint64_t) * (size_t)npages, M_NMXPAGE, M_WAITOK);
     struct user_pin *pin = malloc(sizeof(*pin) + sizeof(struct pin_ref) * (size_t)npages, M_NMXPAGE, M_WAITOK | M_ZERO);
     int err = ENOMEM, fresh = 0, i;
@@ -427,10 +459,8 @@ int nmx_user_pages_pin(void *mm, uintptr_t start, int npages, int write, vm_page
         }
         lck_spin_unlock(pg_lock);
     }
-    for (i = 0; i < npages; i++)
-        vm_page_wire(pages[i]);
-    free(phys, M_NMXPAGE);
-    nmx_xnu_pin_parts(t0, t1, t2, nmx_xnu_execbuf_begin(), fresh, reg_count);
+    free(phys, M_NMXPAGE);                 /* the pages were wired for the pin by nmx_phys_to_pages */
+    nmx_xnu_pin_parts(t0, t1, t2, nmx_xnu_execbuf_begin(), fresh, reg_count, nmx_pin_reclaimed);
     return npages;
 fail:
     free(pin, M_NMXPAGE);
@@ -440,11 +470,23 @@ fail:
 
 bool vm_page_unwire_noq(vm_page_t m)
 {
-    /* a pinned user page: this put releases one pin (see nmx_user_pages_pin) */
-    if ((m->flags & PG_FICTITIOUS) != 0 && m->nmx_pins != NULL) {
-        struct user_pin *pin = page_pop_pin(m);
+    if ((m->flags & PG_FICTITIOUS) != 0) {
+        /* a pinned user page: this put releases one pin (see nmx_user_pages_pin), and a pin's record with nothing left
+           on it leaves (record_unwire_locked). A fictitious record is never freed through vm_page_free. */
+        struct user_pin *pin = NULL;
+        lck_spin_lock(pg_lock);
+        struct pin_ref *r = m->nmx_pins;
+        if (r != NULL) {
+            m->nmx_pins = r->next;
+            pin = r->pin;                  /* r lives in its request's block */
+        }
+        struct backing *dead = record_unwire_locked(m);
+        lck_spin_unlock(pg_lock);
         if (pin != NULL)
             pin_put(pin);
+        if (dead != NULL)
+            record_block_free(dead);
+        return false;
     }
     return __atomic_sub_fetch(&m->ref_count, 1, __ATOMIC_SEQ_CST) == 0 && m->object == NULL;
 }

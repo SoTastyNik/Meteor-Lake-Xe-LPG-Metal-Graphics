@@ -805,7 +805,7 @@ static int nvmtl_vk_initialize(void)
     if(compression_policy<0){nvlog("first-submit: FAILED compression policy errno=%d",-compression_policy);return -1;}
     if(compression_policy)nvmtl_desktop_trace("compression-policy","INTEL_DEBUG includes noccs before ICD loading",0);
     if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))
-        syslog(LOG_ERR,"NullMoth: render compression (CCS) %s",compression_policy?"OFF (noccs)":"ON (nvmtl-ws-ccs)");
+        syslog(LOG_ERR,"NullMoth: render compression (CCS) %s",compression_policy?"OFF (nvmtl-ws-noccs)":"ON");
 
     if (getenv("NVMTL_DESKTOP_STALL") && nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
         if (setenv("INTEL_DEBUG", "stall", 0) == 0)

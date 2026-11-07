@@ -24,6 +24,7 @@ struct vm_page {
     } plinks;
     void *nmx_lkpi;                 /* LinuxKPI per-page data (struct page private) */
     void *nmx_pins;                 /* user-page pins this page is held by (see nmx_user_pages_pin) */
+    uint8_t nmx_pinrec;             /* v52: a fictitious record a user pin made, freed again with its last pin */
 };
 TAILQ_HEAD(pglist, vm_page);
 #define PG_FICTITIOUS 0x0004

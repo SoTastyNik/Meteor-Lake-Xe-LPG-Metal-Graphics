@@ -293,8 +293,11 @@ extern "C" void nmx_xnu_vma_big(uint64_t bytes, int userptr, uint64_t t0, uint64
 static uint64_t s_pin_part[3];
 static int s_pin_fresh;
 static unsigned s_pin_records;
-extern "C" void nmx_xnu_pin_parts(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3, int fresh, unsigned records)
+static uint64_t s_pin_reclaimed;
+extern "C" void nmx_xnu_pin_parts(uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3, int fresh, unsigned records,
+                                  uint64_t reclaimed)
 {
+    s_pin_reclaimed = reclaimed;
     absolutetime_to_nanoseconds(t1 - t0, &s_pin_part[0]);
     absolutetime_to_nanoseconds(t2 - t1, &s_pin_part[1]);
     absolutetime_to_nanoseconds(t3 - t2, &s_pin_part[2]);
@@ -309,9 +312,11 @@ extern "C" void nmx_xnu_pin_done(uint64_t bytes, uint64_t t0)
     logs++;
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
-    IOLog("NullMoth GPU: userptr pin %llu MB: %llu us (wire %llu, page records %llu with %d new of %u, pin lists %llu)\n",
+    IOLog("NullMoth GPU: userptr pin %llu MB: %llu us (wire %llu, page records %llu with %d new of %u, %llu freed so far, "
+          "pin lists %llu)\n",
           (unsigned long long)(bytes >> 20), (unsigned long long)(ns / 1000), (unsigned long long)(s_pin_part[0] / 1000),
-          (unsigned long long)(s_pin_part[1] / 1000), s_pin_fresh, s_pin_records, (unsigned long long)(s_pin_part[2] / 1000));
+          (unsigned long long)(s_pin_part[1] / 1000), s_pin_fresh, s_pin_records, (unsigned long long)s_pin_reclaimed,
+          (unsigned long long)(s_pin_part[2] / 1000));
 }
 
 /* the time since *t goes to a phase: 0 object lookup, 1 engine pin and ring throttle, 2 object locks, 3 vma pins, 4 reserve and

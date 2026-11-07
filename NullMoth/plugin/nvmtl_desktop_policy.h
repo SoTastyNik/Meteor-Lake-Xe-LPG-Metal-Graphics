@@ -24,13 +24,15 @@ static inline int nvmtl_windowserver_fresh_readback(uint16_t vendor,uint16_t dev
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
-/* v51: /Library/GPUBundles/nvmtl-ws-ccs keeps render compression on for WindowServer (an experiment: its full-screen
-   passes are bound by memory bandwidth; noccs was set while the desktop hang was being isolated, not for a CCS fault) */
+/* v52: render compression is on for WindowServer; /Library/GPUBundles/nvmtl-ws-noccs turns it off. Its full-screen passes
+   are bound by memory bandwidth: with CCS (v51 test, the nvmtl-ws-ccs switch) GPU time per command buffer fell from 6.3
+   to 3.9 ms, frames under 13 ms rose from 46% to 62-68% and frames of 34 ms or more fell from 9% to 1%. noccs was set
+   while the desktop hang was being isolated, not for a CCS fault. */
 #include <unistd.h>
 static inline int nvmtl_windowserver_disable_ccs(uint16_t vendor,uint16_t device,const char *process)
 {
     if(!nvmtl_windowserver_serial_policy(vendor,device,process))return 0;
-    if(access("/Library/GPUBundles/nvmtl-ws-ccs",F_OK)==0)return 0;
+    if(access("/Library/GPUBundles/nvmtl-ws-noccs",F_OK)!=0)return 0;
     const char *previous=getenv("INTEL_DEBUG");
     char flags[4096];
     int n=snprintf(flags,sizeof flags,"%s%snoccs",previous?previous:"",previous&&*previous?",":"");

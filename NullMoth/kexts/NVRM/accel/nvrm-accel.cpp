@@ -1646,6 +1646,24 @@ static int nmxgpu_min_mhz_sysctl SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_gt_min_mhz, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
             nmxgpu_min_mhz_sysctl, "I",
             "MateBook GPU: GT frequency floor in MHz, applied by NMXGPU within ~64 submissions (0 = the driver's default)");
+// v52: NMXGPU frees a user pin's page records with its last pin unless this is 0 (read at each pin, nmx_user_pages_pin)
+static int gNmxGpuPinReclaim = 1;
+static int nmxgpu_pin_reclaim_sysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gNmxGpuPinReclaim;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    if (v != 0 && v != 1) return EINVAL;
+    NVAccel *a = NVAccel::gAccel;
+    IOService *pci = a ? a->getProvider() : nullptr;
+    if (!pci) return ENXIO;
+    pci->setProperty("nmxgpu-pin-reclaim", (unsigned long long)v, 32);
+    gNmxGpuPinReclaim = v;
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_pin_reclaim, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
+            nmxgpu_pin_reclaim_sysctl, "I",
+            "MateBook GPU: 1 = a user pin's page records are freed with its last pin (default), 0 = kept (v50/v51)");
 static constexpr unsigned kNmxFrameBuckets = 8;
 static SInt64 gCntNmxFrameMs[kNmxFrameBuckets];
 NVACCEL_CNT(nmxfb_frames_under_9ms, gCntNmxFrameMs[0], "Frames reaching the panel under 9 ms after the previous one (120 Hz)");
@@ -1719,6 +1737,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_front_written);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_trace);
     sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
     sysctl_register_oid(&sysctl__debug_nmxgpu_gt_min_mhz);
+    sysctl_register_oid(&sysctl__debug_nmxgpu_pin_reclaim);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_under_9ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_9_13ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);
