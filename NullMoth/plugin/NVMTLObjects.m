@@ -5010,7 +5010,28 @@ void nvmtl_mark_published(NVMTLCommandBuffer *cb, NVMTLTexture *t) {
     CFNumberRef num = CFNumberCreate(NULL, kCFNumberLongLongType, &cb->_pubN);
     if (num) { IOSurfaceSetValue(t->_surf, CFSTR("NMXPublished"), num); CFRelease(num); }
 }
-- (void)commit { if (!strcmp(getprogname(),"WindowServer") || !strcmp(getprogname(),"Weather")) _traceCommitNS=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); NVS(NVS_COMMIT); nvmtl_apistat_tick(); nvmtl_mark_pending(self); [self nvmtlSubmitWithEvents]; }
+/*
+ * v53: an app's command buffer that writes an IOSurface (a window's backing, a CAMetalLayer drawable, a camera frame)
+ * finishes before commit returns. Nothing orders WindowServer's GPU work after another process's on this port: each
+ * process imports the surface's pages as its own userptr object, so i915 has no shared fence between them, and
+ * WindowServer composited surfaces that were still being drawn - mosaic in Control Center and the Dock, a window left
+ * grey. WTLIntelGfx (same plugin lineage, I-119) found and fixed the same bands this way. A command buffer that waits
+ * on an event is left alone (the CPU may signal it after commit). /Library/GPUBundles/nvmtl-app-nowait turns it off.
+ */
+static void nvmtl_app_surface_wait(NVMTLCommandBuffer *cb)
+{
+    static int on = -1;
+    if (on < 0) {
+        on = strcmp(getprogname(), "WindowServer") != 0 && access("/Library/GPUBundles/nvmtl-app-nowait", F_OK) != 0;
+        if (strcmp(getprogname(), "WindowServer"))
+            syslog(LOG_ERR, "NullMoth: %s: command buffers that write an IOSurface %s", getprogname(),
+                   on ? "finish before commit returns" : "return at once (nvmtl-app-nowait)");
+    }
+    if (!on || !cb->_surfAll.count) return;
+    for (NVMTLSubmissionPart *part in cb->_parts) if (part->waitEvent) return;
+    [cb waitUntilCompleted];
+}
+- (void)commit { if (!strcmp(getprogname(),"WindowServer") || !strcmp(getprogname(),"Weather")) _traceCommitNS=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); NVS(NVS_COMMIT); nvmtl_apistat_tick(); nvmtl_mark_pending(self); [self nvmtlSubmitWithEvents]; nvmtl_app_surface_wait(self); }
 - (id<MTLComputeCommandEncoder>)computeCommandEncoder { NVS(NVS_CENC);
     if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLComputeCommandEncoder class]];
     NVMTLComputeCommandEncoder *e = [NVMTLComputeCommandEncoder new]; e->_cb = self; _nEnc++; return e;
