@@ -2353,7 +2353,10 @@ typedef struct { nvmtl_slot s[2][NVMTL_NBIND];
                  uint8_t dirty[2]; VkDescriptorSet last[2]; unsigned last_idx[2]; uint32_t last_hi[2]; uint64_t lastw[2][4];
                  uint64_t chg[2][4]; uint64_t texgen[2]; const void *emb_fn[2]; uint64_t emb_gen[2]; uint32_t emb_n[2];
                  uint64_t emb_key[2][NVMTL_EMB_KEYMAX];
-                 nvmtl_setcache sc[2][NVMTL_SETCACHE_N]; unsigned sc_next[2]; } nvmtl_bindtable;
+                 nvmtl_setcache sc[2][NVMTL_SETCACHE_N]; unsigned sc_next[2];
+                 /* v56: samplers a shader brought itself, parked in sampler slots it leaves free, and what each displaced */
+                 uint32_t park_mask[2]; uint8_t park_kind[2][NVMTL_NSAMP], park_saved_kind[2][NVMTL_NSAMP];
+                 void *park_h[2][NVMTL_NSAMP], *park_saved[2][NVMTL_NSAMP]; } nvmtl_bindtable;
 
 static VkDescriptorSetLayout g_setLayout;
 #define NVMTL_MAX_POOLS 64
@@ -2597,8 +2600,11 @@ static int ensure_descriptors_locked(void)
     }
     if (g_mutable && nvmtl_vk_texel_view_create(&g_dummyBuf, 0, 256, VK_FORMAT_R8G8B8A8_UNORM, 1, &g_dummyTexAlias, &g_dummyTexView, NULL)) {
         nvlog("vk: par3 NO texel dummy — texture buffers are turned OFF for this process (the layout stays mutable)"); g_mutable = 0; }
+    /* v56: the sampler a shader gets at a slot nothing was bound to. A Metal constexpr sampler defaults to mip_filter::none,
+     * so this one reads level 0 only: with maxLod unclamped it picked a mip level, and CoreAnimation's Dock badge digit (a
+     * 108x108 texture with seven never-filled levels, drawn into 46 px) sampled an empty level and vanished (WTLIntelGfx). */
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    sci.magFilter = sci.minFilter = VK_FILTER_LINEAR; sci.maxLod = VK_LOD_CLAMP_NONE;
+    sci.magFilter = sci.minFilter = VK_FILTER_LINEAR; sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST; sci.maxLod = 0.25f;
     VKCK(nvmtl_sampler_acquire(&sci, &g_dummySampler), "sampler acquire (dummy)");
     nvmtl_vk_zero_dummies();
     if (g_bindless) {
@@ -2940,6 +2946,16 @@ static int nvmtl_keep_verdict(uint32_t s)
     if (s == 0) return 1;
     if (g_state != 1 || g_wit_state <= 0) return -1;
     if (nvmtl_wit_read(s) == s) { __atomic_add_fetch(&g_wit_ok, 1, __ATOMIC_RELAXED); return 1; }
+    // v56: a later lap of the same slot: a command buffer submitted NVMTL_WIT_SLOTS (or a multiple) after this one wrote it,
+    // on the same in-order queue, so this one finished long ago. Without this a verdict asked that late waited the full
+    // second below and then took the backend down (upstream PR #446, mickys 3901503).
+    { const uint32_t v = nvmtl_wit_read(s), d = v - s;
+      if (v && v < NVMTL_WSEQ_BLIND - 1 && d && d < 0x80000000u && d % NVMTL_WIT_SLOTS == 0) {
+          static _Atomic unsigned long long lapped;
+          const unsigned long long n = atomic_fetch_add(&lapped, 1) + 1;
+          if (n <= 4 || (n & 0xFF) == 0)
+              syslog(LOG_ERR, "NullMoth: keep witness %u checked after its slot was reused by %u (%llu so far): finished, not lost", s, v, n);
+          return 1; } }
     static long wait_ms = -1; if (wait_ms < 0) { const char *e = getenv("NVMTL_WIT_WAIT_MS"); wait_ms = e ? atol(e) : 1000; }
     const uint64_t w0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     for (;;) {
@@ -3400,7 +3416,54 @@ int nvmtl_vk_bind_texture(nvk_cmdbuf *c, uint32_t set, uint32_t index, nvk_image
 int nvmtl_vk_bind_sampler(nvk_cmdbuf *c, uint32_t set, uint32_t index, nvk_sampler *s)
 {
     if (index >= NVMTL_NSAMP) { nvlog("bind sampler: index %u is outside [0,%d)", index, NVMTL_NSAMP); return -1; }
+    // the app set this slot itself, so a sampler parked here has nothing to hand back
+    if (set <= 1 && c->table) ((nvmtl_bindtable *)c->table)->park_mask[set] &= ~(1u << index);
     return nvmtl_bind_slot(c, set, NVMTL_NBUF + NVMTL_NTEX + index, s ? NVMTL_SLOT_SAMP : NVMTL_SLOT_NONE, s ? s->s : NULL, 0);
+}
+/* v56: Metal keeps an app's sampler in its slot while a shader with its own constexpr or argument-buffer sampler draws.
+   Vulkan has no such samplers, so the translator parks them in slots the shader leaves free. Keep what each one displaced
+   and put it back once a shader no longer needs the slot: Core Animation binds a linear sampler once, then its Dock and
+   Control Center blur upscale read a parked nearest sampler and drew 32x32 blocks (upstream #363, ported from
+   WTLIntelGfx/NvGfx). NVMTL_NO_SAMPLER_RESTORE=1 or /Library/GPUBundles/nvmtl-no-sampler-restore keeps the old behaviour. */
+static int nvmtl_sampler_restore_on(void)
+{
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("NVMTL_NO_SAMPLER_RESTORE");
+        on = !(e && *e && *e != '0') && access("/Library/GPUBundles/nvmtl-no-sampler-restore", F_OK) != 0;
+        if (nvmtl_vk_windowserver_serial())
+            syslog(LOG_ERR, "NullMoth: app samplers displaced by a shader's own sampler are %s", on ? "put back" : "left overwritten (nvmtl-no-sampler-restore)");
+    }
+    return on;
+}
+int nvmtl_vk_bind_parked_sampler(nvk_cmdbuf *c, uint32_t set, uint32_t index, nvk_sampler *s)
+{
+    if (!nvmtl_sampler_restore_on()) return nvmtl_vk_bind_sampler(c, set, index, s);
+    if (index >= NVMTL_NSAMP || set > 1) { nvlog("bind parked sampler: index %u set %u out of range", index, set); return -1; }
+    const uint32_t b = NVMTL_NBUF + NVMTL_NTEX + index, bit = 1u << index;
+    nvmtl_bindtable *t = (nvmtl_bindtable *)c->table;
+    const uint8_t kind = t ? t->s[set][b].kind : NVMTL_SLOT_NONE;
+    void *h = t ? t->s[set][b].h : NULL;
+    const int parked = t && (t->park_mask[set] & bit) && kind == t->park_kind[set][index] && h == t->park_h[set][index];
+    int r = nvmtl_bind_slot(c, set, b, s ? NVMTL_SLOT_SAMP : NVMTL_SLOT_NONE, s ? s->s : NULL, 0);
+    if (r) return r;
+    t = (nvmtl_bindtable *)c->table;
+    if (!parked) { t->park_saved_kind[set][index] = kind; t->park_saved[set][index] = h; }
+    t->park_kind[set][index] = t->s[set][b].kind; t->park_h[set][index] = t->s[set][b].h;
+    t->park_mask[set] |= bit;
+    return 0;
+}
+void nvmtl_vk_parked_samplers_keep(nvk_cmdbuf *c, uint32_t set, uint32_t keep)
+{
+    nvmtl_bindtable *t = c ? (nvmtl_bindtable *)c->table : NULL;
+    if (!t || set > 1) return;
+    for (uint32_t drop = t->park_mask[set] & ~keep; drop; drop &= drop - 1) {
+        const uint32_t i = (uint32_t)__builtin_ctz(drop), b = NVMTL_NBUF + NVMTL_NTEX + i;
+        const nvmtl_slot *sl = &t->s[set][b];
+        if (sl->kind == t->park_kind[set][i] && sl->h == t->park_h[set][i])
+            nvmtl_bind_slot(c, set, b, t->park_saved_kind[set][i], t->park_saved[set][i], 0);
+        t->park_mask[set] &= ~(1u << i);
+    }
 }
 
 int nvmtl_vk_sample_positions_backend(void) { return nvmtl_vk_init() == 0 && g_sample_locations; }

@@ -218,10 +218,25 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
     memset(&_c, 0, sizeof(_c));
     part->resources = [(NVMTLResSet *)_resources nvmtlTakeAll]; part->surfaces = [_surfDirty copy];
     // Another process may read an IOSurface once its writer is scheduled, and nothing orders its queue after ours.
-    static int after = -1; if (after < 0) { const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && e[0] == '1'; }
+    // v56 (upstream PR #438, mickys c77ee56): a surface written through a private image reaches its pages only when
+    // -nvmtlSurfaceOut copies it after the GPU wait, while WindowServer hands ScreenCaptureKit clients their frame (and
+    // CoreImage reads a rendered CVPixelBuffer) once the command buffer is scheduled, as Apple's IOSurfaceLock waits for
+    // the GPU. With nvmtl-ws-early-schedule a capture client read the two-plane 420v surface before the copy-out: a share
+    // that the other side never sees, a Photo Booth photo with no chroma (green). Such a command buffer now reports
+    // "scheduled" once its writes are published. NVMTL_SCHEDULE_AFTER_SURFACE_WRITES=3 (default) does it for two-plane
+    // surfaces only (capture and video frames, nothing else pays), =2 for every private one, =1 for every write, =0 never.
+    static int after = -1; if (after < 0) {
+        const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && *e ? e[0] - '0' : 3;
+        if (access("/Library/GPUBundles/nvmtl-no-surface-order", F_OK) == 0) after = 0;
+        if (nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: surface writes before scheduled: mode %d%s", after,
+                                                   after == 3 ? " (two-plane surfaces)" : after ? "" : " (off)"); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
-    for (NVMTLTexture *s in part->surfaces)
-        if ((nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) || (after && s != drawable)) _scheduleAfterPublish = YES;
+    for (NVMTLTexture *s in part->surfaces) {
+        if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) { _scheduleAfterPublish = YES; continue; }
+        if (s == drawable || !after) continue;
+        NVMTLTexture *r = s->_parent ? s->_parent : s;
+        if (after == 1 || (r->_surf && (after == 3 ? IOSurfaceGetPlaneCount(r->_surf) > 1 : !r->_vramOn))) _scheduleAfterPublish = YES;
+    }
     part->scratch = [_scratch copy]; part->signalEvent = event; part->value = value;
     part->encoders = _nEnc - _nEncSealed; _nEncSealed = _nEnc;
     if (_g79Sig.count) { part->signals = [_g79Sig copy]; [_g79Sig removeAllObjects]; }
