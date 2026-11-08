@@ -777,11 +777,37 @@ static NVMTLTexture *nvmtl_texbuf_make(NVMTLBuffer *b, MTLTextureDescriptor *d, 
         nvlog("newTiledTextureWithDescriptor: %lux%lu bpr %lu off %lu: no linear view and no CPU copy (buffer %lu B) -> nil",
               (unsigned long)d.width, (unsigned long)d.height, (unsigned long)bpr, (unsigned long)offset, (unsigned long)_b.size);
         return nil; }
+    // v55: a one-time copy goes stale when the caller rewrites the bytes in place - CoreAnimation adds glyphs to its atlases
+    // and redraws badges and icons in their memory - so a read-only view gets a buffer of its own, at offset 0 (any
+    // alignment), refilled from the caller's bytes at every submission that uses it (nvmtl_buffer_sync_in), as
+    // WTLIntelGfx does since its I-119. A texture the GPU writes (or of unknown usage) keeps the one-time copy.
+    const NSUInteger ru = d.usage & (MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget);
+    if (d.usage != MTLTextureUsageUnknown && !ru && !getenv("NVMTL_NO_TILED_RESYNC")) {
+        NVMTLBuffer *s = [NVMTLBuffer new];
+        const size_t n = MIN((size_t)bpr * d.height, _b.size - offset);
+        if (s && !nvmtl_vk_buffer_create(n, 1, &s->_b) && s->_b.map) {
+            s->_storage = MTLStorageModeShared;
+            memcpy(s->_b.map, (char *)base + offset, n);
+            s->_hostPtr = (char *)base + offset; s->_hostLen = n;
+            NVMTLBuffer *src = self;   // the caller's bytes live as long as the stand-in does
+            s->_hostDealloc = ^(void *p, NSUInteger l) { (void)p; (void)l; (void)src; };
+            // the one-time copy below only ever filled level 0 of slice 0, so a single-level view loses nothing
+            MTLTextureDescriptor *sd = [d copy]; sd.mipmapLevelCount = 1; sd.sampleCount = 1; sd.arrayLength = 1; sd.depth = 1;
+            id<MTLTexture> v = [s newTextureWithDescriptor:sd offset:0 bytesPerRow:bpr];
+            static int said; if (said++ < 4)
+                syslog(LOG_ERR, "NullMoth: newTiledTextureWithDescriptor: linear view refused (fmt %lu %lux%lu bpr %lu off %lu, buffer %zu B, "
+                       "usage 0x%lx) -> %s", (unsigned long)d.pixelFormat, (unsigned long)d.width, (unsigned long)d.height,
+                       (unsigned long)bpr, (unsigned long)offset, _b.size, (unsigned long)d.usage,
+                       v ? "a stand-in refilled at every submission" : "the stand-in's view refused too, a one-time copy");
+            if (v) return v;
+        }
+    }
     MTLTextureDescriptor *cd = [d copy]; cd.storageMode = MTLStorageModeShared;
     id<MTLTexture> c = [[self device] newTextureWithDescriptor:cd];
     if (c) [c replaceRegion:MTLRegionMake2D(0, 0, d.width, d.height) mipmapLevel:0 withBytes:(char *)base + offset bytesPerRow:bpr];
-    { static int said; if (!said++) nvlog("newTiledTextureWithDescriptor: linear view refused -> copied texture (%lux%lu bpr %lu; said once)",
-                                          (unsigned long)d.width, (unsigned long)d.height, (unsigned long)bpr); }
+    { static int said; if (said++ < 4) syslog(LOG_ERR, "NullMoth: newTiledTextureWithDescriptor: linear view refused -> one-time copy "
+                                              "(fmt %lu %lux%lu bpr %lu usage 0x%lx)", (unsigned long)d.pixelFormat, (unsigned long)d.width,
+                                              (unsigned long)d.height, (unsigned long)bpr, (unsigned long)d.usage); }
     return c;
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset bytesPerRow:(NSUInteger)bpr {
@@ -3820,6 +3846,9 @@ void nvmtl_heap_back(NVMTLHeap *h, NSUInteger size, int shared) {
     _used += len;
     atomic_fetch_add(&gHAPlaced, 1); atomic_fetch_add(&gHALive, len);
     atomic_fetch_add(rec ? &gHTRecycled : &gHTPlaced, 1); nvmtl_heaptex_census(rec ? "recycled" : "placed");
+    // v55: automatic heaps land here, not in -newTextureWithDescriptor:offset:; without this the descriptor's swizzle was
+    // lost - CoreAnimation's glyphs and Dock symbols drew as flat patches (a badge's "1" as a red blob; WTLIntelGfx I-120)
+    nvmtl_texture_desc_swizzle(t, d);
     return t;
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d {
