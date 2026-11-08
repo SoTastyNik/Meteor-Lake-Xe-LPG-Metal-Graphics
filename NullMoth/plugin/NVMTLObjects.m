@@ -5016,16 +5016,17 @@ void nvmtl_mark_published(NVMTLCommandBuffer *cb, NVMTLTexture *t) {
  * process imports the surface's pages as its own userptr object, so i915 has no shared fence between them, and
  * WindowServer composited surfaces that were still being drawn - mosaic in Control Center and the Dock, a window left
  * grey. WTLIntelGfx (same plugin lineage, I-119) found and fixed the same bands this way. A command buffer that waits
- * on an event is left alone (the CPU may signal it after commit). /Library/GPUBundles/nvmtl-app-nowait turns it off.
+ * on an event is left alone (the CPU may signal it after commit).
+ * v54: off unless /Library/GPUBundles/nvmtl-app-wait exists: the v53 test kept the mosaic, so it is not this, and a 3D
+ * app (Chess) lost the overlap of its CPU and GPU frames.
  */
 static void nvmtl_app_surface_wait(NVMTLCommandBuffer *cb)
 {
     static int on = -1;
     if (on < 0) {
-        on = strcmp(getprogname(), "WindowServer") != 0 && access("/Library/GPUBundles/nvmtl-app-nowait", F_OK) != 0;
-        if (strcmp(getprogname(), "WindowServer"))
-            syslog(LOG_ERR, "NullMoth: %s: command buffers that write an IOSurface %s", getprogname(),
-                   on ? "finish before commit returns" : "return at once (nvmtl-app-nowait)");
+        on = strcmp(getprogname(), "WindowServer") != 0 && access("/Library/GPUBundles/nvmtl-app-wait", F_OK) == 0;
+        if (on) syslog(LOG_ERR, "NullMoth: %s: command buffers that write an IOSurface finish before commit returns (nvmtl-app-wait)",
+                       getprogname());
     }
     if (!on || !cb->_surfAll.count) return;
     for (NVMTLSubmissionPart *part in cb->_parts) if (part->waitEvent) return;

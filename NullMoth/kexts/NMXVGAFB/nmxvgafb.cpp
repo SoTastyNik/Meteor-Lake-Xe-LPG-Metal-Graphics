@@ -85,6 +85,7 @@ class NMXVGAFB : public IOFramebuffer {
     int fFlipCur = -1;                    // the slot on the panel, -1 the firmware plane
     IOLock *fFlipLock = nullptr;
     void latitudeFlipInit(IOPCIDevice *pci);
+    void latitudeVblSync();
     void latitudeFlipFini();
     bool latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4 = false);
     IOReturn latitudeFlip(NMXScanoutSurface *r);
@@ -546,7 +547,12 @@ void NMXVGAFB::vblThreadMain(void *p0, wait_result_t)
         assert_wait_deadline((event_t)&me->fVblNext, THREAD_UNINT, wake);
         IOLockUnlock(me->fVblLock);
         const wait_result_t w = thread_block(THREAD_CONTINUE_NULL);
-        if (w == THREAD_TIMED_OUT && !me->fStopping && wake == due) vblFire(me);
+        if (w == THREAD_TIMED_OUT && !me->fStopping && wake == due) {
+            vblFire(me);
+#ifdef LATITUDE_MTL_PANEL
+            me->latitudeVblSync();
+#endif
+        }
         IOLockLock(me->fVblLock);
     }
     me->fVblThreadDone = true;
@@ -891,6 +897,38 @@ bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4)
 }
 
 static NMXVGAFB *volatile gLatInst;
+/*
+ * v54: the VBL on the panel's own vblank. The VBL thread kept the phase it started with: WindowServer's frame clock was a
+ * free-running 120 Hz grid at an arbitrary offset from the panel's refresh, while a flip only lands at a real vblank, so
+ * a frame that was in time for WindowServer's tick could miss the vblank it was meant for and land a refresh later (v53
+ * bench: 20% of panel intervals 13-17 ms with 3.5 ms of GPU work and 8 ms commit to done per frame; neither a faster GPU
+ * nor a higher clock moved them). After each VBL the pipe's scanline (PIPEDSL) gives how long ago the vblank started, and
+ * hostLatch() puts the grid there (at once when it is early, 2 us per tick when it is late). debug.nmxfb_vbl_lead_us
+ * moves the VBL that much before the vblank (more time for a frame to make it); debug.nmxfb_vbl_sync=0 stops the sync.
+ */
+static int gLatVblSync = 1;
+static SInt64 gLatVblSyncs, gLatVblAgoUs;
+SYSCTL_INT(_debug, OID_AUTO, nmxfb_vbl_sync, CTLFLAG_RW | CTLFLAG_LOCKED, &gLatVblSync, 0,
+           "MateBook panel: 1 = the VBL follows the pipe's real vblank (PIPEDSL after each tick), 0 = free-running (v53)");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_vbl_syncs, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatVblSyncs,
+            "MateBook panel: VBL ticks measured against the panel's scanline");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_vbl_ago_us, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatVblAgoUs,
+            "MateBook panel: at the last VBL tick, how long ago the panel's vblank started, us (lead moves it negative modulo a refresh)");
+void NMXVGAFB::latitudeVblSync()
+{
+    if (!gLatVblSync || !fRegsMap || !fPanelTiming || fVT <= fHeight || fVirtioOn) return;
+    const volatile uint8_t *regs = (const volatile uint8_t *)fRegsMap->getVirtualAddress();
+    const uint32_t dsl = *(const volatile uint32_t *)(regs + 0x70000 + fPlaneStep) & 0xfffffu;   // PIPEDSL
+    const uint64_t now = mach_absolute_time();
+    if (dsl >= fVT) return;
+    // the vblank starts after the last active line; lines since then, as time
+    const uint64_t lines = (uint64_t)((dsl + fVT - fHeight) % fVT);
+    const uint64_t agoNs = lines * fFrameNs / fVT;
+    uint64_t ago; nanoseconds_to_absolutetime(agoNs, &ago);
+    gLatVblAgoUs = (SInt64)(agoNs / 1000);
+    OSIncrementAtomic64(&gLatVblSyncs);
+    hostLatch(now - ago);
+}
 static int gLatHwCursor = 1;
 static SInt64 gLatCursorImages, gLatCursorRefused;
 static int nmxHwCursorSysctl SYSCTL_HANDLER_ARGS
@@ -1569,6 +1607,9 @@ bool NMXVGAFB::start(IOService *provider)
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush_us);
     gLatInst = this;
+    sysctl_register_oid(&sysctl__debug_nmxfb_vbl_sync);     sysctl_register_oid(&sysctl__debug_nmxfb_vbl_syncs);
+    sysctl_register_oid(&sysctl__debug_nmxfb_vbl_ago_us);
+    if (!fVirtioOn) { sysctl_register_oid(&sysctl__debug_nmxfb_vbl_lead_us); sysctl_register_oid(&sysctl__debug_nmxfb_vbl_stepped); }
     sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor);     sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor_images);
     sysctl_register_oid(&sysctl__debug_nmxfb_hwcursor_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_tile4_test);
@@ -1588,6 +1629,9 @@ void NMXVGAFB::stop(IOService *provider)
     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor);     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_images);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_tile4_test);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_vbl_sync);   sysctl_unregister_oid(&sysctl__debug_nmxfb_vbl_syncs);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_vbl_ago_us);
+    if (!fVirtioOn) { sysctl_unregister_oid(&sysctl__debug_nmxfb_vbl_lead_us); sysctl_unregister_oid(&sysctl__debug_nmxfb_vbl_stepped); }
     gLatInst = nullptr;
     latitudeFlipFini();
 #endif

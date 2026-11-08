@@ -1962,14 +1962,22 @@ static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; uint64_t t
 static unsigned g_ipark_n;
 static uint64_t g_ipark_bytes;
 static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted, g_ipark_trimmed;
+/* v54: a WindowServer switch file looked at again once a second, so a variant can be tried live (sudo touch / rm) */
+static int nvmtl_ws_switch_live(const char *path, const char *what, int *on, uint64_t *next)
+{
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (*on < 0 || now >= *next) {
+        *next = now + 1000000000ull;
+        const int v = nvmtl_vk_windowserver_serial() && access(path, F_OK) != 0;
+        if (v != *on && nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: %s %s", what, v ? "ON" : "OFF");
+        *on = v;
+    }
+    return *on;
+}
 static int ipark_on(void)
 {
-    static int on = -1;
-    if (on < 0) {
-        on = nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-no-imagepark", F_OK) != 0;
-        if (nvmtl_vk_windowserver_serial()) nvlog("image park: %s", on ? "a dead image's memory is reused by the next image of its size" : "OFF");
-    }
-    return on;
+    static int on = -1; static uint64_t next;
+    return nvmtl_ws_switch_live("/Library/GPUBundles/nvmtl-ws-no-imagepark", "image park", &on, &next);
 }
 static int ipark_exact(void)
 {
@@ -3259,9 +3267,8 @@ static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint
  */
 static int nvmtl_setcache_on(void)
 {
-    static int on = -1;
-    if (on < 0) on = nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-no-setcache", F_OK) != 0;
-    return on;
+    static int on = -1; static uint64_t next;
+    return nvmtl_ws_switch_live("/Library/GPUBundles/nvmtl-ws-no-setcache", "descriptor set cache", &on, &next);
 }
 static inline uint64_t nvmtl_set_mix(uint64_t h, uint64_t v)
 {
