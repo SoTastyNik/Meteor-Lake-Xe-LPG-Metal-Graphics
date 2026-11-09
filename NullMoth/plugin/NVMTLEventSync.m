@@ -29,6 +29,15 @@ static _Atomic unsigned gsub_inflight;
 static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, double deviceEnd);
 static _Atomic unsigned long long gsub_ahead, gsub_peak;
 static _Atomic unsigned long long gAheadWork;   // parts the ahead pass submitted, folded or retired
+/*
+ * v59: a part the ahead pass will not submit (it reads a host-pointer buffer, or no in-flight record was free) is the
+ * worker's to submit, and the worker has to hear about it. With split submit the worker hands such a part to the submit
+ * queue and stops; the queue pumped the worker only when it had submitted something, so a declined part was submitted
+ * by nobody: its command buffer never became scheduled and WindowServer's main thread waited in -waitUntilScheduled for
+ * good (v55's resynced stand-ins put host pointers into WindowServer's parts: frozen 20-60 s after every login). A
+ * declining pass now counts as work, so the queue pumps the worker.
+ */
+static void nvmtl_ahead_decline(NVMTLSubmissionPart *part);
 static BOOL nvmtl_split_submit_on(void);
 static void nvmtl_kick_submit(void);
 static NSMutableArray *nvmtl_quarantined_parts;
@@ -229,7 +238,7 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
         const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && *e ? e[0] - '0' : 3;
         if (access("/Library/GPUBundles/nvmtl-no-surface-order", F_OK) == 0) after = 0;
         if (after) syslog(LOG_ERR, "NullMoth: %s: surface writes before scheduled: mode %d%s", getprogname(), after,
-                          nvmtl_vk_windowserver_serial() ? " - not in WindowServer (v58)" : after == 3 ? " (two-plane surfaces)" : ""); }
+                          nvmtl_vk_windowserver_serial() ? (NVMTL_GB_OFF("nvmtl-ws-surface-order") ? " (two-plane surfaces, nvmtl-ws-surface-order)" : " - not in WindowServer (v58)") : after == 3 ? " (two-plane surfaces)" : ""); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
     for (NVMTLTexture *s in part->surfaces) {
         if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) { _scheduleAfterPublish = YES; continue; }
@@ -237,7 +246,7 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
         // commitAndWaitUntilSubmitted, and a command buffer whose "scheduled" waited for its completion could only
         // complete after work WindowServer commits once that wait returns: v56 froze it 20-30 s after every login
         // (watchdog: main thread in -waitUntilScheduled, the execution worker idle). Apps keep the ordering.
-        if (s == drawable || !after || nvmtl_vk_windowserver_serial()) continue;
+        if (s == drawable || !after || (nvmtl_vk_windowserver_serial() && !NVMTL_GB_OFF("nvmtl-ws-surface-order"))) continue;
         NVMTLTexture *r = s->_parent ? s->_parent : s;
         if (after == 1 || (r->_surf && (after == 3 ? IOSurfaceGetPlaneCount(r->_surf) > 1 : !r->_vramOn))) _scheduleAfterPublish = YES;
     }
@@ -455,6 +464,14 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
     }
     return copies;
 }
+static void nvmtl_ahead_decline(NVMTLSubmissionPart *part) {
+    if (part->aheadDeclined) return;
+    part->aheadDeclined = YES;
+    atomic_fetch_add(&gAheadWork, 1);
+    static _Atomic unsigned long long n; const unsigned long long k = atomic_fetch_add(&n, 1) + 1;
+    if (nvmtl_vk_windowserver_serial() && (k <= 2 || !(k & (k - 1))))
+        syslog(LOG_ERR, "NullMoth: split submit: %llu parts left to the execution worker (host pointers or no in-flight record)", k);
+}
 - (BOOL)nvmtlSubmitAhead {
     if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_pipeline()) return NO;
     if (_executionDone || _cbError || !_committed || _workerOwns) return NO;
@@ -484,11 +501,11 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
             if (hold < 0) { const char *e = getenv("NVMTL_GSUB_HOSTPTR_LIFT"); hold = (e && *e && *e != '0') ? 0 : 1; }
             if (hold) {
                 for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO))
-                    if (buffer->_hostPtr) { part->aheadDeclined = YES; return NO; }
+                    if (buffer->_hostPtr) { nvmtl_ahead_decline(part); return NO; }
             }
         }
         nvmtl_inflight *f = nvmtl_vk_inflight_new();
-        if (!f) { part->aheadDeclined = YES; return NO; }
+        if (!f) { nvmtl_ahead_decline(part); return NO; }
         for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO)) nvmtl_buffer_sync_in(buffer);
         [self nvmtlMarkScheduled];
         if (!_legacyKernelStart) _legacyKernelStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
