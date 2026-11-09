@@ -5187,6 +5187,15 @@ static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned s
             inflight = p->inflight != NULL; declined = p->aheadDeclined; submitting = p->submitting; waits = p->waitEvent != nil;
         }
     }
+    // v62_1: "scheduled" held back for its IOSurface writes (an app's) is reported after 500 ms without progress: a wait
+    // on it must never become the v56 deadlock (its completion may need work committed after this wait returns)
+    if (!strcmp(what, "scheduled") && stalls >= 2 && cb->_scheduleAfterPublish) {
+        cb->_scheduleAfterPublish = NO;
+        [cb nvmtlMarkScheduled];
+        static _Atomic unsigned long long forced; const unsigned long long f = atomic_fetch_add(&forced, 1) + 1;
+        if (f <= 8 || !(f & (f - 1))) syslog(LOG_ERR, "NullMoth: %s: command buffer %p reported scheduled before its surface copy-out after %u ms (#%llu)",
+                                             getprogname(), (__bridge void *)cb, stalls * NVMTL_WAIT_KICK_MS, f);
+    }
     syslog(LOG_ERR, "NullMoth: %s: command buffer %p waited %u ms for \"%s\" with no progress (#%llu): part %lu of %lu, "
            "in flight %d, declined %d, submitting %d, event wait %d, worker owns %d; %lu pending, pump %s - kicked",
            getprogname(), (__bridge void *)cb, stalls * NVMTL_WAIT_KICK_MS, what, n, (unsigned long)next, (unsigned long)parts,

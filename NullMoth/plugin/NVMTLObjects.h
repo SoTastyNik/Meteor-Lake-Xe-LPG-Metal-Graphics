@@ -148,6 +148,7 @@ extern id gNVMTLMainDevice;
 - (void)nvmtlSubmitWithEvents;
 - (BOOL)nvmtlAdvancePart;
 - (BOOL)nvmtlSubmitAhead;
+- (void)nvmtlMarkScheduled;   // v62_1: the wait kick reports a held-back "scheduled" (NVMTLEventSync.m)
 - (void)nvmtlReleaseCapacity;
 - (void)nvmtlRecordEncodingError:(NSError *)error;
 - (void)nvmtlFinishCallbacks;

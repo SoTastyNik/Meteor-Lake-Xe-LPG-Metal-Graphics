@@ -124,9 +124,16 @@ static int nvmtl_ss_ready(void)
         g_ss_wait = access("/Library/GPUBundles/nvmtl-surf-sync-probe", F_OK) != 0;
         int r = 0;
         if (ok) {
-            io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("NMXGPU"));
-            ok = s && IOServiceOpen(s, mach_task_self(), 'NMXD', &g_ss_conn) == KERN_SUCCESS;
-            if (s) IOObjectRelease(s);
+            // v62_1: NMXAccel first, as libdrm's nmx_uc_connect does: an app sandbox (Photo Booth, Chess, the video decoder,
+            // mediaanalysisd) may open the accelerator's 'NMXD' client (the same IOAccelNMXDRMClient) but not NMXGPU's,
+            // and v61/v62 had no surface sync in exactly those processes
+            static const char *const prov[] = { "NMXAccel", "NMXGPU" };
+            ok = 0;
+            for (unsigned i = 0; i < 2 && !ok; i++) {
+                io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(prov[i]));
+                ok = s && IOServiceOpen(s, mach_task_self(), 'NMXD', &g_ss_conn) == KERN_SUCCESS;
+                if (s) IOObjectRelease(s);
+            }
             if (ok) {
                 struct nmx_surf_sync a = { 0, 3, 0, { 0 } };
                 r = nvmtl_ss_call(&a);

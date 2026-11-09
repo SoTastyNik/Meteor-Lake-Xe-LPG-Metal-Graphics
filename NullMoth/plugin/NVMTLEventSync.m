@@ -238,10 +238,13 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
     static int after = -1; if (after < 0) {
         const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && *e ? e[0] - '0' : 3;
         if (access("/Library/GPUBundles/nvmtl-no-surface-order", F_OK) == 0) after = 0;
-        // v62: where NMXGPU synchronises surface writes (v61: a reader's CPU lock waits for the write before it), the
-        // delayed "scheduled" is not needed, and it was the mechanism that could deadlock (v56). Kept where the kernel
-        // cannot hold readers (a process with no NMXGPU client, the probe), and with nvmtl-surface-order-always.
-        if (!e && after == 3 && nvmtl_vk_surf_sync_waits() && access("/Library/GPUBundles/nvmtl-surface-order-always", F_OK) != 0) after = 0;
+        // v62_1: in an app, every IOSurface write but the presented drawable. NMXGPU's surface sync holds a CPU reader,
+        // but WindowServer and other processes also READ ON THE GPU (no lock): Flutter (Happ), Chromium and CoreImage
+        // commit, wait until scheduled and hand the IOSurface over, relying on Apple's GPU running every process's work in
+        // order - here WindowServer could sample a frame the app had not finished (flicker, half-drawn Photo Booth shots,
+        // an encoder fed stale frames). A wait that sees no progress for 500 ms reports "scheduled" anyway (no v56 deadlock).
+        // nvmtl-app-surface-order-twoplane: the v62 rule (two-plane only).
+        if (!e && after == 3 && !nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-app-surface-order-twoplane", F_OK) != 0) after = 1;
         if (after) syslog(LOG_ERR, "NullMoth: %s: surface writes before scheduled: mode %d%s", getprogname(), after,
                           nvmtl_vk_windowserver_serial() ? (NVMTL_GB_OFF("nvmtl-ws-surface-order") ? " (two-plane surfaces, nvmtl-ws-surface-order)" : " - not in WindowServer (v58)") : after == 3 ? " (two-plane surfaces)" : ""); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;

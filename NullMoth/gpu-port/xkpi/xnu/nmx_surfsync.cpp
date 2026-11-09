@@ -65,7 +65,6 @@ static IORegistryEntry *g_ss_key;   /* the caches' key: an OSObject of ours, not
 static void *g_ss_root;
 static int g_ss_state;              /* 0 not tried, 1 on, -1 off (an IOSurface function is missing) */
 static SInt64 g_ss_ops[8], g_ss_pend, g_ss_done, g_ss_attach, g_ss_evict, g_ss_nosurf, g_ss_late, g_ss_inorder, g_ss_foreign;
-static SInt64 g_ss_logged;
 static SInt64 g_ss_waits, g_ss_timeouts, g_ss_selfpass, g_ss_wait_us_sum, g_ss_wait_us_max, g_ss_wspass;
 
 static bool nmx_ss_init(void)
@@ -175,7 +174,9 @@ static void nmx_ss_control(void *key, void *cache, unsigned int op, unsigned lon
         if (us > g_ss_wait_us_max)
             g_ss_wait_us_max = us;
     }
-    if (late && (OSIncrementAtomic64(&g_ss_logged) < 48 || (timedout && g_ss_timeouts <= 16))) {
+    static SInt64 selfLogged, otherLogged;
+    const bool logit = late && (self ? OSIncrementAtomic64(&selfLogged) < 6 : (OSIncrementAtomic64(&otherLogged) < 64 || (timedout && g_ss_timeouts <= 32)));
+    if (logit) {
         char nm[32] = { 0 };
         proc_selfname(nm, sizeof nm);
         IOLog("NullMoth GPU: surfsync: CPU lock of surface %u by %s[%d] came with write %llu of %llu done: %s%lld us (key %s, a 0x%llx b 0x%llx)\n",
@@ -189,7 +190,7 @@ static void nmx_ss_control(void *key, void *cache, unsigned int op, unsigned lon
 static void nmx_ss_summary(void)
 {
     const SInt64 n = g_ss_pend;
-    if (n == 16 || (n > 0 && (n & 4095) == 0))
+    if (n == 16 || (n > 0 && (n & 1023) == 0))
         IOLog("NullMoth GPU: surfsync: %lld writes, %lld done, %lld caches made, %lld dropped, %lld no surface; CPU locks %lld "
               "before their write landed (%lld waited, %lld timed out, %lld copy-outs and %lld WindowServer locks passed; wait avg %lld us max %lld us), %lld after; "
               "control ops 0:%lld 2:%lld 3:%lld 4:%lld 5:%lld other:%lld, foreign key %lld\n",
