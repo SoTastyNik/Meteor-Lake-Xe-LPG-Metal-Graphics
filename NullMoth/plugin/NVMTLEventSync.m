@@ -228,12 +228,16 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
     static int after = -1; if (after < 0) {
         const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && *e ? e[0] - '0' : 3;
         if (access("/Library/GPUBundles/nvmtl-no-surface-order", F_OK) == 0) after = 0;
-        if (nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: surface writes before scheduled: mode %d%s", after,
-                                                   after == 3 ? " (two-plane surfaces)" : after ? "" : " (off)"); }
+        if (after) syslog(LOG_ERR, "NullMoth: %s: surface writes before scheduled: mode %d%s", getprogname(), after,
+                          nvmtl_vk_windowserver_serial() ? " - not in WindowServer (v58)" : after == 3 ? " (two-plane surfaces)" : ""); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
     for (NVMTLTexture *s in part->surfaces) {
         if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) { _scheduleAfterPublish = YES; continue; }
-        if (s == drawable || !after) continue;
+        // v58: not in WindowServer. With early scheduling and split submit its main thread waits for "scheduled" in
+        // commitAndWaitUntilSubmitted, and a command buffer whose "scheduled" waited for its completion could only
+        // complete after work WindowServer commits once that wait returns: v56 froze it 20-30 s after every login
+        // (watchdog: main thread in -waitUntilScheduled, the execution worker idle). Apps keep the ordering.
+        if (s == drawable || !after || nvmtl_vk_windowserver_serial()) continue;
         NVMTLTexture *r = s->_parent ? s->_parent : s;
         if (after == 1 || (r->_surf && (after == 3 ? IOSurfaceGetPlaneCount(r->_surf) > 1 : !r->_vramOn))) _scheduleAfterPublish = YES;
     }
