@@ -5165,17 +5165,60 @@ static void nvmtl_app_surface_wait(NVMTLCommandBuffer *cb)
 }
 - (CFTimeInterval)kernelStartTime { return _legacyKernelStart; }
 - (CFTimeInterval)kernelEndTime { return _legacyKernelEnd; }
+/*
+ * v62: a wait for "scheduled" or "completed" that sees no progress for NVMTL_WAIT_KICK_MS kicks the pump and logs the
+ * command buffer's state. v56-v58 froze WindowServer on a lost wake-up (a part the submit queue declined and nobody
+ * submitted, fixed in v59): a wait now turns any such gap into a short stall and a log line naming it instead of a
+ * frozen desktop. A wait that is just long (heavy GPU work) kicks a pump that finds nothing to do.
+ */
+#define NVMTL_WAIT_KICK_MS 250
+static _Atomic unsigned long long gWaitKicks;
+static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned stalls)
+{
+    nvmtl_pump_buffers();
+    const unsigned long long n = atomic_fetch_add(&gWaitKicks, 1) + 1;
+    // completions may be slow on their own: name a "completed" wait only once it has gone a second without progress
+    if ((strcmp(what, "scheduled") && stalls < 4) || (n > 16 && (n & 63))) return;
+    NSUInteger parts = 0, next = 0, pending = 0; BOOL pumping = NO, inflight = NO, declined = NO, submitting = NO, waits = NO, owns = NO;
+    @synchronized ([NVMTLCommandBuffer class]) {
+        parts = cb->_parts.count; next = cb->_nextPart; pending = nvmtl_pending_buffers.count; pumping = nvmtl_pumping; owns = cb->_workerOwns;
+        if (next < parts && [cb->_parts[next] isKindOfClass:[NVMTLSubmissionPart class]]) {
+            NVMTLSubmissionPart *p = cb->_parts[next];
+            inflight = p->inflight != NULL; declined = p->aheadDeclined; submitting = p->submitting; waits = p->waitEvent != nil;
+        }
+    }
+    syslog(LOG_ERR, "NullMoth: %s: command buffer %p waited %u ms for \"%s\" with no progress (#%llu): part %lu of %lu, "
+           "in flight %d, declined %d, submitting %d, event wait %d, worker owns %d; %lu pending, pump %s - kicked",
+           getprogname(), (__bridge void *)cb, stalls * NVMTL_WAIT_KICK_MS, what, n, (unsigned long)next, (unsigned long)parts,
+           inflight, declined, submitting, waits, owns, (unsigned long)pending, pumping ? "running" : "idle");
+}
 - (void)waitUntilCompleted {
     const unsigned long long t0 = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
     _nWait++; [_completionCondition lock];
-    while (!_completionReady) [_completionCondition wait];
+    unsigned stalls = 0;
+    while (!_completionReady) {
+        if (![_completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:NVMTL_WAIT_KICK_MS / 1000.0]] && !_completionReady) {
+            stalls++;
+            [_completionCondition unlock];
+            nvmtl_wait_kick(self, "completed", stalls);
+            [_completionCondition lock];
+        }
+    }
     [_completionCondition unlock];
     dispatch_group_wait(_callbackGroup, DISPATCH_TIME_FOREVER);
     NVS(NVS_WAIT); NVSN(NVS_WAITNS, clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - t0);
 }
 - (void)waitUntilScheduled {
     _nWait++; [_completionCondition lock];
-    while (!_wasScheduled && !_executionDone) [_completionCondition wait];
+    unsigned stalls = 0;
+    while (!_wasScheduled && !_executionDone) {
+        if (![_completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:NVMTL_WAIT_KICK_MS / 1000.0]] && !_wasScheduled && !_executionDone) {
+            stalls++;
+            [_completionCondition unlock];
+            nvmtl_wait_kick(self, "scheduled", stalls);
+            [_completionCondition lock];
+        }
+    }
     [_completionCondition unlock];
     dispatch_group_wait(_scheduledGroup, DISPATCH_TIME_FOREVER);
 }

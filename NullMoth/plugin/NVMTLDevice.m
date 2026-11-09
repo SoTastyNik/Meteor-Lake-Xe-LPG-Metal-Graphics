@@ -652,6 +652,14 @@ static int nvmtl_pixfmt(MTLPixelFormat f, uint32_t *vk, uint32_t *bpp, int *a8)
     case MTLPixelFormatRGB10A2Uint:      *vk = 68 ; *bpp = 4; return 0;
     case MTLPixelFormatBGR10A2Unorm:     *vk = 58 ; *bpp = 4; return 0;
     case MTLPixelFormatRG11B10Float:     *vk = 122 ; *bpp = 4; return 0;
+    // v62 (upstream 2.5.1): Apple's extended-range formats have no Vulkan twin. CoreAnimation renders video and wide-colour
+    // layers into them (PBGRAXb is BGRA10_XR); upstream: Apple TV aborted on every video, dragging killed Telegram (#309,
+    // #280). Each maps to a format of the same size holding what this driver's readers expect: the 64-bit ones to half
+    // floats (the whole -0.75..1.25 range, blendable), the 32-bit ones to 10:10:10:2 unorm (values above 1.0 clamp).
+    case MTLPixelFormatBGRA10_XR:        *vk = 97 ; *bpp = 8; return 0;
+    case MTLPixelFormatBGRA10_XR_sRGB:   *vk = 97 ; *bpp = 8; return 0;
+    case MTLPixelFormatBGR10_XR:         *vk = 58 ; *bpp = 4; return 0;
+    case MTLPixelFormatBGR10_XR_sRGB:    *vk = 58 ; *bpp = 4; return 0;
     case MTLPixelFormatRGB9E5Float:      *vk = 123 ;  *bpp = 4; return 0;
     case MTLPixelFormatRG32Uint:         *vk = 101 ;           *bpp = 8;  return 0;
     case MTLPixelFormatRG32Sint:         *vk = 102 ;           *bpp = 8;  return 0;

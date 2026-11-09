@@ -146,6 +146,7 @@ uint64_t nvmtl_vk_surf_pending(uint32_t surface_id)
     struct nmx_surf_sync a = { surface_id, 1, 0, { (uint64_t)g_ss_wait } };
     return nvmtl_ss_call(&a) == 0 ? a.seq : 0;
 }
+int nvmtl_vk_surf_sync_waits(void) { return nvmtl_ss_ready() && g_ss_wait; }
 void nvmtl_vk_surf_publish(uint32_t surface_id)
 {
     if (!surface_id || !nvmtl_ss_ready()) return;

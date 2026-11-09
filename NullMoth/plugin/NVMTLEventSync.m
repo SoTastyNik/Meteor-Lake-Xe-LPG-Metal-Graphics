@@ -238,6 +238,10 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
     static int after = -1; if (after < 0) {
         const char *e = getenv("NVMTL_SCHEDULE_AFTER_SURFACE_WRITES"); after = e && *e ? e[0] - '0' : 3;
         if (access("/Library/GPUBundles/nvmtl-no-surface-order", F_OK) == 0) after = 0;
+        // v62: where NMXGPU synchronises surface writes (v61: a reader's CPU lock waits for the write before it), the
+        // delayed "scheduled" is not needed, and it was the mechanism that could deadlock (v56). Kept where the kernel
+        // cannot hold readers (a process with no NMXGPU client, the probe), and with nvmtl-surface-order-always.
+        if (!e && after == 3 && nvmtl_vk_surf_sync_waits() && access("/Library/GPUBundles/nvmtl-surface-order-always", F_OK) != 0) after = 0;
         if (after) syslog(LOG_ERR, "NullMoth: %s: surface writes before scheduled: mode %d%s", getprogname(), after,
                           nvmtl_vk_windowserver_serial() ? (NVMTL_GB_OFF("nvmtl-ws-surface-order") ? " (two-plane surfaces, nvmtl-ws-surface-order)" : " - not in WindowServer (v58)") : after == 3 ? " (two-plane surfaces)" : ""); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
