@@ -9,17 +9,23 @@
  * chroma), and v56 tried to cover it by delaying "scheduled", which deadlocked WindowServer.
  *
  * The Metal plugin numbers each write: PENDING when it commits a command buffer that writes the surface (the device cache
- * is made current), DONE once that write is in the pages. v60 is the probe: the control function only counts how often a
- * CPU lock came while a write was still pending (what a wait would have covered), and the kernel log says whether the
- * IOSurface functions exist in this macOS at all (weak links: a missing one turns the ioctl off, it does not fail the
- * load). Records are found by the cache pointer, not through IOSurface's private layout. Ported in spirit from
- * ArrowWhatever's page-off (patches/0024, Xe-LPG on macOS 26) and Apple's IOAccelerator device-cache model.
+ * is made current), DONE once that write is in the pages. The v60 probe found the calls present in macOS 15.8.2 and
+ * 1306 of 2035 CPU locks coming before their write landed (OBS read each frame it drew too early; a Photo Booth photo
+ * held half a frame). v61: such a lock waits for the writes committed before it, NMX_SS_WAIT_MS at most, unless the
+ * plugin asked for the probe only (PENDING's flags) or the locking thread is the one copying that write out (PUBLISH:
+ * the plugin's own lock for the copy-out must not wait for itself). IOSurface functions are weak links: a missing one
+ * turns the ioctl off, it does not fail the load. Records are found by the cache pointer, not through IOSurface's private
+ * layout. Ported in spirit from ArrowWhatever's page-off (patches/0024, Xe-LPG on macOS 26) and Apple's IOAccelerator
+ * device-cache model.
  */
 #include <sys/types.h>
 #include <sys/errno.h>
 #include <sys/proc.h>
 #include <kern/task.h>
+#include <kern/thread.h>
+#include <kern/clock.h>
 #include <mach/mach_time.h>
+#include <string.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -41,6 +47,8 @@ void _ZN20IOSurfaceDeviceCache10setCurrentEv(void *cache) __attribute__((weak_im
 #define NMX_WEAK_OK(fn) ((const void *)(uintptr_t)&(fn) != gOSKextUnresolved)
 #define NMX_SS_ACCEL_ID 0x4e4d5853u     /* 'NMXS'; not 0, a CPU lock passes 0 as its own owner */
 #define NMX_SS_N 32
+#define NMX_SS_WAIT_MS 150              /* a CPU lock waits at most this long for the writes before it */
+#define NMX_SS_STALE_NS 2000000000ull   /* a record idle this long may be reused even with a write never marked done */
 
 struct nmx_ss_rec {
     unsigned int id;
@@ -48,6 +56,8 @@ struct nmx_ss_rec {
     void *cache;            /* +1, ours */
     uint64_t pending, done; /* write numbers: the last PENDING handed out, the highest DONE */
     uint64_t last;          /* mach_absolute_time of the last PENDING or DONE */
+    void *publisher;        /* the thread copying a write of this surface out (PUBLISH), whose own lock does not wait */
+    uint32_t wait;          /* the last PENDING asked for waits (0: probe only) */
 };
 static nmx_ss_rec g_ss[NMX_SS_N];
 static IOLock *g_ss_lock;
@@ -56,6 +66,7 @@ static void *g_ss_root;
 static int g_ss_state;              /* 0 not tried, 1 on, -1 off (an IOSurface function is missing) */
 static SInt64 g_ss_ops[8], g_ss_pend, g_ss_done, g_ss_attach, g_ss_evict, g_ss_nosurf, g_ss_late, g_ss_inorder, g_ss_foreign;
 static SInt64 g_ss_logged;
+static SInt64 g_ss_waits, g_ss_timeouts, g_ss_selfpass, g_ss_wait_us_sum, g_ss_wait_us_max, g_ss_wspass;
 
 static bool nmx_ss_init(void)
 {
@@ -90,7 +101,8 @@ static bool nmx_ss_init(void)
     }
     g_ss_lock = l; g_ss_key = k; g_ss_root = root;   /* kept for the kext's life */
     g_ss_state = 1;
-    IOLog("NullMoth GPU: surfsync: ON (probe: CPU locks are counted, not held)\n");
+    IOLog("NullMoth GPU: surfsync: ON (a CPU lock waits up to %d ms for the GPU's writes before it, unless the plugin asks for the probe)\n",
+          NMX_SS_WAIT_MS);
     return true;
 }
 
@@ -115,22 +127,62 @@ static void nmx_ss_control(void *key, void *cache, unsigned int op, unsigned lon
         OSIncrementAtomic64(&g_ss_foreign);
     if (op != 0)
         return;
+    const uint64_t t0 = mach_absolute_time();
     unsigned int id = 0;
-    uint64_t pending = 0, done = 0;
+    uint64_t target = 0, done0 = 0;
+    bool found = false, self = false, waited = false, timedout = false, ws = false;
     IOLockLock(g_ss_lock);
     nmx_ss_rec *r = nmx_ss_find_cache_locked(cache);
-    if (r) { id = r->id; pending = r->pending; done = r->done; }
+    if (r) {
+        found = true;
+        id = r->id; target = r->pending; done0 = r->done;
+        self = r->publisher && r->publisher == (void *)current_thread();
+        if (done0 < target && r->wait && !self) {
+            /* WindowServer's own locks are not held: it composites, and a lock held there is a dropped frame (v62 orders
+               its reads another way) */
+            char nm[32] = { 0 };
+            proc_selfname(nm, sizeof nm);
+            ws = strncmp(nm, "WindowServer", sizeof nm) == 0;
+        }
+        if (done0 < target && r->wait && !self && !ws) {
+            uint64_t deadline = 0;
+            clock_interval_to_deadline(NMX_SS_WAIT_MS, kMillisecondScale, &deadline);
+            waited = true;
+            while (r->cache == cache && r->done < target) {
+                if (IOLockSleepDeadline(g_ss_lock, &r->done, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+                    timedout = r->cache == cache && r->done < target;
+                    break;
+                }
+            }
+        }
+    }
     IOLockUnlock(g_ss_lock);
-    if (!r)
+    if (!found)
         return;
-    const bool late = done < pending;
+    const bool late = done0 < target;
     OSIncrementAtomic64(late ? &g_ss_late : &g_ss_inorder);
-    if (OSIncrementAtomic64(&g_ss_logged) < 48) {
+    if (self && late)
+        OSIncrementAtomic64(&g_ss_selfpass);
+    if (ws && late)
+        OSIncrementAtomic64(&g_ss_wspass);
+    SInt64 us = 0;
+    if (waited) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+        us = (SInt64)(ns / 1000);
+        OSIncrementAtomic64(timedout ? &g_ss_timeouts : &g_ss_waits);
+        OSAddAtomic64(us, &g_ss_wait_us_sum);
+        if (us > g_ss_wait_us_max)
+            g_ss_wait_us_max = us;
+    }
+    if (late && (OSIncrementAtomic64(&g_ss_logged) < 48 || (timedout && g_ss_timeouts <= 16))) {
         char nm[32] = { 0 };
         proc_selfname(nm, sizeof nm);
-        IOLog("NullMoth GPU: surfsync: CPU lock of surface %u by %s[%d] with write %llu of %llu done%s (key %s, a 0x%llx b 0x%llx)\n",
-              id, nm, proc_selfpid(), (unsigned long long)done, (unsigned long long)pending,
-              late ? " - WOULD WAIT" : "", key == g_ss_key ? "ours" : "OTHER", a, b);
+        IOLog("NullMoth GPU: surfsync: CPU lock of surface %u by %s[%d] came with write %llu of %llu done: %s%lld us (key %s, a 0x%llx b 0x%llx)\n",
+              id, nm, proc_selfpid(), (unsigned long long)done0, (unsigned long long)target,
+              self ? "its own copy-out, not held " : ws ? "WindowServer, not held " : !waited ? "probe, not held " :
+              timedout ? "TIMED OUT after " : "waited ",
+              (long long)us, key == g_ss_key ? "ours" : "OTHER", a, b);
     }
 }
 
@@ -139,15 +191,18 @@ static void nmx_ss_summary(void)
     const SInt64 n = g_ss_pend;
     if (n == 16 || (n > 0 && (n & 4095) == 0))
         IOLog("NullMoth GPU: surfsync: %lld writes, %lld done, %lld caches made, %lld dropped, %lld no surface; CPU locks %lld "
-              "before their write landed, %lld after; control ops 0:%lld 2:%lld 3:%lld 4:%lld 5:%lld other:%lld, foreign key %lld\n",
+              "before their write landed (%lld waited, %lld timed out, %lld copy-outs and %lld WindowServer locks passed; wait avg %lld us max %lld us), %lld after; "
+              "control ops 0:%lld 2:%lld 3:%lld 4:%lld 5:%lld other:%lld, foreign key %lld\n",
               (long long)n, (long long)g_ss_done, (long long)g_ss_attach, (long long)g_ss_evict, (long long)g_ss_nosurf,
-              (long long)g_ss_late, (long long)g_ss_inorder, (long long)g_ss_ops[0], (long long)g_ss_ops[2], (long long)g_ss_ops[3],
+              (long long)g_ss_late, (long long)g_ss_waits, (long long)g_ss_timeouts, (long long)g_ss_selfpass, (long long)g_ss_wspass,
+              (long long)(g_ss_waits + g_ss_timeouts ? g_ss_wait_us_sum / (g_ss_waits + g_ss_timeouts) : 0), (long long)g_ss_wait_us_max,
+              (long long)g_ss_inorder, (long long)g_ss_ops[0], (long long)g_ss_ops[2], (long long)g_ss_ops[3],
               (long long)g_ss_ops[4], (long long)g_ss_ops[5], (long long)(g_ss_ops[1] + g_ss_ops[6] + g_ss_ops[7]),
               (long long)g_ss_foreign);
 }
 
 /* PENDING: a write into surface 'id' (looked up in the caller's task) gets the next number; its cache is made current */
-static int nmx_ss_pending(unsigned int id, uint64_t *seq)
+static int nmx_ss_pending(unsigned int id, uint64_t *seq, uint32_t wait)
 {
     void *surf = _ZN13IOSurfaceRoot13lookupSurfaceEjP4task(g_ss_root, id, current_task());   /* +1 */
     if (!surf) {
@@ -166,10 +221,16 @@ static int nmx_ss_pending(unsigned int id, uint64_t *seq)
         nmx_ss_rec *idle = nullptr;
         for (unsigned i = 0; i < NMX_SS_N && !r; i++) {
             if (!g_ss[i].cache) r = &g_ss[i];
-            else if (g_ss[i].id == id || (g_ss[i].done >= g_ss[i].pending && (!idle || g_ss[i].last < idle->last))) idle = &g_ss[i];
+            else {
+                uint64_t idle_ns = 0;
+                absolutetime_to_nanoseconds(now - g_ss[i].last, &idle_ns);
+                const bool reusable = g_ss[i].id == id || g_ss[i].done >= g_ss[i].pending || idle_ns > NMX_SS_STALE_NS;
+                if (reusable && (!idle || g_ss[i].last < idle->last)) idle = &g_ss[i];
+            }
         }
         if (!r && idle) {
             drop = idle->cache;
+            IOLockWakeup(g_ss_lock, &idle->done, false);   /* a lock still waiting on it sees the cache gone */
             bzero(idle, sizeof *idle);
             r = idle;
             OSIncrementAtomic64(&g_ss_evict);
@@ -188,6 +249,7 @@ static int nmx_ss_pending(unsigned int id, uint64_t *seq)
     if (r) {
         *seq = ++r->pending;
         r->last = now;
+        r->wait = wait;
         cache = r->cache;
         ((OSObject *)cache)->retain();
     }
@@ -206,6 +268,17 @@ static int nmx_ss_pending(unsigned int id, uint64_t *seq)
     return 0;
 }
 
+/* PUBLISH: the calling thread is about to copy a write of surface 'id' out; its own CPU lock must not wait (until DONE) */
+static int nmx_ss_publish(unsigned int id)
+{
+    IOLockLock(g_ss_lock);
+    for (unsigned i = 0; i < NMX_SS_N; i++)
+        if (g_ss[i].id == id && g_ss[i].cache)
+            g_ss[i].publisher = (void *)current_thread();
+    IOLockUnlock(g_ss_lock);
+    return 0;
+}
+
 /* DONE: write 'seq' of surface 'id' is in the pages */
 static int nmx_ss_done(unsigned int id, uint64_t seq)
 {
@@ -216,7 +289,10 @@ static int nmx_ss_done(unsigned int id, uint64_t seq)
             continue;
         if (seq > r->done && seq <= r->pending)
             r->done = seq;
+        if (r->publisher == (void *)current_thread())
+            r->publisher = nullptr;
         r->last = mach_absolute_time();
+        IOLockWakeup(g_ss_lock, &r->done, false);
     }
     IOLockUnlock(g_ss_lock);
     OSIncrementAtomic64(&g_ss_done);
@@ -228,13 +304,17 @@ extern "C" int nmx_xnu_surf_sync(uint32_t surface, uint32_t op, uint64_t *seq, u
     if (!nmx_ss_init())
         return ENOTSUP;
     switch (op) {
-    case 1:
+    case 1: {
+        const uint32_t wait = nstats ? (uint32_t)(stats[0] & 1) : 0;   /* PENDING's flags: bit 0 = readers wait */
         *seq = 0;
-        return nmx_ss_pending(surface, seq);
+        return nmx_ss_pending(surface, seq, wait);
+    }
     case 2:
         return nmx_ss_done(surface, *seq);
+    case 4:
+        return nmx_ss_publish(surface);
     case 3: {
-        const SInt64 v[6] = { g_ss_pend, g_ss_done, g_ss_late, g_ss_inorder, g_ss_attach, g_ss_ops[0] };
+        const SInt64 v[6] = { g_ss_pend, g_ss_done, g_ss_late, g_ss_inorder, g_ss_waits, g_ss_timeouts };
         for (uint32_t i = 0; i < nstats && i < 6; i++)
             stats[i] = (uint64_t)v[i];
         return 0;

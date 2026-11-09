@@ -105,7 +105,7 @@ uint16_t nvmtl_vk_set_accelerator(mach_port_t accel)
 struct nmx_surf_sync { uint32_t surface, op; uint64_t seq; uint64_t stats[6]; };
 #define NMX_DRM_IOCTL_SURF_SYNC _IOWR('N', 0x45, struct nmx_surf_sync)
 static io_connect_t g_ss_conn;
-static int g_ss_on = -1;
+static int g_ss_on = -1, g_ss_wait;
 static pthread_mutex_t g_ss_lock = PTHREAD_MUTEX_INITIALIZER;
 static int nvmtl_ss_call(struct nmx_surf_sync *a)
 {
@@ -120,6 +120,8 @@ static int nvmtl_ss_ready(void)
     pthread_mutex_lock(&g_ss_lock);
     if (g_ss_on < 0) {
         int ok = nvmtl_vk_vendor() == 0x8086 && access("/Library/GPUBundles/nvmtl-no-surf-sync", F_OK) != 0;
+        /* v61: a CPU lock that comes before a write landed waits for it; nvmtl-surf-sync-probe only counts (v60) */
+        g_ss_wait = access("/Library/GPUBundles/nvmtl-surf-sync-probe", F_OK) != 0;
         int r = 0;
         if (ok) {
             io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("NMXGPU"));
@@ -130,7 +132,8 @@ static int nvmtl_ss_ready(void)
                 r = nvmtl_ss_call(&a);
                 if (r) { ok = 0; IOServiceClose(g_ss_conn); g_ss_conn = 0; }
             }
-            syslog(LOG_ERR, "NullMoth: %s: surface sync %s (%d)", getprogname(), ok ? "on" : "OFF - no NMXGPU client or the kernel refused it", r);
+            syslog(LOG_ERR, "NullMoth: %s: surface sync %s (%d)", getprogname(),
+                   !ok ? "OFF - no NMXGPU client or the kernel refused it" : g_ss_wait ? "on, readers wait" : "on, probe only", r);
         }
         __atomic_store_n(&g_ss_on, ok, __ATOMIC_RELEASE);
     }
@@ -140,8 +143,14 @@ static int nvmtl_ss_ready(void)
 uint64_t nvmtl_vk_surf_pending(uint32_t surface_id)
 {
     if (!surface_id || !nvmtl_ss_ready()) return 0;
-    struct nmx_surf_sync a = { surface_id, 1, 0, { 0 } };
+    struct nmx_surf_sync a = { surface_id, 1, 0, { (uint64_t)g_ss_wait } };
     return nvmtl_ss_call(&a) == 0 ? a.seq : 0;
+}
+void nvmtl_vk_surf_publish(uint32_t surface_id)
+{
+    if (!surface_id || !nvmtl_ss_ready()) return;
+    struct nmx_surf_sync a = { surface_id, 4, 0, { 0 } };
+    (void)nvmtl_ss_call(&a);
 }
 void nvmtl_vk_surf_done(uint32_t surface_id, uint64_t seq)
 {

@@ -723,7 +723,12 @@ static void nvmtl_gsub_ahead_pass1(void) {
             for (NVMTLTexture *texture in part->surfaces) {
                 if ([part->tile4Mark containsObject:texture]) nvmtl_surface_mark_tile4(texture);
                 if ([part->hybridOut containsObject:texture]) [texture nvmtlHybridCopied];
-                else if (![texture nvmtlSurfaceOut]) { published = NO; continue; }
+                else {
+                    // v61: the copy-out locks the surface; that lock must not wait for the very write it publishes
+                    NVMTLTexture *root = texture->_parent ? texture->_parent : texture;
+                    if (root->_surf && part->ssSeq[@(IOSurfaceGetID(root->_surf))]) nvmtl_vk_surf_publish(IOSurfaceGetID(root->_surf));
+                    if (![texture nvmtlSurfaceOut]) { published = NO; continue; }
+                }
                 nvmtl_mark_published(self, texture->_parent ? texture->_parent : texture);
             }
             if(phaseBegin)phaseSurfaces=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);

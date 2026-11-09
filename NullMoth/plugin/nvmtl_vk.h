@@ -88,6 +88,8 @@ uint16_t nvmtl_vk_vendor(void);
    and marked done once it is in the pages; 0 = not tracked */
 uint64_t nvmtl_vk_surf_pending(uint32_t surface_id);
 void nvmtl_vk_surf_done(uint32_t surface_id, uint64_t seq);
+/* v61: this thread is about to copy a write of the surface out; its own CPU lock must not wait for that write */
+void nvmtl_vk_surf_publish(uint32_t surface_id);
 void nvmtl_vk_limits(uint32_t *layers, uint32_t *shared_bytes, uint32_t wg[3], uint32_t *wg_inv, uint32_t *sm);
 int nvmtl_vk_tg_reject(const uint32_t l[3], const uint32_t *t, const char *kernel, uint32_t lin);
 void nvmtl_vk_pubcaps(uint32_t *color_samples, uint32_t *depth_samples, uint64_t *max_storage_range, uint64_t *linear_align);

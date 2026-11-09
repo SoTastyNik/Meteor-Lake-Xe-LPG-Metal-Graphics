@@ -167,7 +167,9 @@ def main():
     # IOSurfaceRoot lookup and its matching, the caches' key object, the process name in the log, its counters
     surfsync = ('__ZN9IOSurface', '__ZN13IOSurfaceRoot', '__ZN20IOSurfaceDeviceCache', '__ZN15IORegistryEntry',
                 '__ZN9IOService15serviceMatching', '__ZN9IOService22waitForMatchingService')
-    upstream |= {u for u in undefined if u.startswith(surfsync)} | {'_gOSKextUnresolved', '_proc_selfname', '_proc_selfpid', '_OSAddAtomic64'}
+    upstream |= {u for u in undefined if u.startswith(surfsync)} | {'_gOSKextUnresolved', '_proc_selfname', '_proc_selfpid', '_OSAddAtomic64',
+                                                              '_current_thread', '_clock_interval_to_deadline', '_absolutetime_to_nanoseconds',
+                                                              '_IOLockSleepDeadline', '_IOLockWakeup', '_strncmp'}
     extra = sorted(set(undefined) - upstream)
     assert not extra, f'imports the upstream 1.0.15 kernel does not have: {extra}'
     subprocess.run(['codesign', '--force', '--sign', '-', str(OUT / 'NMXGPU.kext')], check=True)
