@@ -306,7 +306,7 @@ static NSString *nvmtl_spvcache_dir(void) {
         // v56: WindowServer's sandbox allows writes only inside its own named folders (.../C/WindowServer): when the folder
         // beside the AIR cache refused it, it translated every CoreAnimation shader again on each boot (WTLIntelGfx)
         NSString *own = nil;
-        { char ucd[PATH_MAX]; const size_t n = confstr(_CS_DARWIN_USER_CACHE_DIR, ucd, sizeof ucd);
+        if (!NVMTL_GB_OFF("nvmtl-no-spvcache-own")) { char ucd[PATH_MAX]; const size_t n = confstr(_CS_DARWIN_USER_CACHE_DIR, ucd, sizeof ucd);
           if (n > 0 && n <= sizeof ucd) own = [[@(ucd) stringByAppendingPathComponent:@(getprogname())] stringByAppendingPathComponent:@"nvmtl/spvcache"]; }
         if (nvmtl_dir_writable(beside)) dir = beside;
         else if (nvmtl_dir_writable(own)) {

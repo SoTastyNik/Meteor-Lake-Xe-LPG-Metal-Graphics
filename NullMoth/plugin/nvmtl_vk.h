@@ -7,6 +7,10 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <unistd.h>
+/* v57: 1 when /Library/GPUBundles/<file> exists, looked at once per process and call site */
+#define NVMTL_GB_OFF(file) ({ static int nvmtl_gb_v_ = -1; \
+    if (nvmtl_gb_v_ < 0) nvmtl_gb_v_ = access("/Library/GPUBundles/" file, F_OK) == 0; nvmtl_gb_v_; })
 const char *nvmtl_image_ident(const void *addr, char *out, size_t n);
 typedef struct { void *buf; void *mem; void *map; size_t size; size_t alloc; int placed; void *pool; size_t poff; int imported; int bar1; size_t moff; int sparse, sysmem; uint32_t memtype1; /* memory type + 1, 0 unknown */ uint64_t trace_id; } nvk_buffer;
 #include "nvmtl_sample_positions.h"

@@ -806,6 +806,18 @@ static int nvmtl_vk_initialize(void)
     if(compression_policy)nvmtl_desktop_trace("compression-policy","INTEL_DEBUG includes noccs before ICD loading",0);
     if(nvmtl_windowserver_serial_policy(vendor,g_pci_device,getprogname()))
         syslog(LOG_ERR,"NullMoth: render compression (CCS) %s",compression_policy?"OFF (nvmtl-ws-noccs)":"ON");
+    if (nvmtl_windowserver_serial_policy(vendor, g_pci_device, getprogname())) {
+        static const char *const sw[] = { "nvmtl-no-sampler-restore", "nvmtl-no-surface-order", "nvmtl-no-heap-swizzle",
+            "nvmtl-no-placed-memtype", "nvmtl-no-tiled-resync", "nvmtl-no-buftex-standin", "nvmtl-no-wit-lap",
+            "nvmtl-no-spvcache-own", "nvmtl-no-dummy-level0" };
+        char on[512] = "", off[512] = "";
+        for (unsigned i = 0; i < sizeof sw / sizeof sw[0]; i++) {
+            char path[96]; snprintf(path, sizeof path, "/Library/GPUBundles/%s", sw[i]);
+            char *const into = access(path, F_OK) == 0 ? off : on;
+            strlcat(into, " ", 512); strlcat(into, sw[i] + 9, 512);
+        }
+        syslog(LOG_ERR, "NullMoth: v57 fixes ON:%s | OFF:%s", on[0] ? on : " none", off[0] ? off : " none");
+    }
 
     if (getenv("NVMTL_DESKTOP_STALL") && nvmtl_desktop_stall_policy(vendor, g_pci_device, getprogname(), getenv("INTEL_DEBUG"))) {
         if (setenv("INTEL_DEBUG", "stall", 0) == 0)
@@ -2605,6 +2617,7 @@ static int ensure_descriptors_locked(void)
      * 108x108 texture with seven never-filled levels, drawn into 46 px) sampled an empty level and vanished (WTLIntelGfx). */
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     sci.magFilter = sci.minFilter = VK_FILTER_LINEAR; sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST; sci.maxLod = 0.25f;
+    if (NVMTL_GB_OFF("nvmtl-no-dummy-level0")) { sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST; sci.maxLod = VK_LOD_CLAMP_NONE; }
     VKCK(nvmtl_sampler_acquire(&sci, &g_dummySampler), "sampler acquire (dummy)");
     nvmtl_vk_zero_dummies();
     if (g_bindless) {
@@ -2949,7 +2962,7 @@ static int nvmtl_keep_verdict(uint32_t s)
     // v56: a later lap of the same slot: a command buffer submitted NVMTL_WIT_SLOTS (or a multiple) after this one wrote it,
     // on the same in-order queue, so this one finished long ago. Without this a verdict asked that late waited the full
     // second below and then took the backend down (upstream PR #446, mickys 3901503).
-    { const uint32_t v = nvmtl_wit_read(s), d = v - s;
+    if (!NVMTL_GB_OFF("nvmtl-no-wit-lap")) { const uint32_t v = nvmtl_wit_read(s), d = v - s;
       if (v && v < NVMTL_WSEQ_BLIND - 1 && d && d < 0x80000000u && d % NVMTL_WIT_SLOTS == 0) {
           static _Atomic unsigned long long lapped;
           const unsigned long long n = atomic_fetch_add(&lapped, 1) + 1;
@@ -7608,7 +7621,7 @@ int nvmtl_vk_buffer_create_placed(size_t size, nvk_heap *heap, size_t offset, nv
         pvkDestroyBuffer(g_dev, (VkBuffer)out->buf, NULL); memset(out, 0, sizeof *out); return -1;
     }
     // v55: the heap's memory type, so a buffer texture over this buffer is checked against it (WTLIntelGfx I-120)
-    out->mem = heap->mem; out->placed = 1; out->alloc = 0; out->memtype1 = heap->memtype + 1;
+    out->mem = heap->mem; out->placed = 1; out->alloc = 0; out->memtype1 = NVMTL_GB_OFF("nvmtl-no-placed-memtype") ? 0 : heap->memtype + 1;
     out->moff = offset;
     out->map = heap->map ? (char *)heap->map + offset : NULL;
     g_buf_made++;

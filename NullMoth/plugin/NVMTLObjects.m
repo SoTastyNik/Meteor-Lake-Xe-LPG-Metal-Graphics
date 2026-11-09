@@ -782,7 +782,7 @@ static NVMTLTexture *nvmtl_texbuf_make(NVMTLBuffer *b, MTLTextureDescriptor *d, 
     // alignment), refilled from the caller's bytes at every submission that uses it (nvmtl_buffer_sync_in), as
     // WTLIntelGfx does since its I-119. A texture the GPU writes (or of unknown usage) keeps the one-time copy.
     const NSUInteger ru = d.usage & (MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget);
-    if (d.usage != MTLTextureUsageUnknown && !ru && !getenv("NVMTL_NO_TILED_RESYNC")) {
+    if (d.usage != MTLTextureUsageUnknown && !ru && !getenv("NVMTL_NO_TILED_RESYNC") && !NVMTL_GB_OFF("nvmtl-no-tiled-resync")) {
         NVMTLBuffer *s = [NVMTLBuffer new];
         const size_t n = MIN((size_t)bpr * d.height, _b.size - offset);
         if (s && !nvmtl_vk_buffer_create(n, 1, &s->_b) && s->_b.map) {
@@ -836,7 +836,7 @@ static NVMTLTexture *nvmtl_texbuf_make(NVMTLBuffer *b, MTLTextureDescriptor *d, 
         // buffer (mostly NoCopy, so no spare page): give those a stand-in sized to the view, refilled from the caller's
         // bytes at every submission it is used in and copied back when written (WTLIntelGfx)
         const size_t need = offset + (size_t)bpr * (h - 1) + w * bpp;
-        if (need > _b.size && offset < _b.size && [self contents] && !getenv("NVMTL_NO_BUFTEX_STANDIN")) {
+        if (need > _b.size && offset < _b.size && !getenv("NVMTL_NO_BUFTEX_STANDIN") && !NVMTL_GB_OFF("nvmtl-no-buftex-standin") && [self contents]) {
             NVMTLBuffer *sb = [NVMTLBuffer new];
             if (sb && !nvmtl_vk_buffer_create((need - offset + 4095) & ~(size_t)4095, 1, &sb->_b) && sb->_b.map) {
                 sb->_storage = MTLStorageModeShared;
@@ -3868,7 +3868,7 @@ void nvmtl_heap_back(NVMTLHeap *h, NSUInteger size, int shared) {
     atomic_fetch_add(rec ? &gHTRecycled : &gHTPlaced, 1); nvmtl_heaptex_census(rec ? "recycled" : "placed");
     // v55: automatic heaps land here, not in -newTextureWithDescriptor:offset:; without this the descriptor's swizzle was
     // lost - CoreAnimation's glyphs and Dock symbols drew as flat patches (a badge's "1" as a red blob; WTLIntelGfx I-120)
-    nvmtl_texture_desc_swizzle(t, d);
+    if (!NVMTL_GB_OFF("nvmtl-no-heap-swizzle")) nvmtl_texture_desc_swizzle(t, d);
     return t;
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d {
