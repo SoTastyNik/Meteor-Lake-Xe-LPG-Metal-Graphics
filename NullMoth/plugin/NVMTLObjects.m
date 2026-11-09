@@ -209,7 +209,7 @@ static inline void nvmtl_resref(id o, int d) {
 static BOOL nvmtl_purge_eligible(NVMTLTexture *t) {
     return !t->_parent && !t->_viewParent && !t->_backBuf && !t->_heap && !t->_subHeap && !t->_surf && !t->_vramOn && !t->_ownView
         && !t->_shareable && !t->_resid && !__atomic_load_n(&t->_nviews, __ATOMIC_ACQUIRE) && t->_i.img && !t->_i.placed
-        && t->_i.usage && !t->_i.vpair && t->_i.samples <= 1 && !(t->_i.usage & 0x20u )
+        && t->_i.usage && !t->_i.vpair && !t->_i.vfl && t->_i.samples <= 1 && !(t->_i.usage & 0x20u )
         // a swizzled sampling view (MTLTextureDescriptor.swizzle) is made against this VkImage; re-homing the memory
         // recreates the image and would leave that view pointing at the destroyed one
         && !t->_swzView;
@@ -323,7 +323,7 @@ static int nvmtl_res2_on(void) {
 static BOOL nvmtl_res2_movable(NVMTLTexture *t) {
     return !t->_parent && !t->_viewParent && !t->_backBuf && !t->_heap && !t->_subHeap && !t->_surf && !t->_vramOn && !t->_ownView
         && !t->_shareable && !__atomic_load_n(&t->_nviews, __ATOMIC_ACQUIRE) && t->_i.img && !t->_i.placed && t->_i.usage
-        && !t->_i.vpair && t->_i.samples <= 1 && !(t->_i.usage & 0x20u );
+        && !t->_i.vpair && !t->_i.vfl && t->_i.samples <= 1 && !(t->_i.usage & 0x20u );
 }
 static os_unfair_lock gRes2RegLock = OS_UNFAIR_LOCK_INIT;
 static NSHashTable *gRes2Reg;
@@ -4477,7 +4477,13 @@ static void nvmtl_zprobe_drain(void) {
         kind = _cb->_g79C2C && nvmtl_g79_on(NVMTL_G79_ENC) ? 1 : 0;
         nvmtl_g79_count(kind ? G79C_ENCNARROW : G79C_ENCFULL);
     }
-    else if (_e78Concurrent && nvmtl_enc78_on(NVMTL_E78_H7)) {
+    // v61_2 (upstream 2.7, 6c1bb337): a concurrent compute encoder's later dispatches used to get NO barrier unless the
+    // app had called memoryBarrierWithScope: (H7, kind 2). That reads Metal's concurrent dispatch type as a promise that
+    // the dispatches are independent, and they are not always: a later dispatch read what an earlier one in the same
+    // encoder was still writing (upstream: garbage lighting and GPU faults in Cyberpunk; here CoreImage's photo filters,
+    // dark bands in Photo Booth shots). Concurrent dispatches now take the narrow compute->compute barrier serial ones do.
+    // /Library/GPUBundles/nvmtl-concurrent-nobarrier restores H7.
+    else if (_e78Concurrent && nvmtl_enc78_on(NVMTL_E78_H7) && NVMTL_GB_OFF("nvmtl-concurrent-nobarrier")) {
         kind = _g79Bar ? 1 : 2;
         if (_g79Bar) nvmtl_g79_count(G79C_BARFOLD);
     }

@@ -14,7 +14,7 @@
 const char *nvmtl_image_ident(const void *addr, char *out, size_t n);
 typedef struct { void *buf; void *mem; void *map; size_t size; size_t alloc; int placed; void *pool; size_t poff; int imported; int bar1; size_t moff; int sparse, sysmem; uint32_t memtype1; /* memory type + 1, 0 unknown */ uint64_t trace_id; } nvk_buffer;
 #include "nvmtl_sample_positions.h"
-typedef struct { void *img; void *mem; void *view; uint32_t w, h; size_t alloc; uint32_t layout; uint32_t mips; uint32_t fmt, bpp; uint32_t storage, mtl_type, layers; int placed; uint32_t bw, bh; uint32_t samples; uint32_t sysmem; uint32_t vkflags, usage;  uint32_t vpair;  uint64_t up_token, trace_id; uint32_t tiling; /* 0 optimal, 1 linear alias, 2 Tile4 alias */ } nvk_image;
+typedef struct { void *img; void *mem; void *view; uint32_t w, h; size_t alloc; uint32_t layout; uint32_t mips; uint32_t fmt, bpp; uint32_t storage, mtl_type, layers; int placed; uint32_t bw, bh; uint32_t samples; uint32_t sysmem; uint32_t vkflags, usage;  uint32_t vpair;  uint32_t vfl; /* v61_2: buffer texture view formats listed (mask over its size group) */  uint64_t up_token, trace_id; uint32_t tiling; /* 0 optimal, 1 linear alias, 2 Tile4 alias */ } nvk_image;
 #define NVMTL_NVAR 16
 #define NVMTL_NVAR_MAX 4096
 #define NVMTL_NCOL 8
