@@ -45,4 +45,19 @@ struct nmx_drm_sysfs_get {
 #define NMX_DRM_IOCTL_SYSFS_PUT _IOW('N', 0x43, struct nmx_drm_sysfs_get)
 /* prints the driver state (GuC, exec queues and what each waits on, hw fences) to the kernel log; vm tools/nmxdump */
 #define NMX_DRM_IOCTL_DEBUG_DUMP _IO('N', 0x44)
+/*
+ * an IOSurface the GPU writes (xnu/nmx_surfsync.cpp): PENDING when a command buffer that writes it is committed (the
+ * write's number comes back in seq), DONE with that number once the write is in the surface's pages, STATS for counters.
+ * ENOTSUP when this macOS's IOSurface lacks the device-cache calls.
+ */
+struct nmx_surf_sync {
+    uint32_t surface;   /* IOSurface ID, looked up in the caller's task */
+    uint32_t op;        /* NMX_SURF_SYNC_* */
+    uint64_t seq;
+    uint64_t stats[6];  /* STATS: writes, done, CPU locks before their write landed, after, caches made, control op 0 calls */
+};
+#define NMX_SURF_SYNC_PENDING 1
+#define NMX_SURF_SYNC_DONE 2
+#define NMX_SURF_SYNC_STATS 3
+#define NMX_DRM_IOCTL_SURF_SYNC _IOWR('N', 0x45, struct nmx_surf_sync)
 #endif

@@ -54,6 +54,8 @@
 		<string>1.0.0</string>
 		<key>com.apple.iokit.IOGraphicsFamily</key>
 		<string>1.0.0</string>
+		<key>com.apple.iokit.IOSurface</key>
+		<string>1.0</string>
 	</dict>
 </dict>
 </plist>

@@ -30,6 +30,8 @@ SEARCH = {
     'xnuobj': [X / 'xnu'],
 }
 EXPECTED = 438
+# v60: IOSurface device caches for the surfaces the GPU writes (NMX_DRM_IOCTL_SURF_SYNC)
+EXTRA = [('xnuobj', 'xnu/nmx_surfsync.cpp')]
 
 
 def repoint_scripts():
@@ -96,6 +98,11 @@ def manifest():
         for o in sorted((X / g).glob('*.o')):
             items.append((g, o.stem, source_for(g, o.stem)))
     assert len(items) == EXPECTED, len(items)
+    # HUAWEI sources with no upstream object (built and linked like the rest of their group)
+    for g, rel in EXTRA:
+        src = X / rel
+        assert src.is_file(), src
+        items.append((g, src.stem, src))
     return items
 
 
@@ -116,7 +123,7 @@ def main():
     items = manifest()
     (OUT / 'kernel-sources.txt').write_text(''.join(f'{g}/{n}.o <- {s.relative_to(R)}\n' for g, n, s in items))
     for g, n, _ in items:
-        (X / g / f'{n}.o').unlink()
+        (X / g / f'{n}.o').unlink(missing_ok=True)
     # ccxx.sh refreshes shared boundary headers on every call; do it once before the parallel run
     (X / 'bsdcompat/include/nmxxnu').mkdir(exist_ok=True)
     for h in ['nmx_port.h', 'nmx_xnu.h']:
@@ -156,6 +163,11 @@ def main():
     # HUAWEI additions, all com.apple.kpi.iokit: the idle-sleep assertion NMXGPU holds while it drives the GPU
     upstream |= {'__ZN9IOService15getPMRootDomainEv', '__ZN14IOPMrootDomain17createPMAssertionEyjP9IOServicePKc',
                  '__ZN14IOPMrootDomain18releasePMAssertionEy'}
+    # HUAWEI v60 (xnu/nmx_surfsync.cpp): IOSurface's device-cache calls (weak, checked against gOSKextUnresolved), the
+    # IOSurfaceRoot lookup and its matching, the caches' key object, the process name in the log
+    surfsync = ('__ZN9IOSurface', '__ZN13IOSurfaceRoot', '__ZN20IOSurfaceDeviceCache', '__ZN15IORegistryEntry',
+                '__ZN9IOService15serviceMatching', '__ZN9IOService22waitForMatchingService')
+    upstream |= {u for u in undefined if u.startswith(surfsync)} | {'_gOSKextUnresolved', '_proc_selfname', '_proc_selfpid'}
     extra = sorted(set(undefined) - upstream)
     assert not extra, f'imports the upstream 1.0.15 kernel does not have: {extra}'
     subprocess.run(['codesign', '--force', '--sign', '-', str(OUT / 'NMXGPU.kext')], check=True)

@@ -94,6 +94,61 @@ uint16_t nvmtl_vk_set_accelerator(mach_port_t accel)
     if (v && !g_vendor) g_vendor = v;
     return v;
 }
+/*
+ * v60: NMXGPU's IOSurface device caches. A write into an IOSurface is numbered when its command buffer is committed
+ * (PENDING: the kernel makes its device cache of the surface current) and marked DONE once it is in the surface's pages,
+ * so a CPU lock of the surface in any process can wait for it, as IOSurface does for Apple's drivers (v60 is the probe:
+ * the kernel only counts the locks that came too early). Through the NullMoth node's IOKit client ('NMXD',
+ * IOAccelNMXDRMClient), which sandboxed processes may open. /Library/GPUBundles/nvmtl-no-surf-sync turns it off.
+ */
+#include <sys/ioccom.h>
+struct nmx_surf_sync { uint32_t surface, op; uint64_t seq; uint64_t stats[6]; };
+#define NMX_DRM_IOCTL_SURF_SYNC _IOWR('N', 0x45, struct nmx_surf_sync)
+static io_connect_t g_ss_conn;
+static int g_ss_on = -1;
+static pthread_mutex_t g_ss_lock = PTHREAD_MUTEX_INITIALIZER;
+static int nvmtl_ss_call(struct nmx_surf_sync *a)
+{
+    uint64_t cmd = NMX_DRM_IOCTL_SURF_SYNC, err = 0; uint32_t nout = 1; size_t osz = sizeof *a;
+    const kern_return_t kr = IOConnectCallMethod(g_ss_conn, 0, &cmd, 1, a, sizeof *a, &err, &nout, a, &osz);
+    return kr != KERN_SUCCESS ? -(int)kr : (int)err;
+}
+static int nvmtl_ss_ready(void)
+{
+    const int on = __atomic_load_n(&g_ss_on, __ATOMIC_ACQUIRE);
+    if (on >= 0) return on;
+    pthread_mutex_lock(&g_ss_lock);
+    if (g_ss_on < 0) {
+        int ok = nvmtl_vk_vendor() == 0x8086 && access("/Library/GPUBundles/nvmtl-no-surf-sync", F_OK) != 0;
+        int r = 0;
+        if (ok) {
+            io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("NMXGPU"));
+            ok = s && IOServiceOpen(s, mach_task_self(), 'NMXD', &g_ss_conn) == KERN_SUCCESS;
+            if (s) IOObjectRelease(s);
+            if (ok) {
+                struct nmx_surf_sync a = { 0, 3, 0, { 0 } };
+                r = nvmtl_ss_call(&a);
+                if (r) { ok = 0; IOServiceClose(g_ss_conn); g_ss_conn = 0; }
+            }
+            syslog(LOG_ERR, "NullMoth: %s: surface sync %s (%d)", getprogname(), ok ? "on" : "OFF - no NMXGPU client or the kernel refused it", r);
+        }
+        __atomic_store_n(&g_ss_on, ok, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_ss_lock);
+    return g_ss_on;
+}
+uint64_t nvmtl_vk_surf_pending(uint32_t surface_id)
+{
+    if (!surface_id || !nvmtl_ss_ready()) return 0;
+    struct nmx_surf_sync a = { surface_id, 1, 0, { 0 } };
+    return nvmtl_ss_call(&a) == 0 ? a.seq : 0;
+}
+void nvmtl_vk_surf_done(uint32_t surface_id, uint64_t seq)
+{
+    if (!surface_id || !seq || !nvmtl_ss_ready()) return;
+    struct nmx_surf_sync a = { surface_id, 2, seq, { 0 } };
+    (void)nvmtl_ss_call(&a);
+}
 /* a process that starts Vulkan before Metal makes a device: NVIDIA when its accelerator runs, else the AMD/Intel one */
 uint16_t nvmtl_vk_vendor(void)
 {

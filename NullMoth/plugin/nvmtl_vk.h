@@ -84,6 +84,10 @@ const char *nvmtl_vk_device_name(void);
 /* the GPU vendor (0x10de, 0x1002, 0x8086) of this process's Metal device; set from the accelerator it was made on */
 uint16_t nvmtl_vk_set_accelerator(mach_port_t accelerator);
 uint16_t nvmtl_vk_vendor(void);
+/* v60: NMXGPU's IOSurface device caches (NMX_DRM_IOCTL_SURF_SYNC): a write into a surface is numbered when committed
+   and marked done once it is in the pages; 0 = not tracked */
+uint64_t nvmtl_vk_surf_pending(uint32_t surface_id);
+void nvmtl_vk_surf_done(uint32_t surface_id, uint64_t seq);
 void nvmtl_vk_limits(uint32_t *layers, uint32_t *shared_bytes, uint32_t wg[3], uint32_t *wg_inv, uint32_t *sm);
 int nvmtl_vk_tg_reject(const uint32_t l[3], const uint32_t *t, const char *kernel, uint32_t lin);
 void nvmtl_vk_pubcaps(uint32_t *color_samples, uint32_t *depth_samples, uint64_t *max_storage_range, uint64_t *linear_align);

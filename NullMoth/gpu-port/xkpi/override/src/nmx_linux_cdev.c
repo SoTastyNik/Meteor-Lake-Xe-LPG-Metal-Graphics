@@ -396,6 +396,9 @@ int nmx_cdev_ioctl(int open_id, unsigned long cmd, void *data, int fflag)
     } else if (cmd == NMX_DRM_IOCTL_DEBUG_DUMP) {
         nmx_xnu_run_dump();
         err = 0;
+    } else if (cmd == NMX_DRM_IOCTL_SURF_SYNC) {
+        struct nmx_surf_sync *ss = data;
+        err = nmx_xnu_surf_sync(ss->surface, ss->op, &ss->seq, ss->stats, 6);
     } else if (o->fp->f_ops != NULL && (err = nmx_drm_node_ioctl(o->fp->f_data, cmd, data)) != -1) {
         /* answered by the port (DRM_IOCTL_GET_PCIINFO) */
     } else if (o->fp->f_ops != NULL) {

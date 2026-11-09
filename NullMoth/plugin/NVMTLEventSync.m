@@ -23,6 +23,7 @@
     BOOL aheadEmpty;
     BOOL submitting;      // split submit: the submit queue is in this part's execbuffer, the class lock released
     BOOL aheadDeclined;   // the ahead pass will never submit it (host pointers, no recording): the worker does
+    NSMutableDictionary<NSNumber *, NSNumber *> *ssSeq;   // v60: surface ID -> the write number NMXGPU gave at commit
 }
 @end
 static _Atomic unsigned gsub_inflight;
@@ -240,6 +241,16 @@ static void nvmtl_surface_mark_tile4(NVMTLTexture *t)
         if (after) syslog(LOG_ERR, "NullMoth: %s: surface writes before scheduled: mode %d%s", getprogname(), after,
                           nvmtl_vk_windowserver_serial() ? (NVMTL_GB_OFF("nvmtl-ws-surface-order") ? " (two-plane surfaces, nvmtl-ws-surface-order)" : " - not in WindowServer (v58)") : after == 3 ? " (two-plane surfaces)" : ""); }
     NVMTLTexture *drawable = _present ? (_present->_parent ?: _present) : nil;
+    for (NVMTLTexture *s in part->surfaces) {
+        NVMTLTexture *r = s->_parent ? s->_parent : s;
+        if (r->_surf && r != drawable && (IOSurfaceGetPlaneCount(r->_surf) > 1 || !nvmtl_vk_windowserver_serial())) {
+            NSNumber *key = @(IOSurfaceGetID(r->_surf));
+            if (!part->ssSeq[key]) {
+                const uint64_t seq = nvmtl_vk_surf_pending(IOSurfaceGetID(r->_surf));
+                if (seq) { if (!part->ssSeq) part->ssSeq = [NSMutableDictionary new]; part->ssSeq[key] = @(seq); }
+            }
+        }
+    }
     for (NVMTLTexture *s in part->surfaces) {
         if (nvmtl_vk_windowserver_serial() && !nvmtl_ws_early_schedule()) { _scheduleAfterPublish = YES; continue; }
         // v58: not in WindowServer. With early scheduling and split submit its main thread waits for "scheduled" in
@@ -718,6 +729,8 @@ static void nvmtl_gsub_ahead_pass1(void) {
             if(phaseBegin)phaseSurfaces=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
             for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, YES)) nvmtl_buffer_sync_out(buffer);
         }
+        for (NSNumber *key in part->ssSeq) nvmtl_vk_surf_done(key.unsignedIntValue, part->ssSeq[key].unsignedLongLongValue);
+        part->ssSeq = nil;
         if (phaseBegin) {
             const uint64_t now=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
             static _Atomic unsigned slowReports;

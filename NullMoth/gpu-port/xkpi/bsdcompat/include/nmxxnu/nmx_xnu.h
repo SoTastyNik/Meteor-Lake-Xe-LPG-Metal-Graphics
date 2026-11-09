@@ -85,6 +85,8 @@ int nmx_xnu_pci_msi_count(void *pci);
 void nmx_xnu_set_dump_hook(void (*fn)(void));
 void nmx_xnu_diag_fini(void);
 void nmx_xnu_run_dump(void);
+/* IOSurface device caches for the surfaces the GPU writes (xnu/nmx_surfsync.cpp): NMX_DRM_IOCTL_SURF_SYNC's op */
+int nmx_xnu_surf_sync(uint32_t surface, uint32_t op, uint64_t *seq, uint64_t *stats, uint32_t nstats);
 /* the DRM user client (xnu/nmx_drmuc.cpp): one open of the devfs node at path, driven like the device file */
 int nmx_xnu_uc_open(const char *path, int *open_minor);
 int nmx_xnu_uc_ioctl(int open_minor, unsigned long cmd, void *data);
