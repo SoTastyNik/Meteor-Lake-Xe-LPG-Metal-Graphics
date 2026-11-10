@@ -517,6 +517,103 @@ static void test_video(const char *name, CMVideoCodecType codec)
     report(name, result, detail);
 }
 
+// ---- 10. VideoToolbox driven as WebRTC drives it (Telegram's tgcalls, Chromium): the encoder's output must mark its key
+// frames as sync samples and carry the parameter sets, or the far end never gets a picture it can start decoding from.
+// tgcalls: a frame is a key frame when its first sample attachment has no kCMSampleAttachmentKey_NotSync, and only key
+// frames get the VPS/SPS/PPS (H.264: SPS/PPS) from the format description put in front of them.
+typedef struct { CMVideoCodecType codec; int n, sync, noattach, firstSync, firstAttach, ps, hdr, forcedSync; OSStatus err, psErr; char nals[64]; } kf_ctx;
+static void kf_note_nals(kf_ctx *c, CMSampleBufferRef sb)
+{
+    CMBlockBufferRef bb = CMSampleBufferGetDataBuffer(sb);
+    const size_t len = bb ? CMBlockBufferGetDataLength(bb) : 0;
+    size_t off = 0; int k = 0; c->nals[0] = 0;
+    while (bb && c->hdr > 0 && c->hdr <= 4 && off + c->hdr < len && k < 8) {
+        uint8_t h[5] = { 0 };
+        if (CMBlockBufferCopyDataBytes(bb, off, c->hdr + 1, h)) break;
+        uint32_t n = 0; for (int i = 0; i < c->hdr; i++) n = (n << 8) | h[i];
+        const int type = c->codec == kCMVideoCodecType_HEVC ? (h[c->hdr] >> 1) & 0x3f : h[c->hdr] & 0x1f;
+        const size_t used = strlen(c->nals);
+        snprintf(c->nals + used, sizeof c->nals - used, "%s%d", k ? "," : "", type);
+        off += c->hdr + n; k++;
+    }
+}
+static void kf_out(void *ref, void *src, OSStatus st, VTEncodeInfoFlags fl, CMSampleBufferRef sb)
+{
+    kf_ctx *c = ref;
+    if (st) { c->err = st; return; }
+    if (!sb || (fl & kVTEncodeInfo_FrameDropped)) return;
+    CFArrayRef at = CMSampleBufferGetSampleAttachmentsArray(sb, false);
+    const BOOL attach = at && CFArrayGetCount(at);
+    const BOOL sync = attach && !CFDictionaryContainsKey((CFDictionaryRef)CFArrayGetValueAtIndex(at, 0), kCMSampleAttachmentKey_NotSync);
+    if (!attach) c->noattach++;
+    if (sync) c->sync++;
+    const int f = (int)(intptr_t)src;
+    if (sync && (f == 0 || f == 30)) c->forcedSync++;
+    if (!c->n) {
+        c->firstSync = sync; c->firstAttach = attach;
+        CMFormatDescriptionRef fd = CMSampleBufferGetFormatDescription(sb);
+        size_t count = 0; int hdr = 0;
+        c->psErr = c->codec == kCMVideoCodecType_HEVC ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(fd, 0, NULL, NULL, &count, &hdr)
+                                                       : CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fd, 0, NULL, NULL, &count, &hdr);
+        c->ps = (int)count; c->hdr = hdr;
+        kf_note_nals(c, sb);
+    }
+    c->n++;
+}
+static void fill_nv12(CVPixelBufferRef pb, int f)
+{
+    CVPixelBufferLockBaseAddress(pb, 0);
+    for (int p = 0; p < 2; p++) {
+        uint8_t *b = CVPixelBufferGetBaseAddressOfPlane(pb, p); const size_t row = CVPixelBufferGetBytesPerRowOfPlane(pb, p);
+        const int w = (int)CVPixelBufferGetWidthOfPlane(pb, p) * (p ? 2 : 1), h = (int)CVPixelBufferGetHeightOfPlane(pb, p);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) b[y * row + x] = (uint8_t)(p ? 128 + 40 * sin((x + f * 4) / 30.0) : 30 + ((x + y + f * 6) & 0xbf));
+    }
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+}
+static void test_webrtc_keyframes(const char *name, CMVideoCodecType codec)
+{
+    if (!wanted(name)) return;
+    enum { W = 1280, H = 720, N = 60 };
+    NSDictionary *spec = @{ (id)kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: @YES };
+    NSDictionary *src = @{ (id)kCVPixelBufferOpenGLCompatibilityKey: @YES, (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+                           (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) };
+    kf_ctx c = { .codec = codec };
+    VTCompressionSessionRef cs = NULL;
+    OSStatus st = VTCompressionSessionCreate(NULL, W, H, codec, (__bridge CFDictionaryRef)spec, (__bridge CFDictionaryRef)src, NULL, kf_out, &c, &cs);
+    if (st || !cs) { report(name, codec == kCMVideoCodecType_HEVC ? SKIP : FAIL, [NSString stringWithFormat:@"VTCompressionSessionCreate %d", (int)st]); return; }
+    VTSessionSetProperty(cs, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse);
+    VTSessionSetProperty(cs, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    VTSessionSetProperty(cs, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@1000000);
+    const OSStatus limits = VTSessionSetProperty(cs, kVTCompressionPropertyKey_DataRateLimits, (__bridge CFTypeRef)@[ @(1000000 * 1.5 / 8), @1 ]);
+    VTSessionSetProperty(cs, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@7200);
+    VTSessionSetProperty(cs, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@240);
+    VTCompressionSessionPrepareToEncodeFrames(cs);
+    CFBooleanRef hwFlag = NULL;
+    VTSessionCopyProperty(cs, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, NULL, &hwFlag);
+    const BOOL hw = hwFlag == kCFBooleanTrue; if (hwFlag) CFRelease(hwFlag);
+    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(cs);
+    for (int f = 0; f < N; f++) {
+        CVPixelBufferRef pb = NULL;
+        if (pool) CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &pb);
+        if (!pb) CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, (__bridge CFDictionaryRef)@{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{} }, &pb);
+        fill_nv12(pb, f);
+        // a key frame at the start and one asked for later, as WebRTC does at the start of a call and on a far-end request
+        NSDictionary *opt = (f == 0 || f == 30) ? @{ (id)kVTEncodeFrameOptionKey_ForceKeyFrame: @YES } : nil;
+        OSStatus e = VTCompressionSessionEncodeFrame(cs, pb, CMTimeMake(f * 33, 1000), kCMTimeInvalid, (__bridge CFDictionaryRef)opt, (void *)(intptr_t)f, NULL);
+        if (e) c.err = e;
+        CVPixelBufferRelease(pb);
+    }
+    VTCompressionSessionCompleteFrames(cs, kCMTimeInvalid);
+    VTCompressionSessionInvalidate(cs); CFRelease(cs);
+    const int wantPs = codec == kCMVideoCodecType_HEVC ? 3 : 2;
+    const BOOL ok = !c.err && c.n >= N - 2 && c.firstSync && c.forcedSync == 2 && c.ps >= wantPs;
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"encoder %s, %d frames; first frame %s; %d sync frame(s), %d of the 2 forced; %d without attachments; "
+                                    "%d parameter set(s) in the format (status %d, want %d), NAL length %d; first frame NAL types %s; data rate limits %s%s",
+                                    hw ? "hardware" : "software", c.n, c.firstSync ? "SYNC" : (c.firstAttach ? "marked NotSync" : "has NO attachments"),
+                                    c.sync, c.forcedSync, c.noattach, c.ps, (int)c.psErr, wantPs, c.hdr, c.nals[0] ? c.nals : "-",
+                                    limits ? "refused" : "set", c.err ? [NSString stringWithFormat:@"; status %d", (int)c.err].UTF8String : ""]);
+}
+
 int main(int argc, char **argv)
 {
     @autoreleasepool {
@@ -541,6 +638,8 @@ int main(int argc, char **argv)
         test_opengl();
         test_video("video-h264-roundtrip", kCMVideoCodecType_H264);
         test_video("video-hevc-roundtrip", kCMVideoCodecType_HEVC);
+        test_webrtc_keyframes("video-h264-webrtc-keyframes", kCMVideoCodecType_H264);
+        test_webrtc_keyframes("video-hevc-webrtc-keyframes", kCMVideoCodecType_HEVC);
         printf("SUMMARY: %d passed, %d failed, %d skipped\n", g_pass, g_fail, g_skip);
         return g_fail ? 1 : 0;
     }
