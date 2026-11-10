@@ -23,6 +23,7 @@
 #import <OpenGL/gl.h>
 #import <OpenGL/glext.h>
 #include <math.h>
+#include <dlfcn.h>
 
 static id<MTLDevice> D;
 static id<MTLCommandQueue> Q;
@@ -521,7 +522,9 @@ static void test_video(const char *name, CMVideoCodecType codec)
 // frames as sync samples and carry the parameter sets, or the far end never gets a picture it can start decoding from.
 // tgcalls: a frame is a key frame when its first sample attachment has no kCMSampleAttachmentKey_NotSync, and only key
 // frames get the VPS/SPS/PPS (H.264: SPS/PPS) from the format description put in front of them.
-typedef struct { CMVideoCodecType codec; int n, sync, noattach, firstSync, firstAttach, ps, hdr, forcedSync; OSStatus err, psErr; char nals[64]; } kf_ctx;
+typedef struct { CMVideoCodecType codec; int n, sync, noattach, firstSync, firstAttach, ps, hdr, forcedSync, rawFirst, rawSync; OSStatus err, psErr; char nals[64]; } kf_ctx;
+// CoreMedia's own function, past any fix the Metal driver puts on this program's imports: what the encoder attached
+static CFArrayRef (*kf_raw_attach)(CMSampleBufferRef, Boolean);
 static void kf_note_nals(kf_ctx *c, CMSampleBufferRef sb)
 {
     CMBlockBufferRef bb = CMSampleBufferGetDataBuffer(sb);
@@ -542,6 +545,12 @@ static void kf_out(void *ref, void *src, OSStatus st, VTEncodeInfoFlags fl, CMSa
     kf_ctx *c = ref;
     if (st) { c->err = st; return; }
     if (!sb || (fl & kVTEncodeInfo_FrameDropped)) return;
+    if (!kf_raw_attach) kf_raw_attach = (CFArrayRef (*)(CMSampleBufferRef, Boolean))dlsym(RTLD_DEFAULT, "CMSampleBufferGetSampleAttachmentsArray");
+    CFArrayRef raw = kf_raw_attach ? kf_raw_attach(sb, false) : NULL;
+    CFTypeRef rv = (raw && CFArrayGetCount(raw)) ? CFDictionaryGetValue((CFDictionaryRef)CFArrayGetValueAtIndex(raw, 0), kCMSampleAttachmentKey_NotSync) : NULL;
+    const int rawState = !rv ? 0 : (CFGetTypeID(rv) == CFBooleanGetTypeID() && !CFBooleanGetValue((CFBooleanRef)rv)) ? 1 : 2;   // absent, false, true
+    if (!c->n) c->rawFirst = rawState;
+    if (rawState != 2) c->rawSync++;
     CFArrayRef at = CMSampleBufferGetSampleAttachmentsArray(sb, false);
     const BOOL attach = at && CFArrayGetCount(at);
     const BOOL sync = attach && !CFDictionaryContainsKey((CFDictionaryRef)CFArrayGetValueAtIndex(at, 0), kCMSampleAttachmentKey_NotSync);
@@ -607,9 +616,11 @@ static void test_webrtc_keyframes(const char *name, CMVideoCodecType codec)
     VTCompressionSessionInvalidate(cs); CFRelease(cs);
     const int wantPs = codec == kCMVideoCodecType_HEVC ? 3 : 2;
     const BOOL ok = !c.err && c.n >= N - 2 && c.firstSync && c.forcedSync == 2 && c.ps >= wantPs;
-    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"encoder %s, %d frames; first frame %s; %d sync frame(s), %d of the 2 forced; %d without attachments; "
+    static const char *const rawName[] = { "no NotSync", "NotSync=false", "NotSync=true" };
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"encoder %s, %d frames; the encoder attached %s to the first frame (%d frame(s) without NotSync=true); "
+                                    "as an application reads it: first frame %s; %d sync frame(s), %d of the 2 forced; %d without attachments; "
                                     "%d parameter set(s) in the format (status %d, want %d), NAL length %d; first frame NAL types %s; data rate limits %s%s",
-                                    hw ? "hardware" : "software", c.n, c.firstSync ? "SYNC" : (c.firstAttach ? "marked NotSync" : "has NO attachments"),
+                                    hw ? "hardware" : "software", c.n, rawName[c.rawFirst], c.rawSync, c.firstSync ? "SYNC" : (c.firstAttach ? "marked NotSync" : "has NO attachments"),
                                     c.sync, c.forcedSync, c.noattach, c.ps, (int)c.psErr, wantPs, c.hdr, c.nals[0] ? c.nals : "-",
                                     limits ? "refused" : "set", c.err ? [NSString stringWithFormat:@"; status %d", (int)c.err].UTF8String : ""]);
 }

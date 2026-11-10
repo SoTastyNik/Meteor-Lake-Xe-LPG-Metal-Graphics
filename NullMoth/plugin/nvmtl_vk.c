@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <unistd.h>
 #include <syslog.h>
@@ -365,13 +366,18 @@ static long nvmtl_sysconf(int name)
     return page > 0 ? (long)(hi.max_mem / (uint64_t)page) : v;
 }
 // Point one imported symbol of the image that holds `inside` at `repl` (its lazy and non-lazy pointers). Returns how
-// many pointers were changed. The driver's own dylib only: nothing else in the process is touched.
+// many pointers were changed. Only that image is touched (the ICD's own imports; v63_3's HEVC sync fix gives
+// nvmtl_rebind_import_mh an application's image).
+static int nvmtl_rebind_import_mh(const struct mach_header_64 *mh, const char *symbol, void *repl);
 static int nvmtl_rebind_import(const void *inside, const char *symbol, void *repl)
 {
     Dl_info di;
     if (!dladdr(inside, &di) || !di.dli_fbase) return -1;
-    const struct mach_header_64 *mh = (const struct mach_header_64 *)di.dli_fbase;
-    if (mh->magic != MH_MAGIC_64) return -1;
+    return nvmtl_rebind_import_mh((const struct mach_header_64 *)di.dli_fbase, symbol, repl);
+}
+static int nvmtl_rebind_import_mh(const struct mach_header_64 *mh, const char *symbol, void *repl)
+{
+    if (!mh || mh->magic != MH_MAGIC_64) return -1;
     const struct segment_command_64 *text = NULL, *linkedit = NULL;
     const struct symtab_command *st = NULL; const struct dysymtab_command *dst = NULL;
     const uint8_t *lc = (const uint8_t *)(mh + 1);
@@ -418,6 +424,116 @@ static int nvmtl_rebind_import(const void *inside, const char *symbol, void *rep
         }
     }
     return changed;
+}
+
+// v63_3: Apple's software HEVC encoder - the one VideoToolbox picks where there is no hardware HEVC encoder, as on this
+// machine - attaches kCMSampleAttachmentKey_NotSync to every frame, its IDR frames included (gfx_selftest
+// video-hevc-webrtc-keyframes: NAL type 19 "marked NotSync", forced key frames too; the H.264 encoder leaves the key off,
+// as hardware encoders do). WebRTC (Telegram's tgcalls, Chromium) takes a frame for a key frame only when the key is
+// absent and puts the parameter sets in front of key frames only, so the far end of a call never got a picture it could
+// start from: no camera, no screen. Where an application image (not the system's) reads the sample attachments, a
+// NotSync that says "false" is removed (by Apple's definition it means what an absent key means), and one that says
+// "true" on an HEVC frame that starts with an IRAP picture (BLA, IDR, CRA) is removed too. Off with
+// /Library/GPUBundles/nvmtl-no-hevc-sync-fix.
+typedef CFArrayRef (*nvmtl_cm_attach_fn)(void *, Boolean);
+static nvmtl_cm_attach_fn g_cm_attach;
+static void *(*g_cm_fd)(void *);
+static FourCharCode (*g_cm_subtype)(const void *);
+static OSStatus (*g_cm_hevc_ps)(const void *, size_t, const uint8_t **, size_t *, size_t *, int *);
+static void *(*g_cm_data)(void *);
+static size_t (*g_cm_len)(void *);
+static OSStatus (*g_cm_copy)(void *, size_t, size_t, void *);
+static CFStringRef g_cm_notsync, g_cm_depends;
+static _Atomic unsigned long g_cm_fixed_false, g_cm_fixed_irap;
+static int nvmtl_cm_resolve(void)
+{
+    if (g_cm_attach) return 1;
+    void *h = dlopen("/System/Library/Frameworks/CoreMedia.framework/CoreMedia", RTLD_LAZY | RTLD_NOLOAD);
+    if (!h) return 0;   // nothing in the process uses CoreMedia yet
+    CFStringRef *ns = (CFStringRef *)dlsym(h, "kCMSampleAttachmentKey_NotSync");
+    CFStringRef *dep = (CFStringRef *)dlsym(h, "kCMSampleAttachmentKey_DependsOnOthers");
+    g_cm_fd = (void *(*)(void *))dlsym(h, "CMSampleBufferGetFormatDescription");
+    g_cm_subtype = (FourCharCode (*)(const void *))dlsym(h, "CMFormatDescriptionGetMediaSubType");
+    g_cm_hevc_ps = (OSStatus (*)(const void *, size_t, const uint8_t **, size_t *, size_t *, int *))dlsym(h, "CMVideoFormatDescriptionGetHEVCParameterSetAtIndex");
+    g_cm_data = (void *(*)(void *))dlsym(h, "CMSampleBufferGetDataBuffer");
+    g_cm_len = (size_t (*)(void *))dlsym(h, "CMBlockBufferGetDataLength");
+    g_cm_copy = (OSStatus (*)(void *, size_t, size_t, void *))dlsym(h, "CMBlockBufferCopyDataBytes");
+    g_cm_notsync = ns ? *ns : NULL; g_cm_depends = dep ? *dep : NULL;
+    nvmtl_cm_attach_fn f = (nvmtl_cm_attach_fn)dlsym(h, "CMSampleBufferGetSampleAttachmentsArray");
+    if (!f || !g_cm_notsync) return 0;
+    g_cm_attach = f;
+    return 1;
+}
+// Whether an HEVC sample's first picture is one decoding can start from (BLA 16-18, IDR 19-20, CRA 21).
+static int nvmtl_cm_hevc_irap(void *sb)
+{
+    const void *fd = g_cm_fd ? g_cm_fd(sb) : NULL;
+    if (!fd || !g_cm_subtype || !g_cm_hevc_ps || !g_cm_data || !g_cm_len || !g_cm_copy) return 0;
+    const FourCharCode st = g_cm_subtype(fd);
+    if (st != 'hvc1' && st != 'hev1') return 0;
+    size_t count = 0; int hdr = 0;
+    if (g_cm_hevc_ps(fd, 0, NULL, NULL, &count, &hdr) || hdr < 1 || hdr > 4) return 0;
+    void *bb = g_cm_data(sb);
+    const size_t len = bb ? g_cm_len(bb) : 0;
+    size_t off = 0;
+    for (int k = 0; k < 16 && off + (size_t)hdr < len; k++) {
+        uint8_t h[5] = { 0 };
+        if (g_cm_copy(bb, off, (size_t)hdr + 1, h)) return 0;
+        uint32_t n = 0; for (int i = 0; i < hdr; i++) n = (n << 8) | h[i];
+        const int t = (h[hdr] >> 1) & 0x3f;
+        if (t >= 16 && t <= 21) return 1;
+        if (t < 32) return 0;   // the first picture is not one to start from; parameter sets and SEI (32+) are skipped
+        off += (size_t)hdr + n;
+    }
+    return 0;
+}
+static int nvmtl_cm_false(const void *v)
+{
+    if (CFGetTypeID(v) == CFBooleanGetTypeID()) return !CFBooleanGetValue((CFBooleanRef)v);
+    int i = 1;
+    return CFGetTypeID(v) == CFNumberGetTypeID() && CFNumberGetValue((CFNumberRef)v, kCFNumberIntType, &i) && i == 0;
+}
+static CFArrayRef nvmtl_cm_attachments(void *sb, Boolean create)
+{
+    CFArrayRef a = g_cm_attach(sb, create);
+    const CFIndex n = a ? CFArrayGetCount(a) : 0;
+    for (CFIndex i = 0; i < n; i++) {
+        CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(a, i);
+        const void *v = d ? CFDictionaryGetValue(d, g_cm_notsync) : NULL;
+        if (!v) continue;
+        if (nvmtl_cm_false(v)) {
+            CFDictionaryRemoveValue(d, g_cm_notsync);
+            if (atomic_fetch_add(&g_cm_fixed_false, 1) == 0)
+                syslog(LOG_ERR, "NullMoth: %s: a sample marked NotSync=false is read as a sync sample (hevc sync fix)", getprogname());
+        } else if (i == 0 && nvmtl_cm_hevc_irap(sb)) {
+            CFDictionaryRemoveValue(d, g_cm_notsync);
+            if (g_cm_depends) CFDictionarySetValue(d, g_cm_depends, kCFBooleanFalse);
+            if (atomic_fetch_add(&g_cm_fixed_irap, 1) == 0)
+                syslog(LOG_ERR, "NullMoth: %s: an HEVC IRAP picture marked NotSync is read as a sync sample (hevc sync fix)", getprogname());
+        }
+    }
+    return a;
+}
+#ifndef MH_DYLIB_IN_CACHE
+#define MH_DYLIB_IN_CACHE 0x80000000
+#endif
+static void nvmtl_cm_add_image(const struct mach_header *mh, intptr_t slide)
+{
+    (void)slide;
+    if (!mh || (mh->flags & MH_DYLIB_IN_CACHE) || mh->magic != MH_MAGIC_64) return;
+    Dl_info di;
+    if (!dladdr(mh, &di) || !di.dli_fname) return;
+    // the system's own images are left as they are: only applications and their libraries read through the fix
+    if (!strncmp(di.dli_fname, "/System/", 8) || !strncmp(di.dli_fname, "/usr/lib/", 9) || !strncmp(di.dli_fname, "/Library/GPUBundles/", 20)) return;
+    if (!nvmtl_cm_resolve()) return;
+    const int n = nvmtl_rebind_import_mh((const struct mach_header_64 *)mh, "_CMSampleBufferGetSampleAttachmentsArray", (void *)nvmtl_cm_attachments);
+    if (n > 0) syslog(LOG_ERR, "NullMoth: %s: hevc sync fix on %s (%d pointer(s))", getprogname(), di.dli_fname, n);
+}
+__attribute__((constructor)) static void nvmtl_cm_sync_install(void)
+{
+    if (!strcmp(getprogname(), "WindowServer") || access("/Library/GPUBundles/nvmtl-no-hevc-sync-fix", F_OK) == 0) return;
+    nvmtl_cm_resolve();   // before dyld's lock is held in the callbacks, where it can be
+    _dyld_register_func_for_add_image(nvmtl_cm_add_image);   // every image loaded now, and every one loaded later
 }
 
 INSTANCE_FNS(DECL) DEVICE_FNS(DECL)
