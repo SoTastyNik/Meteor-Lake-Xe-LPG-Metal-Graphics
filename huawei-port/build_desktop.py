@@ -120,6 +120,26 @@ def main():
         sign(OUT / 'tools' / name)
     shutil.copy2(R / 'latitude-runtime/tools/check.spv', OUT / 'tools/check.spv')
 
+    # gfx-selftest: correctness checks the stick's gfx-selftest.sh runs from the newest package. A check that does not
+    # build is left out with a warning; it never fails the package.
+    st = OUT / 'tools/selftest'
+    st.mkdir(parents=True, exist_ok=True)
+    fws = [x for n in ['Foundation', 'Metal', 'IOSurface', 'IOKit', 'CoreVideo', 'CoreImage', 'OpenGL', 'VideoToolbox', 'CoreMedia',
+                       'ImageIO', 'CoreGraphics'] for x in ('-framework', n)]
+    built = []
+    for name in ['gfx_selftest', 'upstream/bench_surface_order', 'upstream/bench_surface_wrappers', 'upstream/bench_surface_wrappers_nv12',
+                 'upstream/bench_vt_transfer', 'upstream/bench_pipeline_build']:
+        exe = Path(name).name
+        try:
+            run('selftest-' + exe, ['xcrun', 'clang', *X86, '-fobjc-arc', '-O1', '-Wno-deprecated-declarations',
+                                    f'huawei-port/tools/selftest/{name}.m', *fws, '-o', str(st / exe)])
+            sign(st / exe)
+            built.append(exe)
+        except SystemExit as e:
+            print(f'warning: {e} - {exe} left out of the package')
+    shutil.copy2(R / 'huawei-port/tools/selftest/upstream/NOTICE.txt', st / 'NOTICE-upstream.txt')
+    (st / 'BUILT.txt').write_text(''.join(b + '\n' for b in built))
+
     # VoodooI2C controller personality for the touchpad/touchscreen controllers (OpenCore-injected)
     run('i2c', [sys.executable, 'huawei-port/i2c/build_i2c.py', str(OUT / 'EFI-Kexts')])
 

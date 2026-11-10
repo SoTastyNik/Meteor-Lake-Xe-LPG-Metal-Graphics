@@ -1,0 +1,6 @@
+bench_surface_order.m, bench_surface_wrappers.m, bench_surface_wrappers_nv12.m, bench_vt_transfer.m and
+bench_pipeline_build.m are copied unchanged from NullMoth's nvidia-macos-driver (tools/, main branch, 2026-11-10):
+https://github.com/nullmoth/nvidia-macos-driver
+Copyright (c) 2026 NullMoth Systems. Licensed under the PolyForm Noncommercial License 1.0.0
+(https://polyformproject.org/licenses/noncommercial/1.0.0). Used here, unmodified, as self-checks of this
+noncommercial port.
