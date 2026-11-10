@@ -272,6 +272,9 @@ void nvmtl_texture_desc_swizzle(NVMTLTexture *t, MTLTextureDescriptor *d);
 @interface NVMTLIndirectCommandBuffer () { @public uint64_t _resid; } @end
 @interface NVMTLIndirectCommand () - (void)nvmtlCopyFrom:(NVMTLIndirectCommand *)o; @end
 NSUInteger nvmtl_air_max_tg(NVMTLFunction *fn);
+// v63_1 (upstream d0aea7119): facts about a module's text that newFunctionWithName asks for on every call; kept on the text
+enum { NVMTL_AIRF_KNOWN = 1, NVMTL_AIRF_DYLD_TABLE = 2, NVMTL_AIRF_ISECT_TABLE = 4 };
+uint32_t nvmtl_air_text_flags(NSString *ll);
 @interface NVMTLRenderCommandEncoder () { @public NSString *_label; } @end
 @interface NVMTLRenderCommandEncoder () { @public uint32_t _vstride[NVMTL_NVIN]; uint32_t _vstrideSet; } @end
 @interface NVMTLRenderCommandEncoder () { @public int _prMode; NSUInteger _prIndex; } @end   // primitive restart SPI: 0 Metal's rule, 1 off, 2 on

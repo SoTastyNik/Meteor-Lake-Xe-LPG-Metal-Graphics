@@ -903,6 +903,15 @@ static int nvmtl_vk_initialize(void)
         setenv("NVRM_FLUSH_TIMEOUT_MS", budget, 1);
         nvlog("vk: GPU wait budget %s ms for %s (WindowServer keeps 5000 - a frozen desktop is worse than a dropped frame)", budget, getprogname());
     }
+    // v63_1: loginwindow runs as root with no writable HOME, so it chose root's /var/folders/zz/.../C/nvmtl-mesa below -
+    // and hands its environment to the whole login session: every app inherited a folder it may not write, and Mesa
+    // switched its disk cache off in all of them ("Failed to create ... for shader cache (Permission denied)---disabling"),
+    // compiling every shader again in every process. A folder of ours that this process cannot write is chosen again.
+    { const char *m = getenv("MESA_SHADER_CACHE_DIR"); const size_t ml = m ? strlen(m) : 0;
+      if (ml > 11 && !strcmp(m + ml - 11, "/nvmtl-mesa") && access(m, W_OK) != 0) {
+          nvlog("vk: %s inherited a Mesa cache dir it cannot write (%s) - choosing its own", getprogname(), m);
+          unsetenv("MESA_SHADER_CACHE_DIR");
+      } }
     if (!getenv("MESA_SHADER_CACHE_DIR") && !getenv("XDG_CACHE_HOME") && !getenv("NVMTL_NO_MESA_CACHE_DIR")) {
         const char *home = getenv("HOME");
         if (!home || access(home, W_OK) != 0) {

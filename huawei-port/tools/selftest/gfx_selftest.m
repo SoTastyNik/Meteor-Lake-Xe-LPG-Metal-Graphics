@@ -387,9 +387,11 @@ static BOOL gl_draw(BOOL accelerated, uint8_t *out, int W, int H, char *renderer
         glClearColor(0.0f, 0.0f, 0.25f, 1.0f); glClear(GL_COLOR_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, W, 0, H, -1, 1);
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-        glBegin(GL_QUADS);   // a gradient across the middle
-        glColor3f(1, 0, 0); glVertex2f(0, H * 0.3f); glColor3f(0, 1, 0); glVertex2f(W, H * 0.3f);
-        glColor3f(0, 0, 1); glVertex2f(W, H * 0.6f); glColor3f(1, 1, 1); glVertex2f(0, H * 0.6f);
+        // a gradient across the middle, as two triangles: a quad with four colours is split along whichever diagonal the
+        // implementation picks (Apple's software renderer and Mesa pick different ones), and v63 failed on that alone
+        glBegin(GL_TRIANGLES);
+        glColor3f(1, 0, 0); glVertex2f(0, H * 0.3f); glColor3f(0, 1, 0); glVertex2f(W, H * 0.3f); glColor3f(0, 0, 1); glVertex2f(W, H * 0.6f);
+        glColor3f(1, 0, 0); glVertex2f(0, H * 0.3f); glColor3f(0, 0, 1); glVertex2f(W, H * 0.6f); glColor3f(1, 1, 1); glVertex2f(0, H * 0.6f);
         glEnd();
         glColor3f(1, 1, 0); glBegin(GL_TRIANGLES); glVertex2f(8, 8); glVertex2f(60, 8); glVertex2f(8, 40); glEnd();   // yellow, bottom left
         glColor3f(0, 1, 1); glBegin(GL_QUADS); glVertex2f(W - 50, H - 30); glVertex2f(W - 6, H - 30); glVertex2f(W - 6, H - 6); glVertex2f(W - 50, H - 6); glEnd();
