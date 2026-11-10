@@ -19,12 +19,13 @@ static int nvmtl_mtl_unified_identity(uint32_t vendor, uint32_t device,
 }
 
 /* The port's i915 builds userptr since the HUAWEI v13 kernel (CONFIG_MMU_NOTIFIER, pin_user_pages through the
-   port's IOMemoryDescriptor wiring). Host imports, and with them IOSurface textures rendered in place, are opted into
-   with /Library/GPUBundles/nvmtl-host-import until they are proven on the MateBook. */
+   port's IOMemoryDescriptor wiring). Host imports, and with them IOSurface textures rendered in place, were opted into
+   with /Library/GPUBundles/nvmtl-host-import from v13; every MateBook test from v50 to v63 ran with them, so from v64
+   they are on unless /Library/GPUBundles/nvmtl-no-host-import is present. */
 #include <unistd.h>
 static int nvmtl_mtl_userptr_unavailable(uint32_t vendor, uint32_t device)
 {
-    return vendor == 0x8086 && device == 0x7d55 && access("/Library/GPUBundles/nvmtl-host-import", F_OK) != 0;
+    return vendor == 0x8086 && device == 0x7d55 && access("/Library/GPUBundles/nvmtl-no-host-import", F_OK) == 0;
 }
 
 /* A queried budget is a limit, not dedicated VRAM or a physical reservation. */
