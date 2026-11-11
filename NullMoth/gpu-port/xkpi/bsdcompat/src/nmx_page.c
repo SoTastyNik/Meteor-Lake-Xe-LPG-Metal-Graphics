@@ -20,6 +20,8 @@
 #include <vm/vm_object.h>
 #include <vm/vm_pager.h>
 #include <vm/pmap.h>
+#include <sys/proc.h>
+#include <sys/kthread.h>
 
 int nmx_malloc_note_contig(void *addr, size_t size, struct malloc_type *type);
 void nmx_malloc_forget_contig(void *addr);
@@ -56,6 +58,20 @@ static lck_spin_t *pg_lock;               /* registry, chunk list and free list 
 static struct backing *chunks;
 static struct vm_page *free_pages;         /* free single pages, linked through plinks.s.ss */
 static u_int free_count;
+/*
+ * v65: pages zeroed ahead of use. Every page a GEM object got was zeroed on the allocating thread (page_prepare), and
+ * each 16-24 MB image a Launchpad folder makes spent 10-15 ms there, inside the execbuffer that first used it
+ * (gfx-bench v64: "new binding 20 MB shmem: alloc ~9.5 ms", about ten in a burst - the 100-250 ms frames). Freed chunk
+ * pages are now zeroed, and their lines written out, by a background thread, a batch at a time, until ZERO_TARGET are
+ * ready; an allocation that wants a zeroed page takes one of those first. The same pages are zeroed as before, only
+ * earlier and away from the frame. debug.nmxgpu_zero_pool=0 (NMXAccel) stops the refill; pages already zeroed are used.
+ */
+#define ZERO_TARGET 32768                  /* 128 MB ready (v66; v65_1 had 64 MB and ran dry in a folder's burst) */
+#define ZERO_BATCH  128                    /* 512 KB per pass, then a 1 ms pause */
+static struct vm_page *zero_pages;         /* zeroed free pages, linked the same way */
+static u_int zero_count;
+static volatile int zero_run, zero_alive;
+static uint64_t zero_served, zero_inline, zero_made;
 static uint64_t pages_live;                /* pages currently handed out (all kinds) */
 
 static unsigned reg_bucket(vm_paddr_t pfn)
@@ -172,14 +188,23 @@ static void backing_release(struct backing *bk)
 
 /* ---- allocation --------------------------------------------------------------------------------------------------- */
 
-static struct vm_page *single_alloc(void)
+/* a free page, a zeroed one first when the caller zeroes (*zeroed then says so), otherwise one not zeroed yet */
+static struct vm_page *single_alloc(int want_zero, int *zeroed)
 {
+    *zeroed = 0;
     for (;;) {
         lck_spin_lock(pg_lock);
-        struct vm_page *m = free_pages;
-        if (m) {
+        struct vm_page *m = NULL;
+        if (zero_pages != NULL && (want_zero || free_pages == NULL)) {
+            m = zero_pages;
+            zero_pages = (struct vm_page *)(uintptr_t)m->plinks.s.ss.sle_next;
+            zero_count--;
+            *zeroed = 1;
+        } else if ((m = free_pages) != NULL) {
             free_pages = (struct vm_page *)(uintptr_t)m->plinks.s.ss.sle_next;
             free_count--;
+        }
+        if (m) {
             ((struct backing *)m->nmx_alloc)->live++;
             pages_live++;
             lck_spin_unlock(pg_lock);
@@ -203,21 +228,102 @@ static struct vm_page *single_alloc(void)
     }
 }
 
-static void page_prepare(struct vm_page *m, int req)
+static void page_prepare(struct vm_page *m, int req, int zeroed)
 {
     m->ref_count = 1;               /* every page starts wired once; LinuxKPI always asks for wired pages */
     m->flags = 0;
     m->md.pat_mode = VM_MEMATTR_WRITE_BACK;
-    if (req & VM_ALLOC_ZERO)
+    if (!(req & VM_ALLOC_ZERO))
+        return;
+    if (zeroed)
+        __atomic_fetch_add(&zero_served, 1, __ATOMIC_RELAXED);
+    else {
         bzero(m->nmx_kva, PAGE_SIZE);
+        __atomic_fetch_add(&zero_inline, 1, __ATOMIC_RELAXED);
+    }
 }
 
 vm_page_t vm_page_alloc_noobj(int req)
 {
-    struct vm_page *m = single_alloc();
+    int zeroed;
+    struct vm_page *m = single_alloc((req & VM_ALLOC_ZERO) != 0, &zeroed);
     if (m)
-        page_prepare(m, req);
+        page_prepare(m, req, zeroed);
     return m;
+}
+
+void pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva);
+int nmx_xnu_tunable(const char *name);
+/* v65: the zeroing thread (see ZERO_TARGET): freed pages in batches, zeroed with their lines written out, onto zero_pages */
+static void zero_thread(void *arg)
+{
+    (void)arg;
+    uint64_t passes = 0, said = 0;
+    int on = 1;
+    while (zero_run) {
+        if ((passes++ & 1023) == 0)
+            on = nmx_xnu_tunable("nmxgpu-zero-pool") != 0;   /* absent (-1): on */
+        struct vm_page *batch = NULL;
+        u_int n = 0;
+        if (on) {
+            lck_spin_lock(pg_lock);
+            while (n < ZERO_BATCH && free_pages != NULL && zero_count + n < ZERO_TARGET) {
+                struct vm_page *m = free_pages;
+                free_pages = (struct vm_page *)(uintptr_t)m->plinks.s.ss.sle_next;
+                free_count--;
+                m->plinks.s.ss.sle_next = batch;
+                batch = m;
+                n++;
+            }
+            lck_spin_unlock(pg_lock);
+        }
+        if (n == 0) {
+            pause("nmxzero", 20);           /* nothing to zero, or enough ready: look again in 20 ms */
+            continue;
+        }
+        struct vm_page *last = NULL;
+        for (struct vm_page *m = batch; m != NULL; m = m->plinks.s.ss.sle_next) {
+            bzero(m->nmx_kva, PAGE_SIZE);
+            pmap_invalidate_cache_range((vm_offset_t)m->nmx_kva, (vm_offset_t)m->nmx_kva + PAGE_SIZE);
+            last = m;
+        }
+        lck_spin_lock(pg_lock);
+        last->plinks.s.ss.sle_next = zero_pages;
+        zero_pages = batch;
+        zero_count += n;
+        const u_int ready = zero_count;
+        lck_spin_unlock(pg_lock);
+        const uint64_t made = __atomic_add_fetch(&zero_made, n, __ATOMIC_RELAXED);
+        if (made >> 16 != said) {           /* every 256 MB zeroed */
+            said = made >> 16;
+            printf("NullMoth GPU: zero pool: %llu MB zeroed ahead, %llu MB of zeroed pages served, %llu MB zeroed at "
+                   "allocation; %u MB ready\n", (unsigned long long)(made >> 8),
+                   (unsigned long long)(__atomic_load_n(&zero_served, __ATOMIC_RELAXED) >> 8),
+                   (unsigned long long)(__atomic_load_n(&zero_inline, __ATOMIC_RELAXED) >> 8), ready >> 8);
+        }
+        pause("nmxzero", 1);
+    }
+    zero_alive = 0;
+}
+
+void nmx_page_zero_start(void)
+{
+    if (zero_run || pg_lock == NULL)
+        return;
+    zero_run = 1;
+    zero_alive = 1;
+    if (kthread_add(zero_thread, NULL, NULL, NULL, 0, 0, "nmx_zero_pages") != 0) {
+        zero_run = 0;
+        zero_alive = 0;
+        printf("NullMoth GPU: zero pool: no thread - pages are zeroed at allocation, as before v65\n");
+    }
+}
+
+void nmx_page_zero_stop(void)
+{
+    zero_run = 0;
+    for (int i = 0; i < 200 && zero_alive; i++)
+        pause("nmxzstop", 5);
 }
 
 vm_page_t vm_page_alloc_noobj_contig(int req, u_long npages, vm_paddr_t low, vm_paddr_t high, u_long alignment,
@@ -234,7 +340,7 @@ vm_page_t vm_page_alloc_noobj_contig(int req, u_long npages, vm_paddr_t low, vm_
     pages_live += npages;
     lck_spin_unlock(pg_lock);
     for (u_long i = 0; i < npages; i++) {
-        page_prepare(&bk->pages[i], req);
+        page_prepare(&bk->pages[i], req, 0);
         bk->pages[i].md.pat_mode = memattr;
     }
     return &bk->pages[0];

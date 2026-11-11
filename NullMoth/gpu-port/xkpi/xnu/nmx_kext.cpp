@@ -139,7 +139,9 @@ bool NMXGPU::start(IOService *provider)
         g_started = true;
         /* v65_2: where this kext's code is, so a kernel panic's addresses can be matched to it (a panic report names
            only the kexts it finds in the backtrace, and one whose code was no longer mapped there is not named) */
-        IOLog("NullMoth GPU: code at 0x%llx (nmx_port_start)\n", (unsigned long long)(uintptr_t)&nmx_port_start);
+        // in two halves: the log hides a whole value that looks like a kernel address (v65_2 printed "0x<private>")
+        const uint64_t code = (uint64_t)(uintptr_t)&nmx_port_start;
+        IOLog("NullMoth GPU: code at 0x%08x %08x (nmx_port_start)\n", (unsigned)(code >> 32), (unsigned)code);
     }
     g_devices++;
     IOLockUnlock(g_lock);
