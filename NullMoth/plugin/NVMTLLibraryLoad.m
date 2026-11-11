@@ -1628,6 +1628,26 @@ NSArray<NSDictionary *> *nvmtl_air_argbuf_layout(NVMTLFunction *fn, NSUInteger b
     return out;
 }
 
+/*
+ * v65_1: what a reflection says, kept on the reflection itself. VideoToolbox makes a function (new constants) and a
+ * pipeline for every pixel transfer, and each new function parsed the same reflection JSON again - for its argument
+ * buffer bindings and again for its constexpr samplers - then rebuilt its binding plan and its sampler variant's Vulkan
+ * pipeline (gfx-selftest v64 profile: ~40% of a transfer). The reflection, the SPIR-V and the variant SPIR-V come back
+ * from the shader memo as the same objects every time, so the work done on them is kept on them.
+ */
+static const void *NVMTL_REFLDICT_KEY = &NVMTL_REFLDICT_KEY;
+static const void *NVMTL_REFLEMB_KEY = &NVMTL_REFLEMB_KEY;
+static NSDictionary *nvmtl_reflect_dict(NSData *d)
+{
+    if (!d) return nil;
+    NSDictionary *have = objc_getAssociatedObject(d, NVMTL_REFLDICT_KEY);
+    if (have) return have;
+    id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL];
+    if (![obj isKindOfClass:[NSDictionary class]]) return nil;
+    objc_setAssociatedObject(d, NVMTL_REFLDICT_KEY, obj, OBJC_ASSOCIATION_RETAIN);
+    return obj;
+}
+
 NSArray<NSDictionary *> *nvmtl_embedded_bindings(NVMTLFunction *function)
 {
     if (!function) return nil;
@@ -1653,7 +1673,9 @@ NSArray<NSDictionary *> *nvmtl_embedded_bindings(NVMTLFunction *function)
             function->_embedded = @[];
             return function->_embedded;
         }
-        NSDictionary *refl = [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL];
+        NSArray *kept = objc_getAssociatedObject(d, NVMTL_REFLEMB_KEY);
+        if (kept) { function->_embedded = kept; return kept; }
+        NSDictionary *refl = nvmtl_reflect_dict(d);
         NSArray *all = refl[@"bindings"];
         NSMutableArray *mine = [NSMutableArray new];
         if ([all isKindOfClass:[NSArray class]]) {
@@ -1667,7 +1689,8 @@ NSArray<NSDictionary *> *nvmtl_embedded_bindings(NVMTLFunction *function)
             nvlog("embedded: reflection for %s has no bindings array — resources NOT resolved", who);
         }
         if (mine.count) nvlog("embedded: %s reaches %lu resource(s) through argument buffers", who, (unsigned long)mine.count);
-        function->_embedded = mine;
+        function->_embedded = [mine copy];
+        objc_setAssociatedObject(d, NVMTL_REFLEMB_KEY, function->_embedded, OBJC_ASSOCIATION_RETAIN);
         return function->_embedded;
     }
 }

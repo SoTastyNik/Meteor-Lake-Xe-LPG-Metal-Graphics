@@ -100,7 +100,9 @@ static NSArray<NSArray *> *nvmtl_static_samplers(NVMTLFunction *fn)
         char e[512] = { 0 };
         NSData *d = (fn->_air && fn->_stage.length && nvmtl_xlate_ready() && xlate_refl)
                   ? nvmtl_reflect_air_cached(fn, fn->_air, fn->_stage, e, sizeof e) : nil;
-        NSDictionary *refl = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
+        NSArray *kept = d ? objc_getAssociatedObject(d, NVMTL_SSAMP_KEY) : nil;   // v65_1: made for this reflection before
+        if (kept) { objc_setAssociatedObject(fn, NVMTL_SSAMP_KEY, kept, OBJC_ASSOCIATION_RETAIN); return kept; }
+        NSDictionary *refl = nvmtl_reflect_dict(d);
         NSArray *all = [refl isKindOfClass:[NSDictionary class]] ? refl[@"bindings"] : nil;
         for (NSDictionary *b in [all isKindOfClass:[NSArray class]] ? all : @[]) {
             if (![b isKindOfClass:[NSDictionary class]] || ![b[@"kind"] isEqual:@"StaticSampler"]) continue;
@@ -112,6 +114,7 @@ static NSArray<NSArray *> *nvmtl_static_samplers(NVMTLFunction *fn)
         }
         if (out.count) nvlog("static sampler: %s binds %lu constexpr sampler(s) with their own state", fn->_fname.UTF8String, (unsigned long)out.count);
         objc_setAssociatedObject(fn, NVMTL_SSAMP_KEY, out, OBJC_ASSOCIATION_RETAIN);
+        if (d) objc_setAssociatedObject(d, NVMTL_SSAMP_KEY, out, OBJC_ASSOCIATION_RETAIN);
     }
     return out;
 }
@@ -164,6 +167,14 @@ static NSArray<NVMTLEmbeddedPlan *> *nvmtl_embedded_plan(NVMTLFunction *fn) {
     @synchronized(fn) {
         cached = objc_getAssociatedObject(fn, &nvmtl_embedded_plan_key);
         if (cached) return cached;
+        // v65_1: a plan depends on the SPIR-V (its declared bindings) and the binding list only; another function with
+        // both the same objects (VideoToolbox's next transfer) takes the plan made for them
+        NSArray *bindings = nvmtl_embedded_bindings(fn);
+        NSArray *kept = fn->_spirv ? objc_getAssociatedObject(fn->_spirv, &nvmtl_embedded_plan_key) : nil;
+        if (kept.count == 2 && kept[0] == bindings) {
+            objc_setAssociatedObject(fn, &nvmtl_embedded_plan_key, kept[1], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            return kept[1];
+        }
         NSMutableArray *plans = [NSMutableArray new];
         uint64_t decl[2][8]; const BOOL haveDecl = nvmtl_spirv_declared(fn->_spirv, decl); unsigned heapRouted = 0;
         for (NSDictionary *entry in nvmtl_embedded_bindings(fn)) {
@@ -191,6 +202,7 @@ static NSArray<NVMTLEmbeddedPlan *> *nvmtl_embedded_plan(NVMTLFunction *fn) {
                   fn->_fname.UTF8String, heapRouted, (unsigned long)plans.count); }
         cached = [plans copy];
         objc_setAssociatedObject(fn, &nvmtl_embedded_plan_key, cached, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (fn->_spirv && bindings) objc_setAssociatedObject(fn->_spirv, &nvmtl_embedded_plan_key, @[bindings, cached], OBJC_ASSOCIATION_RETAIN);
         return cached;
     }
 }

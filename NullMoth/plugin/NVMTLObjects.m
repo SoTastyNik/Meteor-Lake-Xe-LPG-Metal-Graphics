@@ -4299,11 +4299,16 @@ static void nvmtl_stride_dropped(NSUInteger st) { static BOOL said; if (!said &&
             if (!selected) {
                 NSString *why = nil;
                 NSData *spirv = nvmtl_translate_variant(_ps->_function, _samplers, _tgLen, &why);
-                if (spirv) {
+                // v65_1: the pipeline made for this variant SPIR-V by an earlier pipeline state (VideoToolbox makes a new
+                // one per transfer); the variant holds nothing of the state it was made for
+                static char variantKey;
+                selected = (spirv && spirv != _ps->_function->_spirv) ? objc_getAssociatedObject(spirv, &variantKey) : nil;
+                if (!selected && spirv) {
                     selected = [NVMTLComputePipelineState new];
                     if (nvmtl_vk_compute_pipeline_create(spirv.bytes, spirv.length, &selected->_p)) {
                         selected = nil; why = @"Vulkan compute pipeline creation failed";
-                    }
+                    } else if (spirv != _ps->_function->_spirv)
+                        objc_setAssociatedObject(spirv, &variantKey, selected, OBJC_ASSOCIATION_RETAIN);
                 }
                 if (!selected) {
                     nvlog("compute pixel sampler specialization REFUSED %s: %s", _ps->_function->_fname.UTF8String, why.UTF8String);
