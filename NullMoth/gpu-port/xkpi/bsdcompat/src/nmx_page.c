@@ -71,7 +71,14 @@ static u_int free_count;
 static struct vm_page *zero_pages;         /* zeroed free pages, linked the same way */
 static u_int zero_count;
 static volatile int zero_run, zero_alive;
-static uint64_t zero_served, zero_inline, zero_made;
+static uint64_t zero_served, zero_inline, zero_made, zero_chunks;
+/*
+ * v66_1: the pool fills itself. v66 zeroed only pages that came back to the free list, and in a Launchpad burst there
+ * are nearly none: a new object's pages are new 2 MB chunks (nmx_xnu_mem_alloc, ~1 ms each), carved and consumed in
+ * the same execbuffer, so the pool served 39% of the zeroed pages and sat at 0 MB ready (gfx-bench v66). When fewer
+ * than ZERO_TARGET pages are ready and none are free to zero, the thread allocates a chunk itself, zeroes it and puts
+ * it on the ready list: the reserve is ZERO_TARGET pages of wired memory, allocated and zeroed away from the frame.
+ */
 static uint64_t pages_live;                /* pages currently handed out (all kinds) */
 
 static unsigned reg_bucket(vm_paddr_t pfn)
@@ -277,6 +284,29 @@ static void zero_thread(void *arg)
             }
             lck_spin_unlock(pg_lock);
         }
+        if (n == 0 && on && zero_count < ZERO_TARGET) {
+            struct backing *bk = backing_alloc(BK_CHUNK, CHUNK_PAGES, 0, 0, PAGE_SIZE);
+            if (bk != NULL) {
+                lck_spin_lock(pg_lock);
+                bk->next = chunks;
+                chunks = bk;
+                lck_spin_unlock(pg_lock);
+                for (size_t i = 0; i < bk->npages; i++) {
+                    bzero(bk->pages[i].nmx_kva, PAGE_SIZE);
+                    pmap_invalidate_cache_range((vm_offset_t)bk->pages[i].nmx_kva, (vm_offset_t)bk->pages[i].nmx_kva + PAGE_SIZE);
+                    bk->pages[i].plinks.s.ss.sle_next = i + 1 < bk->npages ? &bk->pages[i + 1] : NULL;
+                }
+                lck_spin_lock(pg_lock);
+                bk->pages[bk->npages - 1].plinks.s.ss.sle_next = zero_pages;
+                zero_pages = &bk->pages[0];
+                zero_count += (u_int)bk->npages;
+                lck_spin_unlock(pg_lock);
+                __atomic_add_fetch(&zero_made, bk->npages, __ATOMIC_RELAXED);
+                __atomic_add_fetch(&zero_chunks, 1, __ATOMIC_RELAXED);
+                pause("nmxzero", 1);
+                continue;
+            }
+        }
         if (n == 0) {
             pause("nmxzero", 20);           /* nothing to zero, or enough ready: look again in 20 ms */
             continue;
@@ -296,8 +326,9 @@ static void zero_thread(void *arg)
         const uint64_t made = __atomic_add_fetch(&zero_made, n, __ATOMIC_RELAXED);
         if (made >> 16 != said) {           /* every 256 MB zeroed */
             said = made >> 16;
-            printf("NullMoth GPU: zero pool: %llu MB zeroed ahead, %llu MB of zeroed pages served, %llu MB zeroed at "
-                   "allocation; %u MB ready\n", (unsigned long long)(made >> 8),
+            printf("NullMoth GPU: zero pool: %llu MB zeroed ahead (%llu MB in chunks of its own), %llu MB of zeroed pages "
+                   "served, %llu MB zeroed at allocation; %u MB ready\n", (unsigned long long)(made >> 8),
+                   (unsigned long long)(__atomic_load_n(&zero_chunks, __ATOMIC_RELAXED) * CHUNK_PAGES >> 8),
                    (unsigned long long)(__atomic_load_n(&zero_served, __ATOMIC_RELAXED) >> 8),
                    (unsigned long long)(__atomic_load_n(&zero_inline, __ATOMIC_RELAXED) >> 8), ready >> 8);
         }
