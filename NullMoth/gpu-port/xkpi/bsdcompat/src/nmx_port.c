@@ -20,8 +20,6 @@ int nmx_malloc_init(void);
 void nmx_malloc_fini(void);
 int nmx_page_init(void);
 void nmx_page_fini(void);
-void nmx_page_zero_start(void);
-void nmx_page_zero_stop(void);
 int nmx_sleepq_init(void);
 void nmx_sleepq_fini(void);
 int nmx_callout_init(void);
@@ -46,13 +44,11 @@ int nmx_port_start(void)
     STEP(nmx_xnu_devfs_init());
     STEP(nmx_sysinit_run());
 #undef STEP
-    nmx_page_zero_start();   /* v65: not a step - without the thread pages are zeroed at allocation, as before */
     return 0;
 }
 
 void nmx_port_stop(void)
 {
-    nmx_page_zero_stop();
     if (stage >= 8)
         nmx_sysuninit_run();
     if (stage >= 7)
