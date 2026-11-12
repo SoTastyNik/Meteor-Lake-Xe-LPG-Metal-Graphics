@@ -23,6 +23,7 @@
     BOOL aheadEmpty;
     BOOL submitting;      // split submit: the submit queue is in this part's execbuffer, the class lock released
     BOOL aheadDeclined;   // the ahead pass will never submit it (host pointers, no recording): the worker does
+    NSArray<NVMTLBuffer *> *heldCopies;   // v67: host-copy buffers this part, submitted ahead, holds until it finishes
     NSMutableDictionary<NSNumber *, NSNumber *> *ssSeq;   // v60: surface ID -> the write number NMXGPU gave at commit
 }
 @end
@@ -103,8 +104,10 @@ static void nvmtl_surface_finish_writes(NVMTLCommandBuffer *cb) {
     }
 }
 
+static void nvmtl_part_release_copies(NVMTLSubmissionPart *part);
 @implementation NVMTLSubmissionPart
 - (void)dealloc {
+    nvmtl_part_release_copies(self);
     if (inflight) {
         nvlog("commit: G-SUB BUG - a part submitted ahead reached dealloc unfinished; finishing it now");
         if (nvmtl_gsub_finish(self) != 0) {
@@ -482,6 +485,28 @@ static NSArray<NVMTLBuffer *> *nvmtl_submission_copies(NSSet *resources, BOOL wr
     }
     return copies;
 }
+/*
+ * v67: a part that reads a buffer kept as a GPU copy of host memory (newBufferWithBytesNoCopy whose pages could not be
+ * imported) was never submitted ahead: its copy is refreshed from the host bytes when it is submitted, and a later part
+ * refreshing the same copy while an earlier one is still on the GPU would change what the earlier one reads. So every
+ * such part went to the execution worker, which then owned the rest of its command buffer and submitted part by part,
+ * waiting for the GPU after each - the GPU idled while the CPU waited and submitted, and the ahead pass stopped behind it
+ * for that queue (WindowServer: ~20% of its parts; frames 9 ms from commit to done for 4 ms of GPU work, gfx-bench
+ * v66_1). The hazard is only a copy another unfinished part holds, so a part goes ahead when none of its host copies is
+ * held: it holds them from before its execbuffer until it has finished and synced them out.
+ * /Library/GPUBundles/nvmtl-ws-hostcopy-hold keeps every such part with the worker, as before.
+ */
+static int nvmtl_hostcopy_ahead_on(void) {
+    static int on = -1;
+    if (on < 0) on = access("/Library/GPUBundles/nvmtl-ws-hostcopy-hold", F_OK) != 0;
+    return on;
+}
+static _Atomic unsigned long long gHostCopyAhead, gHostCopyBusy;
+static void nvmtl_part_release_copies(NVMTLSubmissionPart *part) {
+    NSArray<NVMTLBuffer *> *held = part->heldCopies;
+    part->heldCopies = nil;
+    for (NVMTLBuffer *buffer in held) __atomic_sub_fetch(&buffer->_copyBusy, 1, __ATOMIC_ACQ_REL);
+}
 static void nvmtl_ahead_decline(NVMTLSubmissionPart *part) {
     if (part->aheadDeclined) return;
     part->aheadDeclined = YES;
@@ -514,16 +539,35 @@ static void nvmtl_ahead_decline(NVMTLSubmissionPart *part) {
             nvmtl_evfold_census(&gEvFoldEmpty, "empty split parts retired by the ahead pass");
             continue;
         }
+        NSMutableArray<NVMTLBuffer *> *hostCopies = nil;
         {
             static int hold = -1;
             if (hold < 0) { const char *e = getenv("NVMTL_GSUB_HOSTPTR_LIFT"); hold = (e && *e && *e != '0') ? 0 : 1; }
             if (hold) {
-                for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO))
-                    if (buffer->_hostPtr) { nvmtl_ahead_decline(part); return NO; }
+                BOOL busy = NO;
+                for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO)) {
+                    if (!buffer->_hostPtr) continue;
+                    if (__atomic_load_n(&buffer->_copyBusy, __ATOMIC_ACQUIRE)) busy = YES;
+                    if (!hostCopies) hostCopies = [NSMutableArray new];
+                    [hostCopies addObject:buffer];
+                }
+                if (hostCopies && (busy || !nvmtl_hostcopy_ahead_on())) {
+                    if (busy) atomic_fetch_add(&gHostCopyBusy, 1);
+                    nvmtl_ahead_decline(part); return NO;
+                }
             }
         }
         nvmtl_inflight *f = nvmtl_vk_inflight_new();
         if (!f) { nvmtl_ahead_decline(part); return NO; }
+        // held before the class lock is let go around the execbuffer, so no other pass refreshes these copies meanwhile
+        if (hostCopies) {
+            for (NVMTLBuffer *buffer in hostCopies) __atomic_add_fetch(&buffer->_copyBusy, 1, __ATOMIC_ACQ_REL);
+            part->heldCopies = hostCopies;
+            const unsigned long long k = atomic_fetch_add(&gHostCopyAhead, 1) + 1;
+            if (nvmtl_vk_windowserver_serial() && (k <= 2 || !(k & (k - 1))))
+                syslog(LOG_ERR, "NullMoth: split submit: %llu parts with host copies submitted ahead, %llu left to the worker because a copy was still on the GPU",
+                       k, (unsigned long long)atomic_load(&gHostCopyBusy));
+        }
         for (NVMTLBuffer *buffer in nvmtl_submission_copies(part->resources, NO)) nvmtl_buffer_sync_in(buffer);
         [self nvmtlMarkScheduled];
         if (!_legacyKernelStart) _legacyKernelStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e9;
@@ -541,6 +585,7 @@ static void nvmtl_ahead_decline(NVMTLSubmissionPart *part) {
         if (r) {
             nvmtl_vk_inflight_free(f);
             part->aheadFailed = r;
+            nvmtl_part_release_copies(part);
             return NO;
         }
         part->inflight = f;
@@ -743,6 +788,7 @@ static void nvmtl_gsub_ahead_pass1(void) {
         }
         for (NSNumber *key in part->ssSeq) nvmtl_vk_surf_done(key.unsignedIntValue, part->ssSeq[key].unsignedLongLongValue);
         part->ssSeq = nil;
+        nvmtl_part_release_copies(part);
         if (phaseBegin) {
             const uint64_t now=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
             static _Atomic unsigned slowReports;

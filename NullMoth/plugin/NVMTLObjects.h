@@ -20,7 +20,9 @@ static inline NSMutableData *nvmtl_fc_storage(NSUInteger count) {
     void *_hostPtr; size_t _hostLen; id _hostDealloc;
     NVMTLHeap *_subHeap; NSUInteger _subCharge; BOOL _aliased;
     nvk_buffer _shadow; int _syncOut; int _zshadow;
-    NSUInteger _dirtyLo, _dirtyHi; } @end
+    NSUInteger _dirtyLo, _dirtyHi;
+    int _copyBusy;   // v67: parts submitted ahead, not yet finished, whose GPU copy of this host buffer they synced in
+} @end
 #include <sched.h>
 static inline void nvmtl_buf_settle(NVMTLBuffer *b) {
     if (!__atomic_load_n(&b->_zshadow, __ATOMIC_ACQUIRE)) return;
