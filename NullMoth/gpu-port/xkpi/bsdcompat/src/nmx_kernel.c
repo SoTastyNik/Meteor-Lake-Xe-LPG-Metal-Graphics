@@ -490,6 +490,16 @@ void nmx_crit_debug(int *nest, int *saved, void **who, void **self)
     *self = (void *)nmx_critical_enter;
 }
 
+int nmx_intr_disable(void)
+{
+    return ml_set_interrupts_enabled(FALSE);
+}
+
+void nmx_intr_restore(int was)
+{
+    (void)ml_set_interrupts_enabled(was ? TRUE : FALSE);
+}
+
 int nmx_curcpu(void)
 {
     return cpu_number();

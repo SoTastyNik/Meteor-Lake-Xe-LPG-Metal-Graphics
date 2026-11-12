@@ -8,6 +8,10 @@ void nmx_critical_exit(void);
 #define critical_enter() nmx_critical_enter()
 #define critical_exit() nmx_critical_exit()
 int nmx_in_critical(void);
+/* v68: interrupts off on this CPU, returning the previous state for nmx_intr_restore; no nesting record (a section
+   whose nesting is kept elsewhere, as an RCU reader's is by its sched_pin) */
+int nmx_intr_disable(void);
+void nmx_intr_restore(int was);
 void sched_pin(void);
 void sched_unpin(void);
 void sched_prio(struct thread *td, u_char prio);

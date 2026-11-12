@@ -225,11 +225,11 @@ linux_rcu_read_lock(unsigned type)
 	record = &DPCPU_GET(linux_epoch_record[type]);
 
 	/*
-	 * Use a critical section to prevent recursion inside
-	 * ck_epoch_begin(). Else this function supports recursion.
+	 * macOS port (v68): FreeBSD takes a critical section here because its sched_pin() only pins; the port's sched_pin()
+	 * already is one (interrupts off, nested per thread), so a second critical_enter/exit only cost another interrupt
+	 * toggle and two thread-record lookups. An execbuffer of WindowServer's takes hundreds of these sections.
+	 * The unlock ends the section on this record, wherever the thread runs by then.
 	 */
-	critical_enter();
-	/* macOS port: the unlock ends the section on this record, wherever the thread runs by then */
 	ts->task_thread->td_rcu_cpu[type] = record->cpuid + 1;
 	ts->task_thread->td_rcu_ra[type] = __builtin_return_address(0);
 	nmx_record_lock(record);
@@ -237,7 +237,6 @@ linux_rcu_read_lock(unsigned type)
 	    (ck_epoch_section_t *)&ts->rcu_section[type]);
 	TAILQ_INSERT_TAIL(&record->ts_head, ts, rcu_entry[type]);
 	nmx_record_unlock(record);
-	critical_exit();
 }
 
 void
@@ -288,16 +287,20 @@ linux_rcu_read_unlock(unsigned type)
 	}
 
 	/*
-	 * Use a critical section to prevent recursion inside
-	 * ck_epoch_end(). Else this function supports recursion.
+	 * macOS port (v68): interrupts off around the record, as the critical section here did; a reader that blocked
+	 * inside its section may come back with them on. The nesting needs no record of its own: sched_unpin() below ends
+	 * the section sched_pin() began.
 	 */
-	critical_enter();
-	nmx_record_lock(record);
-	ck_epoch_end(&record->epoch_record,
-	    (ck_epoch_section_t *)&ts->rcu_section[type]);
-	TAILQ_REMOVE(&record->ts_head, ts, rcu_entry[type]);
-	nmx_record_unlock(record);
-	critical_exit();
+	{
+		const int was = nmx_intr_disable();
+
+		nmx_record_lock(record);
+		ck_epoch_end(&record->epoch_record,
+		    (ck_epoch_section_t *)&ts->rcu_section[type]);
+		TAILQ_REMOVE(&record->ts_head, ts, rcu_entry[type]);
+		nmx_record_unlock(record);
+		nmx_intr_restore(was);
+	}
 
 	sched_unpin();
 }

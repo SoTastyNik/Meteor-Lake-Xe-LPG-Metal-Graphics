@@ -954,17 +954,65 @@ static struct i915_vma *eb_lookup_vma(struct i915_execbuffer *eb, u32 handle)
 	} while (1);
 }
 
+#ifdef NMXKPI
+/*
+ * macOS port (v68): the fast handle lookups of an execbuffer, NMX_EB_PREFETCH at a time, under one RCU read section.
+ * A section is an epoch-record update with interrupts off on this port, and WindowServer's execbuffers carry 540-640
+ * objects: one section per object made up much of the ~380 us lookup phase (execbuffer phases, v67). A handle not yet
+ * in the context's table still takes eb_lookup_vma's own path; the references taken ahead are dropped on any error.
+ */
+#define NMX_EB_PREFETCH 64
+static void nmx_eb_prefetch(struct i915_execbuffer *eb, unsigned int first, unsigned int n, struct i915_vma **out)
+{
+	struct i915_address_space *vm = eb->context->vm;
+	unsigned int k;
+
+	rcu_read_lock();
+	for (k = 0; k < n; k++) {
+		struct i915_vma *vma = radix_tree_lookup(&eb->gem_context->handles_vma, eb->exec[first + k].handle);
+
+		out[k] = (vma && vma->vm == vm) ? i915_vma_tryget(vma) : NULL;
+	}
+	rcu_read_unlock();
+}
+
+static void nmx_eb_prefetch_drop(struct i915_vma **pre, unsigned int from, unsigned int n)
+{
+	for (; from < n; from++) {
+		if (pre[from])
+			i915_vma_put(pre[from]);
+		pre[from] = NULL;
+	}
+}
+#endif
+
 static int eb_lookup_vmas(struct i915_execbuffer *eb)
 {
 	unsigned int i, current_batch = 0;
 	int err = 0;
+#ifdef NMXKPI
+	struct i915_vma *pre[NMX_EB_PREFETCH];
+	unsigned int pre_base = 0, pre_n = 0;
+#endif
 
 	INIT_LIST_HEAD(&eb->relocs);
 
 	for (i = 0; i < eb->buffer_count; i++) {
 		struct i915_vma *vma;
 
+#ifdef NMXKPI
+		if (i == pre_base + pre_n) {
+			pre_base = i;
+			pre_n = min_t(unsigned int, NMX_EB_PREFETCH, eb->buffer_count - i);
+			nmx_eb_prefetch(eb, pre_base, pre_n, pre);
+		}
+		vma = pre[i - pre_base];
+		pre[i - pre_base] = NULL;
+		if (!vma)
+			vma = eb_lookup_vma(eb, eb->exec[i].handle);
+#else
 		vma = eb_lookup_vma(eb, eb->exec[i].handle);
+#endif
 		if (IS_ERR(vma)) {
 			err = PTR_ERR(vma);
 			goto err;
@@ -977,8 +1025,12 @@ static int eb_lookup_vmas(struct i915_execbuffer *eb)
 		}
 
 		err = eb_add_vma(eb, &current_batch, i, vma);
-		if (err)
+		if (err) {
+#ifdef NMXKPI
+			nmx_eb_prefetch_drop(pre, i - pre_base + 1, pre_n);
+#endif
 			return err;
+		}
 
 		if (i915_gem_object_is_userptr(vma->obj)) {
 			err = i915_gem_object_userptr_submit_init(vma->obj);
@@ -992,6 +1044,9 @@ static int eb_lookup_vmas(struct i915_execbuffer *eb)
 					 */
 					eb->vma[i + 1].vma = NULL;
 				}
+#ifdef NMXKPI
+				nmx_eb_prefetch_drop(pre, i - pre_base + 1, pre_n);
+#endif
 
 				return err;
 			}
@@ -1004,6 +1059,9 @@ static int eb_lookup_vmas(struct i915_execbuffer *eb)
 	return 0;
 
 err:
+#ifdef NMXKPI
+	nmx_eb_prefetch_drop(pre, i - pre_base + 1, pre_n);
+#endif
 	eb->vma[i].vma = NULL;
 	return err;
 }
