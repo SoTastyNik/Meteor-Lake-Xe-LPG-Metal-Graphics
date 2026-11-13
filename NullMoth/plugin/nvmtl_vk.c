@@ -56,6 +56,7 @@ static VkImageAspectFlags nvmtl_barrier_aspect(const nvk_image *img)
 #include <limits.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <dispatch/dispatch.h>
 static pthread_mutex_t g_gpu_clock_lock = PTHREAD_MUTEX_INITIALIZER;
 static inline const char *nvmtl_pick_vk(const char *staged, const char *dev) {
     return access(staged, R_OK) == 0 ? staged : dev;
@@ -2243,18 +2244,22 @@ static VkResult nvmtl_vk_alloc_image_mem(const VkMemoryRequirements *mr, VkDevic
  *
  * v40: 128 entries and 768 MB (v39 sat at its 512 MB cap: full-screen surfaces pushed out the small ones), and memory
  * parked for more than 10 s is freed (nvmtl_vk_ipark_trim, from WindowServer's command buffer completions).
+ *
+ * v70_1: 192 entries, 1 GB, 15 minutes for every size, and all of it freed when macOS reports memory pressure
+ * (ipark_watch_pressure). A Launchpad folder opened after a while in other apps found the park emptied by the 10 s /
+ * 2 min ages and stuttered for 2-3 openings while 256 new objects (637 MB) got their pages bound, 0.7 ms each, 7.8 ms
+ * at most (v70 bench); and in a warm run the park still evicted 299 entries at its 768 MB cap.
  */
-#define NVMTL_IMGPARK_N     128
-#define NVMTL_IMGPARK_BYTES (768ull << 20)
+#define NVMTL_IMGPARK_N     192
+#define NVMTL_IMGPARK_BYTES (1024ull << 20)
 #define NVMTL_IMGPARK_MIN   (64ull << 10)
-#define NVMTL_IMGPARK_AGE   10000000000ull
-#define NVMTL_IMGPARK_AGE_BIG 120000000000ull   // v46: 16 MB and more (full-screen surfaces): a new one cost up to 64 ms to bind
-static inline uint64_t ipark_age(VkDeviceSize size) { return size >= (16ull << 20) ? NVMTL_IMGPARK_AGE_BIG : NVMTL_IMGPARK_AGE; }
+#define NVMTL_IMGPARK_AGE   900000000000ull
+static inline uint64_t ipark_age(VkDeviceSize size) { (void)size; return NVMTL_IMGPARK_AGE; }
 static pthread_mutex_t g_ipark_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { VkDeviceMemory mem; VkDeviceSize size; uint32_t type; uint64_t t; } g_ipark[NVMTL_IMGPARK_N];   // oldest first
 static unsigned g_ipark_n;
 static uint64_t g_ipark_bytes;
-static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted, g_ipark_trimmed;
+static _Atomic uint64_t g_ipark_parked, g_ipark_reused, g_ipark_evicted, g_ipark_trimmed, g_ipark_pressure;
 /* v54: a WindowServer switch file looked at again once a second, so a variant can be tried live (sudo touch / rm) */
 static int nvmtl_ws_switch_live(const char *path, const char *what, int *on, uint64_t *next)
 {
@@ -2282,10 +2287,40 @@ static void ipark_census(void)
 {
     const uint64_t n = atomic_load(&g_ipark_parked) + atomic_load(&g_ipark_reused);
     if (n & (n - 1)) return;
-    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted, %llu trimmed; %u held, %llu MB, %s", (unsigned long long)atomic_load(&g_ipark_parked),
+    syslog(LOG_ERR, "NullMoth: image park: %llu parked, %llu reused, %llu evicted, %llu trimmed, %llu freed on memory pressure; %u held, %llu MB, %s",
+          (unsigned long long)atomic_load(&g_ipark_parked),
           (unsigned long long)atomic_load(&g_ipark_reused), (unsigned long long)atomic_load(&g_ipark_evicted),
-          (unsigned long long)atomic_load(&g_ipark_trimmed), g_ipark_n,
+          (unsigned long long)atomic_load(&g_ipark_trimmed), (unsigned long long)atomic_load(&g_ipark_pressure), g_ipark_n,
           (unsigned long long)(g_ipark_bytes >> 20), ipark_exact() ? "exact sizes" : "size buckets");
+}
+// v70_1: everything parked goes back when macOS asks for memory (warning or critical)
+static void ipark_pressure(void *ctx)
+{
+    (void)ctx;
+    VkDeviceMemory ev[NVMTL_IMGPARK_N]; unsigned nev = 0; uint64_t bytes;
+    pthread_mutex_lock(&g_ipark_lock);
+    bytes = g_ipark_bytes;
+    for (unsigned k = 0; k < g_ipark_n; k++) ev[nev++] = g_ipark[k].mem;
+    g_ipark_n = 0; g_ipark_bytes = 0;
+    pthread_mutex_unlock(&g_ipark_lock);
+    for (unsigned k = 0; k < nev; k++) pvkFreeMemory(g_dev, ev[k], NULL);
+    if (nev) atomic_fetch_add(&g_ipark_pressure, nev);
+    syslog(LOG_ERR, "NullMoth: image park: memory pressure - freed %u parked images, %llu MB", nev, (unsigned long long)(bytes >> 20));
+}
+static void ipark_watch_start(void *ctx)
+{
+    (void)ctx;
+    dispatch_source_t s = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+                                                 DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    if (!s) { syslog(LOG_ERR, "NullMoth: image park: no memory pressure source - parked images age out only"); return; }
+    dispatch_source_set_event_handler_f(s, ipark_pressure);
+    dispatch_resume(s);
+}
+static void ipark_watch_pressure(void)
+{
+    static dispatch_once_t once;
+    dispatch_once_f(&once, NULL, ipark_watch_start);
 }
 // the size a new parkable image's memory is allocated with: four sizes per power of two (1, 1.25, 1.5, 1.75)
 static VkDeviceSize ipark_bucket(VkDeviceSize size)
@@ -2316,6 +2351,7 @@ static VkDeviceMemory ipark_take(const VkMemoryRequirements *mr, VkDeviceSize *s
 static int ipark_put(const nvk_image *i)
 {
     if (i->placed || !i->mem || i->sysmem || i->alloc < NVMTL_IMGPARK_MIN || i->alloc > NVMTL_IMGPARK_BYTES / 4 || !ipark_on()) return 0;
+    ipark_watch_pressure();
     VkMemoryRequirements mr; pvkGetImageMemoryRequirements(g_dev, (VkImage)i->img, &mr);
     const int type = memtype(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (type < 0 || mr.size > i->alloc) return 0;
