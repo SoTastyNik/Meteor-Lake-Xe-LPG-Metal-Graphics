@@ -687,6 +687,7 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    gWsPathSum[WSP_GPU] / n, gWsPathMax[WSP_GPU], gWsPathSum[WSP_SIGNAL] / n, gWsPathMax[WSP_SIGNAL],
                    gWsPathSum[WSP_AFTER] / n, gWsPathMax[WSP_AFTER]);
         }
+        nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;
         memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
         gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = gWsSchedSum = gWsSchedMax = 0;

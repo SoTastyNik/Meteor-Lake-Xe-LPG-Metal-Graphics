@@ -212,9 +212,15 @@ get_push_range_ubo_pointer(const struct anv_bind_point_state *bind_state,
             (bo_offset - bo->xemtl_host_offset);
    } else {
       mesa_logw_once("xemtl: pushed pointer table is not host mapped");
+#ifdef __APPLE__
+      ANV_LAT_ADD(ANV_LAT_PTR_UNMAPPED, 1);
+#endif
       return 0;
    }
 
+#ifdef __APPLE__
+   ANV_LAT_ADD(ANV_LAT_PTR_READS, 1);
+#endif
    uint64_t ptr;
    memcpy(&ptr, map, sizeof(ptr));
    return intel_canonical_address(ptr);

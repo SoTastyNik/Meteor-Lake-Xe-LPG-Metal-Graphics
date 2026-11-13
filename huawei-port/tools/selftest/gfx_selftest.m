@@ -22,6 +22,7 @@
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
 #import <OpenGL/glext.h>
+#import <OpenGL/CGLIOSurface.h>
 #include <math.h>
 #include <dlfcn.h>
 
@@ -425,6 +426,168 @@ static void test_opengl(void)
     free(a); free(b);
 }
 
+// ---- 8b. Photo Booth's way to the screen, upside down on this driver (v71: where does it turn over?) --------------------
+// An IOSurface whose first rows (the top of the picture) are red and the rest blue.
+static IOSurfaceRef surface_red_top(int W, int H)
+{
+    NSDictionary *pr = @{ (id)kIOSurfaceWidth: @(W), (id)kIOSurfaceHeight: @(H), (id)kIOSurfaceBytesPerElement: @4,
+                          (id)kIOSurfacePixelFormat: @((unsigned)'BGRA') };
+    IOSurfaceRef s = IOSurfaceCreate((__bridge CFDictionaryRef)pr);
+    if (!s) return NULL;
+    IOSurfaceLock(s, 0, NULL);
+    uint8_t *base = IOSurfaceGetBaseAddress(s); const size_t row = IOSurfaceGetBytesPerRow(s);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        uint8_t *q = base + y * row + x * 4;   // BGRA
+        q[0] = y < H / 2 ? 0 : 255; q[1] = 0; q[2] = y < H / 2 ? 255 : 0; q[3] = 255;
+    }
+    IOSurfaceUnlock(s, 0, NULL);
+    return s;
+}
+// 'R', 'B' or '?' for an RGBA pixel
+static char rb_of(const uint8_t *p) { return p[0] > 160 && p[2] < 90 ? 'R' : p[2] > 160 && p[0] < 90 ? 'B' : '?'; }
+static CGLContextObj gl_context(BOOL accelerated)
+{
+    CGLPixelFormatAttribute hw[] = { kCGLPFAAccelerated, kCGLPFANoRecovery, kCGLPFAColorSize, (CGLPixelFormatAttribute)24, kCGLPFAAlphaSize, (CGLPixelFormatAttribute)8, (CGLPixelFormatAttribute)0 };
+    CGLPixelFormatAttribute sw[] = { kCGLPFARendererID, (CGLPixelFormatAttribute)kCGLRendererGenericFloatID, kCGLPFAColorSize, (CGLPixelFormatAttribute)24, kCGLPFAAlphaSize, (CGLPixelFormatAttribute)8, (CGLPixelFormatAttribute)0 };
+    CGLPixelFormatObj pf = NULL; GLint npf = 0; CGLContextObj ctx = NULL;
+    if (CGLChoosePixelFormat(accelerated ? hw : sw, &pf, &npf) != kCGLNoError || !pf) return NULL;
+    CGLCreateContext(pf, NULL, &ctx); CGLDestroyPixelFormat(pf);
+    return ctx;
+}
+// an RGBA8 framebuffer object of W x H bound in the current context; 0 when incomplete
+static GLuint gl_fbo(int W, int H, GLuint *rb)
+{
+    GLuint fb = 0;
+    glGenFramebuffersEXT(1, &fb); glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fb);
+    glGenRenderbuffersEXT(1, rb); glBindRenderbufferEXT(GL_RENDERBUFFER_EXT, *rb);
+    glRenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_RGBA8, W, H);
+    glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_RENDERBUFFER_EXT, *rb);
+    if (glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT) { glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, rb); return 0; }
+    glViewport(0, 0, W, H);
+    return fb;
+}
+// The surface as a rectangle texture (CGLTexImageIOSurface2D, as CoreVideo's texture cache makes them), texel (0, 0) drawn
+// at the framebuffer's (0, 0). OpenGL takes the surface's first row as t = 0 (CoreVideo calls such textures flipped), so
+// the bottom row read back should be red.
+static int gl_surface_texture(BOOL accelerated, IOSurfaceRef s, int W, int H, char *bottom, char *top, char *renderer, size_t rn)
+{
+    CGLContextObj ctx = gl_context(accelerated);
+    if (!ctx) return -1;
+    CGLSetCurrentContext(ctx);
+    snprintf(renderer, rn, "%s", (const char *)glGetString(GL_RENDERER));
+    GLuint rb = 0, fb = gl_fbo(W, H, &rb), tex = 0;
+    int r = -2;
+    if (fb) {
+        glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_RECTANGLE_ARB, tex);
+        if (CGLTexImageIOSurface2D(ctx, GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, W, H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, s, 0) == kCGLNoError) {
+            glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+            glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, W, 0, H, -1, 1);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            glEnable(GL_TEXTURE_RECTANGLE_ARB); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(0, 0); glTexCoord2f(W, 0); glVertex2f(W, 0);
+            glTexCoord2f(W, H); glVertex2f(W, H); glTexCoord2f(0, H); glVertex2f(0, H);
+            glEnd();
+            glDisable(GL_TEXTURE_RECTANGLE_ARB);
+            glFinish();
+            uint8_t px[4];
+            glReadPixels(W / 2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); *bottom = rb_of(px);
+            glReadPixels(W / 2, H - 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); *top = rb_of(px);
+            r = 0;
+        } else r = -3;
+        glDeleteTextures(1, &tex); glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, &rb);
+    }
+    CGLSetCurrentContext(NULL); CGLDestroyContext(ctx);
+    return r;
+}
+static void test_gl_surface_texture(void)
+{
+    const char *name = "opengl-iosurface-texture";
+    if (!wanted(name)) return;
+    const int W = 128, H = 96;
+    IOSurfaceRef s = surface_red_top(W, H);
+    if (!s) { report(name, FAIL, @"no IOSurface"); return; }
+    char ab = 0, at = 0, sb = 0, st = 0, ra[128] = "", rs[128] = "";
+    const int ha = gl_surface_texture(YES, s, W, H, &ab, &at, ra, sizeof ra), hs = gl_surface_texture(NO, s, W, H, &sb, &st, rs, sizeof rs);
+    if (ha) { report(name, FAIL, [NSString stringWithFormat:@"accelerated OpenGL could not draw the surface (%d, %s)", ha, ra]); CFRelease(s); return; }
+    const BOOL ok = ab == 'R' && at == 'B';
+    NSString *soft = hs ? [NSString stringWithFormat:@"could not draw it (%d)", hs] : [NSString stringWithFormat:@"bottom %c top %c", sb, st];
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"framebuffer bottom %c top %c (expected R B: the surface's first row at t = 0) on %s; "
+                                    "software OpenGL %@", ab, at, ra, soft]);
+    CFRelease(s);
+}
+// Core Image drawing into an IOSurface on the GPU (Metal) and on the CPU: the same rows should come out on top
+static void test_coreimage_surface(void)
+{
+    const char *name = "coreimage-into-iosurface";
+    if (!wanted(name)) return;
+    const int W = 128, H = 96;
+    IOSurfaceRef src = surface_red_top(W, H);
+    IOSurfaceRef ga = surface_red_top(W, H), gb = surface_red_top(W, H);
+    if (!src || !ga || !gb) { report(name, FAIL, @"no IOSurface"); return; }
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CIImage *img = [[CIImage imageWithIOSurface:src] imageByApplyingFilter:@"CIColorControls" withInputParameters:@{ kCIInputSaturationKey: @1.0 }];
+    CIContext *gpu = [CIContext contextWithMTLDevice:D options:@{ kCIContextWorkingColorSpace: (__bridge id)cs, kCIContextOutputColorSpace: (__bridge id)cs }];
+    CIContext *cpu = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer: @YES, kCIContextWorkingColorSpace: (__bridge id)cs, kCIContextOutputColorSpace: (__bridge id)cs }];
+    // paint the targets green first, so a render that never lands shows
+    IOSurfaceRef targets[2] = { ga, gb };
+    for (int k = 0; k < 2; k++) {
+        IOSurfaceRef t = targets[k];
+        IOSurfaceLock(t, 0, NULL); uint8_t *b = IOSurfaceGetBaseAddress(t); const size_t row = IOSurfaceGetBytesPerRow(t);
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) { uint8_t *q = b + y * row + x * 4; q[0] = 0; q[1] = 255; q[2] = 0; q[3] = 255; }
+        IOSurfaceUnlock(t, 0, NULL);
+    }
+    [gpu render:img toIOSurface:ga bounds:CGRectMake(0, 0, W, H) colorSpace:cs];
+    [cpu render:img toIOSurface:gb bounds:CGRectMake(0, 0, W, H) colorSpace:cs];
+    char rows[2][2];
+    IOSurfaceRef both[2] = { ga, gb };
+    for (int k = 0; k < 2; k++) {
+        IOSurfaceLock(both[k], kIOSurfaceLockReadOnly, NULL);
+        const uint8_t *b = IOSurfaceGetBaseAddress(both[k]); const size_t row = IOSurfaceGetBytesPerRow(both[k]);
+        for (int j = 0; j < 2; j++) {
+            const uint8_t *q = b + (j ? H - 3 : 2) * row + (W / 2) * 4;   // BGRA
+            const uint8_t rgba[4] = { q[2], q[1], q[0], q[3] };
+            rows[k][j] = rb_of(rgba);
+        }
+        IOSurfaceUnlock(both[k], kIOSurfaceLockReadOnly, NULL);
+    }
+    const BOOL ok = rows[0][0] == rows[1][0] && rows[0][1] == rows[1][1] && rows[1][0] != '?';
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"first row / last row: GPU %c %c, CPU %c %c", rows[0][0], rows[0][1], rows[1][0], rows[1][1]]);
+    CGColorSpaceRelease(cs); CFRelease(src); CFRelease(ga); CFRelease(gb);
+}
+// Core Image on an OpenGL context drawing the picture into a framebuffer object, as an OpenGL app with Core Image
+// effects shows a camera frame: upright, so the bottom row read back (OpenGL reads bottom up) is blue
+static void test_coreimage_opengl(void)
+{
+    const char *name = "coreimage-on-opengl";
+    if (!wanted(name)) return;
+    const int W = 128, H = 96;
+    IOSurfaceRef s = surface_red_top(W, H);
+    CGLContextObj ctx = gl_context(YES);
+    if (!s || !ctx) { report(name, SKIP, @"no IOSurface or no accelerated OpenGL"); if (s) CFRelease(s); if (ctx) CGLDestroyContext(ctx); return; }
+    CGLSetCurrentContext(ctx);
+    char renderer[128]; snprintf(renderer, sizeof renderer, "%s", (const char *)glGetString(GL_RENDERER));
+    GLuint rb = 0, fb = gl_fbo(W, H, &rb);
+    char bottom = '-', top = '-';
+    if (fb) {
+        glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CIContext *ci = [CIContext contextWithCGLContext:ctx pixelFormat:CGLGetPixelFormat(ctx) colorSpace:cs options:nil];
+        CIImage *img = [CIImage imageWithIOSurface:s];
+        [ci drawImage:img inRect:CGRectMake(0, 0, W, H) fromRect:img.extent];
+        glFinish();
+        uint8_t px[4];
+        glReadPixels(W / 2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); bottom = rb_of(px);
+        glReadPixels(W / 2, H - 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); top = rb_of(px);
+        CGColorSpaceRelease(cs);
+        glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, &rb);
+    }
+    CGLSetCurrentContext(NULL); CGLDestroyContext(ctx); CFRelease(s);
+    const BOOL ok = bottom == 'B' && top == 'R';
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"framebuffer bottom %c top %c (expected B R: upright) on %s%s", bottom, top, renderer,
+                                    bottom == 'R' && top == 'B' ? " - upside down, as Photo Booth's preview" : ""]);
+}
+
 // ---- 9. VideoToolbox: encode frames, decode them, compare --------------------------------------------------------------
 typedef struct { CFMutableArrayRef samples; OSStatus err; int count; } enc_ctx;
 static void enc_out(void *ref, void *src, OSStatus st, VTEncodeInfoFlags fl, CMSampleBufferRef sb)
@@ -647,6 +810,9 @@ int main(int argc, char **argv)
         test_srgb_write();
         test_coreimage();
         test_opengl();
+        test_gl_surface_texture();
+        test_coreimage_surface();
+        test_coreimage_opengl();
         test_video("video-h264-roundtrip", kCMVideoCodecType_H264);
         test_video("video-hevc-roundtrip", kCMVideoCodecType_HEVC);
         test_webrtc_keyframes("video-h264-webrtc-keyframes", kCMVideoCodecType_H264);

@@ -1486,6 +1486,21 @@ VkResult anv_CreateDevice(
    return result;
 }
 
+#ifdef __APPLE__
+uint64_t anv_latitude_stat[ANV_LAT_COUNT];
+
+/* The plugin's census (dlsym): copies up to n counters, returns how many there are */
+__attribute__((visibility("default"))) unsigned
+anv_latitude_stats(uint64_t *out, unsigned n);
+unsigned
+anv_latitude_stats(uint64_t *out, unsigned n)
+{
+   for (unsigned i = 0; i < n && i < ANV_LAT_COUNT; i++)
+      out[i] = p_atomic_read(&anv_latitude_stat[i]);
+   return ANV_LAT_COUNT;
+}
+#endif
+
 void anv_DestroyDevice(
     VkDevice                                    _device,
     const VkAllocationCallbacks*                pAllocator)

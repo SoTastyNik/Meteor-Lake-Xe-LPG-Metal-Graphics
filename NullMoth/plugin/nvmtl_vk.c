@@ -2371,6 +2371,38 @@ static int ipark_put(const nvk_image *i)
     atomic_fetch_add(&g_ipark_parked, 1); ipark_census();
     return 1;
 }
+/*
+ * v71: what Mesa's execbuffers carry and whether its shader push takes (anv_latitude_stats, macOS port of ANV): per
+ * execbuffer since the last call, the memory objects carried new (not bound yet), left out (exec trim), carried every
+ * time because imported from an fd, exportable or otherwise not trimmable; images' private BOs; released BOs carried once.
+ * And the shaders laid out with a push range behind the address table or of read-only SSBO data, with the table
+ * pointers read when push constants were emitted. v70 kept ~750 objects per execbuffer during Launchpad animations
+ * although trim left WindowServer 130 at rest.
+ */
+void nvmtl_vk_mesa_census(void)
+{
+    typedef unsigned (*stats_fn)(uint64_t *, unsigned);
+    enum { N = 14 };
+    static stats_fn fn; static int looked; static uint64_t last[N];
+    if (!looked) {
+        looked = 1;
+        fn = g_lib ? (stats_fn)dlsym(g_lib, "anv_latitude_stats") : NULL;
+        if (!fn) nvlog("vk: Mesa has no anv_latitude_stats - no exec trim / shader push census");
+    }
+    if (!fn) return;
+    uint64_t now[N] = {0}, d[N];
+    if (fn(now, N) < N) return;
+    for (unsigned i = 0; i < N; i++) { d[i] = now[i] - last[i]; last[i] = now[i]; }
+    const double e = d[0] ? (double)d[0] : 1.0;
+    syslog(LOG_ERR, "NullMoth: Mesa census: %llu execbuffers, %.0f objects each; memory objects each: %.1f new, %.1f left out, "
+           "%.1f imported, %.1f exportable, %.1f other; image private %.1f, released %.2f | shaders %llu, %llu with table push, "
+           "%llu with SSBO push (in all %llu, %llu, %llu); table pointers read %llu, unmapped %llu",
+           (unsigned long long)d[0], d[1] / e, d[2] / e, d[3] / e, d[4] / e, d[5] / e, d[6] / e, d[7] / e, d[8] / e,
+           (unsigned long long)d[9], (unsigned long long)d[10], (unsigned long long)d[11],
+           (unsigned long long)now[9], (unsigned long long)now[10], (unsigned long long)now[11],
+           (unsigned long long)d[12], (unsigned long long)d[13]);
+}
+
 void nvmtl_vk_ipark_trim(void)
 {
     static _Atomic uint64_t next;

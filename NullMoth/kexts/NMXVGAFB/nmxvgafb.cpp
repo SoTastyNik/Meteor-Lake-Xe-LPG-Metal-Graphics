@@ -57,11 +57,19 @@ class NMXVGAFB : public IOFramebuffer {
         LatitudeGamma next={};if(!latitudeGammaBuild(channels,count,width,data,&next))return kIOReturnBadArgument;
         if(!fGammaLock)return kIOReturnNotReady;
         IOLockLock(fGammaLock);bool changed=memcmp(next.rgb,fGamma.rgb,sizeof next.rgb)!=0;
-        next.generation=fGamma.generation+(changed?1:0);fGamma=next;IOLockUnlock(fGammaLock);
+        next.generation=fGamma.generation+(changed?1:0);fGamma=next;const bool hw=latitudeGammaToHw(fGamma);IOLockUnlock(fGammaLock);
         setProperty("LatitudeGammaActive",next.active?kOSBooleanTrue:kOSBooleanFalse);setProperty("LatitudeGammaGeneration",next.generation,64);
+        setProperty("LatitudeGammaHardware",hw?kOSBooleanTrue:kOSBooleanFalse);
         setProperty("LatitudeGammaChannels",channels,32);setProperty("LatitudeGammaCount",count,32);setProperty("LatitudeGammaWidth",width,32);
         return kIOReturnSuccess;
     }
+    /* v71: the table in the pipe's 8-bit gamma LUT (latitudeGammaToHw); fGammaLock covers these */
+    bool fGammaHw=false,fGammaModeKnown=false;uint32_t fGammaModeFw=0;
+public:
+    bool latitudeGammaToHw(const LatitudeGamma &g);
+    void latitudeGammaReload(){if(!fGammaLock)return;IOLockLock(fGammaLock);const bool hw=latitudeGammaToHw(fGamma);IOLockUnlock(fGammaLock);
+        setProperty("LatitudeGammaHardware",hw?kOSBooleanTrue:kOSBooleanFalse);}
+private:
     bool fPanelTiming = false;
     bool fPanelMemoryValidated = false;
     bool adoptLatitudePanel(IOPCIDevice *pci);
@@ -917,6 +925,59 @@ bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4)
 
 static NMXVGAFB *volatile gLatInst;
 /*
+ * v71: Night Shift (and a calibration's table) in the panel pipe's gamma LUT. The table came as a 3x256 gamma table
+ * (setGammaTable, or a display transaction's) and NMXAccel applied it in a CPU copy of every frame, plane flips refused
+ * while it was not the identity. Now it goes into LGC_PALETTE with GAMMA_MODE in 8-bit mode and post-CSC gamma on, as
+ * i915 loads a legacy LUT on ICL and later (display 14 included); the plane keeps scanning WindowServer's surface and
+ * the pipe colours it, the cursor plane too. The firmware's GAMMA_MODE comes back when the table is the identity again.
+ * A firmware LUT in another mode (10 bit, 12 bit multi-segment) is left alone and the copy path stays.
+ * debug.nmxfb_hw_gamma=0 goes back to the copy.
+ */
+static int gLatHwGamma = 1;
+static SInt64 gLatHwGammaLoads;
+bool NMXVGAFB::latitudeGammaToHw(const LatitudeGamma &g)
+{
+    if (!fRegsMap || fVirtioOn || !fPanelMemoryValidated) return false;
+    volatile uint8_t *regs = (volatile uint8_t *)fRegsMap->getVirtualAddress();
+    const uint32_t pipe = fPlaneStep / 0x1000u, lut = 0x4a000u + pipe * 0x800u, mode = 0x4a480u + pipe * 0x800u;
+    volatile uint32_t *gammaMode = (volatile uint32_t *)(regs + mode);
+    if (!fGammaModeKnown) {
+        fGammaModeFw = *gammaMode; fGammaModeKnown = true;
+        VFBLOG("Latitude: pipe %u GAMMA_MODE 0x%x as the firmware left it", pipe, fGammaModeFw);
+    }
+    const bool fwOtherLut = (fGammaModeFw & (1u << 30)) && (fGammaModeFw & 3u);
+    if (fwOtherLut || !gLatHwGamma || !g.active) {
+        if (fGammaHw) {
+            for (uint32_t i = 0; i < 256; i++) *(volatile uint32_t *)(regs + lut + i * 4) = (i << 16) | (i << 8) | i;
+            *gammaMode = fGammaModeFw;
+            (void)*gammaMode;
+            fGammaHw = false;
+        }
+        return false;
+    }
+    for (uint32_t i = 0; i < 256; i++)
+        *(volatile uint32_t *)(regs + lut + i * 4) = ((uint32_t)g.rgb[0][i] << 16) | ((uint32_t)g.rgb[1][i] << 8) | g.rgb[2][i];
+    *gammaMode = (fGammaModeFw & ~3u) | (1u << 30);
+    (void)*gammaMode;
+    if (!fGammaHw && OSIncrementAtomic64(&gLatHwGammaLoads) < 4)
+        VFBLOG("Latitude: gamma table in pipe %u's LUT, GAMMA_MODE 0x%x -> 0x%x; flips stay on", pipe, fGammaModeFw, *gammaMode);
+    fGammaHw = true;
+    return true;
+}
+static int nmxHwGammaSysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gLatHwGamma;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    gLatHwGamma = v ? 1 : 0;
+    if (NMXVGAFB *f = gLatInst) f->latitudeGammaReload();
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxfb_hw_gamma, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0, nmxHwGammaSysctl, "I",
+            "MateBook panel: 1 = a gamma table (Night Shift) in the pipe's LUT, flips stay on; 0 = applied in NMXAccel's copy");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_hw_gamma_loads, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatHwGammaLoads,
+            "MateBook panel: times a non-identity gamma table went into the pipe's LUT"); 
+/*
  * v54: the VBL on the panel's own vblank. The VBL thread kept the phase it started with: WindowServer's frame clock was a
  * free-running 120 Hz grid at an arbitrary offset from the panel's refresh, while a flip only lands at a real vblank, so
  * a frame that was in time for WindowServer's tick could miss the vblank it was meant for and land a refresh later (v53
@@ -1360,7 +1421,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
     const uint64_t bytes = ((uint64_t)r->pitch * rows + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     // linear planes take a stride in 64-byte units; Night Shift and calibration LUTs exist only in NMXAccel's copy
     bool gamma = false;
-    if (fGammaLock) { IOLockLock(fGammaLock); gamma = fGamma.active; IOLockUnlock(fGammaLock); }
+    if (fGammaLock) { IOLockLock(fGammaLock); gamma = fGamma.active && !fGammaHw; IOLockUnlock(fGammaLock); }
     if (!md || r->format != 0x42475241u || r->width != fWidth || r->height != fHeight || r->pitch < 4 * r->width ||
         (r->pitch % unit) || r->pitch / unit > 0x7ff || bytes > fSlotBytes - (2ull << 20) || md->getLength() < bytes || gamma) {
         OSAddAtomic64(1, &gLatFlipRefused);
@@ -1626,6 +1687,7 @@ bool NMXVGAFB::start(IOService *provider)
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_register_oid(&sysctl__debug_nmxfb_flip_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_register_oid(&sysctl__debug_nmxfb_flip_flush_us);
+    sysctl_register_oid(&sysctl__debug_nmxfb_hw_gamma);     sysctl_register_oid(&sysctl__debug_nmxfb_hw_gamma_loads);
     gLatInst = this;
     sysctl_register_oid(&sysctl__debug_nmxfb_vbl_sync);     sysctl_register_oid(&sysctl__debug_nmxfb_vbl_syncs);
     sysctl_register_oid(&sysctl__debug_nmxfb_vbl_ago_us);
@@ -1646,6 +1708,7 @@ void NMXVGAFB::stop(IOService *provider)
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_fills);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_timeouts); sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_wait_us);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush);   sysctl_unregister_oid(&sysctl__debug_nmxfb_flip_flush_us);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_hw_gamma);     sysctl_unregister_oid(&sysctl__debug_nmxfb_hw_gamma_loads);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor);     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_images);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_hwcursor_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_tile4_test);
@@ -1889,7 +1952,7 @@ IOReturn NMXVGAFB::callPlatformFunction(const OSSymbol *fn, bool wait, void *p1,
     }
     if(fn && fn->isEqualTo(LATITUDE_GAMMA_FUNCTION)){
         auto out=(LatitudeGamma *)p1;if(!out||out->version!=LATITUDE_GAMMA_VERSION||!fGammaLock||fStopping)return kIOReturnBadArgument;
-        IOLockLock(fGammaLock);*out=fGamma;IOLockUnlock(fGammaLock);return kIOReturnSuccess;
+        IOLockLock(fGammaLock);*out=fGamma;if(fGammaHw)out->active=0;IOLockUnlock(fGammaLock);return kIOReturnSuccess;
     }
 #endif
     // NMXAccel armed this head (phase 1): remember it for open(), and let WindowServer go on

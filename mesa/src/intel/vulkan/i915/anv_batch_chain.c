@@ -475,16 +475,26 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
       struct anv_bo *real = anv_bo_get_real(mem->bo);
       const bool trim = anv_latitude_bo_trimmable(device, real);
 
-      if (trim && real->latitude_resident)
+      if (trim && real->latitude_resident) {
+         ANV_LAT_ADD(ANV_LAT_MEM_TRIMMED, 1);
          continue;
+      }
 #endif
       result = anv_execbuf_add_bo(device, execbuf, mem->bo, NULL, 0);
       if (result != VK_SUCCESS)
          return result;
 #ifdef __APPLE__
       /* a failed execbuf loses the device, so this one binding it can be taken for granted */
-      if (trim)
+      if (trim) {
          real->latitude_resident = true;
+         ANV_LAT_ADD(ANV_LAT_MEM_NEW, 1);
+      } else if (!real->from_host_ptr && (real->alloc_flags & ANV_BO_ALLOC_IMPORTED)) {
+         ANV_LAT_ADD(ANV_LAT_MEM_IMPORTED, 1);
+      } else if (!real->from_host_ptr && (real->alloc_flags & ANV_BO_ALLOC_EXTERNAL)) {
+         ANV_LAT_ADD(ANV_LAT_MEM_EXPORTED, 1);
+      } else {
+         ANV_LAT_ADD(ANV_LAT_MEM_OTHER, 1);
+      }
 #endif
    }
 
@@ -492,6 +502,7 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
    if (device->latitude_exec_trim) {
       anv_latitude_zombies_take(device, &execbuf->latitude_zombies);
       execbuf->latitude_device = device;
+      ANV_LAT_ADD(ANV_LAT_ZOMBIES, util_dynarray_num_elements(&execbuf->latitude_zombies, struct anv_bo));
       util_dynarray_foreach(&execbuf->latitude_zombies, struct anv_bo, z) {
          result = anv_execbuf_add_bo(device, execbuf, z, NULL, 0);
          if (result != VK_SUCCESS)
@@ -514,6 +525,9 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
       result = anv_execbuf_add_bo(device, execbuf, private_bo, NULL, 0);
       if (result != VK_SUCCESS)
          return result;
+#ifdef __APPLE__
+      ANV_LAT_ADD(ANV_LAT_IMAGE_PRIVATE, 1);
+#endif
    }
 
    struct list_head *batch_bo = &cmd_buffers[0]->batch_bos;
@@ -1028,6 +1042,10 @@ i915_queue_exec_locked(struct anv_queue *queue,
    }
 
 #ifdef __APPLE__
+   if (result == VK_SUCCESS && cmd_buffer_count) {
+      ANV_LAT_ADD(ANV_LAT_EXECS, 1);
+      ANV_LAT_ADD(ANV_LAT_OBJECTS, execbuf.bo_count);
+   }
    /* the zombies are busy in i915's eyes now, until this execbuf (after every earlier one) is done */
    if (result == VK_SUCCESS && execbuf.latitude_device) {
       anv_latitude_zombies_close(device, &execbuf.latitude_zombies);

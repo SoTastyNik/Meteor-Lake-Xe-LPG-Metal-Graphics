@@ -1002,6 +1002,21 @@ anv_nir_compute_push_layout(nir_shader *nir,
       prog_data->push_sizes[i] = map->push_ranges[i].length * 32;
    }
 
+#ifdef __APPLE__
+   if (nir->info.stage <= MESA_SHADER_FRAGMENT) {
+      bool ptr = false, ssbo = false;
+      for (uint32_t i = 0; i < 4; i++) {
+         ptr |= map->push_ranges[i].length > 0 && map->push_ranges[i].ubo_ptr;
+         ssbo |= map->push_ranges[i].length > 0 && map->push_ranges[i].ssbo;
+      }
+      ANV_LAT_ADD(ANV_LAT_SHADERS, 1);
+      if (ptr)
+         ANV_LAT_ADD(ANV_LAT_SHADERS_PTR, 1);
+      if (ssbo)
+         ANV_LAT_ADD(ANV_LAT_SHADERS_SSBO, 1);
+   }
+#endif
+
    unsigned push_start = push_constant_range.start * 32;
    if (prog_data->robust_ubo_ranges) {
       const uint32_t push_reg_mask_offset =

@@ -3179,6 +3179,27 @@ anv_latitude_bo_trimmable(const struct anv_device *device, const struct anv_bo *
       return false;
    return bo->from_host_ptr || !(bo->alloc_flags & (ANV_BO_ALLOC_EXTERNAL | ANV_BO_ALLOC_IMPORTED));
 }
+/* macOS port: counters the plugin reads through anv_latitude_stats(), cumulative for the process */
+enum anv_latitude_stat {
+   ANV_LAT_EXECS,          /* execbufs submitted for command buffers */
+   ANV_LAT_OBJECTS,        /* exec objects they carried */
+   ANV_LAT_MEM_NEW,        /* memory objects carried because no execbuf had bound them yet */
+   ANV_LAT_MEM_TRIMMED,    /* memory objects left out */
+   ANV_LAT_MEM_IMPORTED,   /* carried every time: imported from an fd */
+   ANV_LAT_MEM_EXPORTED,   /* carried every time: exportable */
+   ANV_LAT_MEM_OTHER,      /* carried every time: scanout, implicit sync, or exec trim off */
+   ANV_LAT_IMAGE_PRIVATE,  /* images' private BOs carried */
+   ANV_LAT_ZOMBIES,        /* released BOs carried once before their handles closed */
+   ANV_LAT_SHADERS,        /* shaders of the graphics stages laid out */
+   ANV_LAT_SHADERS_PTR,    /* ... with a push range behind the address table */
+   ANV_LAT_SHADERS_SSBO,   /* ... with a pushed read-only SSBO range */
+   ANV_LAT_PTR_READS,      /* address table pointers read when push constants were emitted */
+   ANV_LAT_PTR_UNMAPPED,   /* ... found unmapped (the workaround address was pushed instead) */
+   ANV_LAT_COUNT
+};
+extern uint64_t anv_latitude_stat[ANV_LAT_COUNT];
+#define ANV_LAT_ADD(k, n) p_atomic_add(&anv_latitude_stat[k], (uint64_t)(n))
+
 void anv_latitude_zombies_init(struct anv_device *device);
 void anv_latitude_zombies_finish(struct anv_device *device);
 void anv_latitude_zombies_take(struct anv_device *device, struct util_dynarray *out);
