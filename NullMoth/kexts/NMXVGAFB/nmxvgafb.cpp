@@ -799,11 +799,16 @@ static SInt64 gLatFlips, gLatFlipFills, gLatFlipRefused, gLatFlipTimeouts, gLatF
  * The display engine reads memory without snooping the CPU caches. With the first plane flips (v18) the panel showed
  * only fragments of each frame, black elsewhere: the frame's newest lines were still in the caches, which NMXAccel's
  * copy reads coherently. Each presented surface's lines are written back (CLFLUSHOPT) before it goes on the panel.
+ * v69: not each time for WindowServer's Tile4 surfaces, which only the GPU draws (zero copy, v41): once when a surface
+ * takes a flip slot (lines the CPU left when it was made), and every time for a linear one (a CPU copy may have filled
+ * it). Writing back a 22 MB surface cost 1.3 ms of each frame's way to the panel; the v68 run with
+ * debug.nmxfb_flip_flush=0 showed 1.4 ms less from GPU ready to on the panel.
  */
-static int gLatFlipFlush = 1;
+static int gLatFlipFlush = 2;
 static SInt64 gLatFlipFlushUs;
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_flip_flush, CTLFLAG_RW | CTLFLAG_LOCKED, &gLatFlipFlush, 0,
-           "MateBook panel: 1 = write a flipped surface's cache lines back before the plane reads it");
+           "MateBook panel: write a flipped surface's cache lines back before the plane reads it: 1 = every flip, "
+           "2 = a Tile4 surface when it takes a slot, a linear one every flip (default), 0 = never");
 SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_flip_flush_us, CTLFLAG_RD | CTLFLAG_LOCKED, &gLatFlipFlushUs,
             "MateBook panel: total time spent writing flipped surfaces' cache lines back, us");
 static void latitudeFlushLines(const volatile uint8_t *p, uint64_t bytes)
@@ -885,15 +890,29 @@ bool NMXVGAFB::latitudePlaneTo(uint32_t surf, uint32_t stride, bool tile4)
     *(volatile uint32_t *)(regs + 0x70188 + fPlaneStep) = stride;
     *(volatile uint32_t *)(regs + 0x7019c + fPlaneStep) = surf;
     const uint64_t t0 = mach_absolute_time();
-    for (unsigned ms = 0; ms <= 50; ms++) {
+    /*
+     * v69: the switch happens at the start of the next vblank, which the scanline (PIPEDSL) dates: sleep until just
+     * after it, then look in short steps. Checks a millisecond apart took 1.15 ms each and saw the latch ~0.6 ms late
+     * on average, and the transaction completes - WindowServer goes on to its next frame - only then.
+     */
+    uint64_t limit; nanoseconds_to_absolutetime(50000000ull, &limit);
+    if (fPanelTiming && fVT > fHeight && fFrameNs && !fVirtioOn) {
+        const uint32_t dsl = *(const volatile uint32_t *)(regs + 0x70000 + fPlaneStep) & 0xfffffu;   // PIPEDSL
+        if (dsl < fVT) {
+            // lines to the end of the active area; inside the vblank already, the next one
+            const uint64_t lines = dsl < fHeight ? fHeight - dsl : fVT - dsl + fHeight;
+            IODelay((unsigned)(lines * fFrameNs / fVT / 1000 + 20));   // the thread sleeps (as IOSleep does)
+        }
+    }
+    for (;;) {
         if (((*(const volatile uint32_t *)(regs + 0x701ac + fPlaneStep)) & ~0xfffu) == (surf & ~0xfffu)) {
             uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
             OSAddAtomic64((SInt64)(ns / 1000), &gLatFlipWaitUs);
             return true;
         }
-        IOSleep(1);
+        if (mach_absolute_time() - t0 > limit) return false;
+        IODelay(100);   // >= 10 us: the thread sleeps
     }
-    return false;
 }
 
 static NMXVGAFB *volatile gLatInst;
@@ -1357,6 +1376,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         if (victim < 0 || !s.md || (fFlip[victim].md && s.lastUse < fFlip[victim].lastUse)) victim = i;
     }
     IOReturn ret = kIOReturnSuccess;
+    bool filled = false;
     if (hit < 0 && victim >= 0) {
         FlipSlot &s = fFlip[victim];
         latitudeDropSlot(s);
@@ -1378,7 +1398,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
             (void)pte[(bytes >> 12) - 1];                       // the writes are posted: read one back
             md->retain();
             s = { md, map, r->surfaceId, r->pitch, 0, false };
-            hit = victim;
+            hit = victim; filled = true;
             OSAddAtomic64(1, &gLatFlipFills);
         } else {
             if (prepared) md->complete();
@@ -1387,7 +1407,7 @@ IOReturn NMXVGAFB::latitudeFlip(NMXScanoutSurface *r)
         }
     } else if (hit < 0) ret = kIOReturnNoResources;
     // also for the surface already on the panel: WindowServer drew this frame into it in place
-    if (hit >= 0 && gLatFlipFlush && fFlip[hit].map) {
+    if (hit >= 0 && fFlip[hit].map && (gLatFlipFlush == 1 || (gLatFlipFlush == 2 && (filled || !tile4)))) {
         const uint64_t f0 = mach_absolute_time();
         latitudeFlushLines((const volatile uint8_t *)fFlip[hit].map->getVirtualAddress(), bytes);
         uint64_t fns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - f0, &fns);

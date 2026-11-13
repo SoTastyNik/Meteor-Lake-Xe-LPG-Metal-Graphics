@@ -51,11 +51,22 @@ struct anv_execbuf {
 
    const VkAllocationCallbacks *             alloc;
    VkSystemAllocationScope                   alloc_scope;
+
+#ifdef __APPLE__
+   /* exec trim: released BOs this execbuf carries; closed once it is submitted (latitude_device set until then) */
+   struct util_dynarray                      latitude_zombies;
+   struct anv_device *                       latitude_device;
+#endif
 };
 
 static void
 anv_execbuf_finish(struct anv_execbuf *exec)
 {
+#ifdef __APPLE__
+   /* not submitted: they wait for the next one */
+   if (exec->latitude_device)
+      anv_latitude_zombies_return(exec->latitude_device, &exec->latitude_zombies);
+#endif
    vk_free(exec->alloc, exec->syncobjs);
    vk_free(exec->alloc, exec->syncobj_values);
    vk_free(exec->alloc, exec->objects);
@@ -457,10 +468,37 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
     */
    list_for_each_entry(struct anv_device_memory, mem,
                        &device->memory_objects, link) {
+#ifdef __APPLE__
+      /* macOS port (exec trim): i915 binds a softpinned object at its address on its first execbuf and leaves it
+       * there; WindowServer's execbufs carried all of its ~800 memory objects, ~2.5 us each in the kernel.
+       */
+      struct anv_bo *real = anv_bo_get_real(mem->bo);
+      const bool trim = anv_latitude_bo_trimmable(device, real);
+
+      if (trim && real->latitude_resident)
+         continue;
+#endif
       result = anv_execbuf_add_bo(device, execbuf, mem->bo, NULL, 0);
       if (result != VK_SUCCESS)
          return result;
+#ifdef __APPLE__
+      /* a failed execbuf loses the device, so this one binding it can be taken for granted */
+      if (trim)
+         real->latitude_resident = true;
+#endif
    }
+
+#ifdef __APPLE__
+   if (device->latitude_exec_trim) {
+      anv_latitude_zombies_take(device, &execbuf->latitude_zombies);
+      execbuf->latitude_device = device;
+      util_dynarray_foreach(&execbuf->latitude_zombies, struct anv_bo, z) {
+         result = anv_execbuf_add_bo(device, execbuf, z, NULL, 0);
+         if (result != VK_SUCCESS)
+            return result;
+      }
+   }
+#endif
 
    result = anv_execbuf_add_trtt_bos(device, execbuf);
    if (result != VK_SUCCESS)
@@ -988,6 +1026,14 @@ i915_queue_exec_locked(struct anv_queue *queue,
       if (result != VK_SUCCESS)
          anv_i915_debug_submit(&execbuf);
    }
+
+#ifdef __APPLE__
+   /* the zombies are busy in i915's eyes now, until this execbuf (after every earlier one) is done */
+   if (result == VK_SUCCESS && execbuf.latitude_device) {
+      anv_latitude_zombies_close(device, &execbuf.latitude_zombies);
+      execbuf.latitude_device = NULL;
+   }
+#endif
 
    if (cmd_buffer_count != 0 && cmd_buffers[0]->companion_rcs_cmd_buffer &&
        result == VK_SUCCESS) {

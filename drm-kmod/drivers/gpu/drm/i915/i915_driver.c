@@ -1011,6 +1011,42 @@ static int i915_driver_open(struct drm_device *dev, struct drm_file *file)
 	return 0;
 }
 
+#ifdef NMXKPI
+/*
+ * macOS port (v69): drm_file_free calls this before it releases a client's handles. Mesa's exec trim leaves bound
+ * memory objects out of execbuffers, so only the last request of each of the client's contexts says when the GPU is
+ * done with them: wait for those, 200 ms at most in all.
+ */
+void nmx_drm_file_quiesce(struct drm_device *dev, struct drm_file *file)
+{
+	struct drm_i915_file_private *file_priv = file->driver_priv;
+	struct i915_gem_context *ctx;
+	unsigned long idx;
+	long left = msecs_to_jiffies(200);
+
+	if (!file_priv)
+		return;
+	xa_for_each(&file_priv->context_xa, idx, ctx) {
+		struct i915_gem_engines_iter it;
+		struct intel_context *ce;
+
+		for_each_gem_engine(ce, i915_gem_context_lock_engines(ctx), it) {
+			struct dma_fence *fence;
+
+			if (!ce->timeline)
+				continue;
+			fence = i915_active_fence_get(&ce->timeline->last_request);
+			if (!fence)
+				continue;
+			if (left > 0)
+				left = dma_fence_wait_timeout(fence, false, left);
+			dma_fence_put(fence);
+		}
+		i915_gem_context_unlock_engines(ctx);
+	}
+}
+#endif
+
 static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 {
 	struct drm_i915_file_private *file_priv = file->driver_priv;

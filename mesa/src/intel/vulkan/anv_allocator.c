@@ -2293,6 +2293,103 @@ anv_device_set_bo_tiling(struct anv_device *device,
    return VK_SUCCESS;
 }
 
+#ifdef __APPLE__
+/* Exec trim: a resident BO's last reference is gone, but the GPU may still use it (i915 did not see it in the
+ * execbufs that do). Keep its handle and address until the next execbuf has carried it.
+ */
+static bool
+anv_latitude_defer_release(struct anv_device *device, struct anv_bo *bo)
+{
+   if (!device->latitude_exec_trim || !bo->latitude_resident)
+      return false;
+
+   simple_mtx_lock(&device->latitude_zombie_mutex);
+   struct anv_bo *slot = util_dynarray_grow(&device->latitude_zombies, struct anv_bo, 1);
+   if (slot)
+      *slot = *bo;
+   simple_mtx_unlock(&device->latitude_zombie_mutex);
+   if (!slot)
+      return false;
+
+   /* as the normal path does, before the handle can be reused */
+   memset(bo, 0, sizeof(*bo));
+   return true;
+}
+
+void
+anv_latitude_zombies_init(struct anv_device *device)
+{
+   const char *e = getenv("ANV_LATITUDE_EXEC_TRIM");
+
+   /* With one render queue every execbuf runs on one context, in order (no companion RCS context beside it): a
+    * zombie that rides in a later one outlives the earlier work that may use it. Softpin only: with relocations
+    * every BO goes in anyway.
+    */
+   device->latitude_exec_trim = e && e[0] == '1' &&
+                                device->info->kmd_type == INTEL_KMD_TYPE_I915 &&
+                                !device->physical->uses_relocs &&
+                                device->queue_count == 1 &&
+                                device->queues[0].family->engine_class == INTEL_ENGINE_CLASS_RENDER;
+   simple_mtx_init(&device->latitude_zombie_mutex, mtx_plain);
+   util_dynarray_init(&device->latitude_zombies, NULL);
+}
+
+void
+anv_latitude_zombies_take(struct anv_device *device, struct util_dynarray *out)
+{
+   simple_mtx_lock(&device->latitude_zombie_mutex);
+   *out = device->latitude_zombies;
+   util_dynarray_init(&device->latitude_zombies, NULL);
+   simple_mtx_unlock(&device->latitude_zombie_mutex);
+}
+
+void
+anv_latitude_zombies_close(struct anv_device *device, struct util_dynarray *zombies)
+{
+   struct anv_bo_cache *cache = &device->bo_cache;
+
+   simple_mtx_lock(&cache->mutex);
+   util_dynarray_foreach(zombies, struct anv_bo, z) {
+      const struct anv_bo *entry = anv_device_lookup_bo(device, z->gem_handle);
+
+      /* the handle is still open, so nothing should have it again; if something does, it owns the handle now */
+      if (entry && entry->refcount > 0)
+         anv_bo_vma_free(device, z);
+      else
+         anv_bo_finish(device, z);
+   }
+   simple_mtx_unlock(&cache->mutex);
+   util_dynarray_fini(zombies);
+}
+
+void
+anv_latitude_zombies_return(struct anv_device *device, struct util_dynarray *zombies)
+{
+   if (!util_dynarray_num_elements(zombies, struct anv_bo)) {
+      util_dynarray_fini(zombies);
+      return;
+   }
+   simple_mtx_lock(&device->latitude_zombie_mutex);
+   util_dynarray_append_dynarray(&device->latitude_zombies, zombies);
+   simple_mtx_unlock(&device->latitude_zombie_mutex);
+   util_dynarray_fini(zombies);
+}
+
+/* the queues are finished: nothing runs any more, and BOs released by the rest of the teardown (slab parents) close at
+ * once
+ */
+void
+anv_latitude_zombies_finish(struct anv_device *device)
+{
+   struct util_dynarray zombies;
+
+   device->latitude_exec_trim = false;
+   anv_latitude_zombies_take(device, &zombies);
+   anv_latitude_zombies_close(device, &zombies);
+   simple_mtx_destroy(&device->latitude_zombie_mutex);
+}
+#endif
+
 void
 anv_device_release_bo(struct anv_device *device,
                       struct anv_bo *bo)
@@ -2332,6 +2429,13 @@ anv_device_release_bo(struct anv_device *device,
           anv_device_lookup_bo(device, bo->gem_handle) == bo);
 
    ANV_RMV(bo_destroy, device, bo);
+
+#ifdef __APPLE__
+   if (anv_latitude_defer_release(device, bo)) {
+      simple_mtx_unlock(&cache->mutex);
+      return;
+   }
+#endif
 
    /* Memset the BO just in case.  The refcount being zero should be enough to
     * prevent someone from assuming the data is valid but it's safer to just

@@ -479,6 +479,14 @@ struct anv_bo {
 
    /** True if this BO is mapped in the GTT (only used for RMV) */
    bool gtt_mapped:1;
+
+#ifdef __APPLE__
+   /* macOS port (exec trim): an execbuf bound this memory object in the GPU's address space, where i915 leaves it until
+    * the object is closed, so later execbufs may leave it out. Not a bitfield: it is set under the device mutex while
+    * other threads may write the flags above.
+    */
+   bool latitude_resident;
+#endif
 };
 
 /* If bo is a slab, return the real/slab_parent bo */
@@ -2653,6 +2661,17 @@ struct anv_device {
     /** List of anv_image objects with a private binding for implicit CCS */
     struct list_head                            image_private_objects;
 
+#ifdef __APPLE__
+    /* macOS port (exec trim, ANV_LATITUDE_EXEC_TRIM=1): execbufs carry only the memory objects not yet bound, not all
+     * of them. A trimmed object is not tracked as busy by i915, so one released while the GPU may still use it is
+     * kept open in latitude_zombies (struct anv_bo copies) and goes into the next execbuf, which i915 finishes after
+     * every earlier one on the queue; its handle is closed right after that execbuf.
+     */
+    bool                                        latitude_exec_trim;
+    simple_mtx_t                                latitude_zombie_mutex;
+    struct util_dynarray                        latitude_zombies;
+#endif
+
     /** Memory pool for batch buffers */
     struct anv_bo_pool                          batch_bo_pool;
     /** Memory pool for utrace timestamp buffers */
@@ -3134,6 +3153,25 @@ VkResult anv_device_map_bo(struct anv_device *device,
 #ifdef __APPLE__
 void *anv_nmx_mmap(int fd, uint64_t mmap_offset, uint64_t obj_offset, uint64_t size, void *placed_addr);
 bool anv_nmx_munmap(void *addr);
+
+/* Exec trim: may an execbuf leave this (real) BO out once it is resident? Not a shared one (an fd import or export:
+ * the kernel hands the same handle to a later import of the same object, so its close cannot wait) nor one for the
+ * display.
+ */
+static inline bool
+anv_latitude_bo_trimmable(const struct anv_device *device, const struct anv_bo *bo)
+{
+   if (!device->latitude_exec_trim)
+      return false;
+   if (bo->alloc_flags & (ANV_BO_ALLOC_SCANOUT | ANV_BO_ALLOC_IMPLICIT_SYNC | ANV_BO_ALLOC_IMPLICIT_WRITE))
+      return false;
+   return bo->from_host_ptr || !(bo->alloc_flags & (ANV_BO_ALLOC_EXTERNAL | ANV_BO_ALLOC_IMPORTED));
+}
+void anv_latitude_zombies_init(struct anv_device *device);
+void anv_latitude_zombies_finish(struct anv_device *device);
+void anv_latitude_zombies_take(struct anv_device *device, struct util_dynarray *out);
+void anv_latitude_zombies_close(struct anv_device *device, struct util_dynarray *zombies);
+void anv_latitude_zombies_return(struct anv_device *device, struct util_dynarray *zombies);
 #endif
 VkResult anv_device_unmap_bo(struct anv_device *device,
                              struct anv_bo *bo,

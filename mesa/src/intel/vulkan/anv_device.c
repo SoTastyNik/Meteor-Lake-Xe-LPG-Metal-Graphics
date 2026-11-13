@@ -1364,6 +1364,10 @@ VkResult anv_CreateDevice(
       }
    }
 
+#ifdef __APPLE__
+   anv_latitude_zombies_init(device);
+#endif
+
    anv_device_utrace_init(device);
 
    result = vk_meta_device_init(&device->vk, &device->meta_device);
@@ -1508,6 +1512,10 @@ void anv_DestroyDevice(
    for (uint32_t i = 0; i < device->queue_count; i++)
       anv_queue_finish(&device->queues[i]);
    vk_free(&device->vk.alloc, device->queues);
+
+#ifdef __APPLE__
+   anv_latitude_zombies_finish(device);
+#endif
 
    anv_device_finish_blorp(device);
 

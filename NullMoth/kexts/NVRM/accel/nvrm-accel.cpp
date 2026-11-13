@@ -2275,6 +2275,8 @@ static bool nmxSurfaceReady(IOSurface *s, uint64_t *pub)
     return pending == 0 || *pub >= pending;
 }
 static constexpr unsigned kNmxOrdMaxMs = 100;
+// v69: IOSleep(1) took 1.15 ms a step here and saw a frame ready ~0.6 ms late on average, on every frame's way out
+static constexpr unsigned kNmxOrdPollUs = 200;
 struct NMXOrdered { void *pipe; IOService *fb; unsigned head; IOSurface *s; volatile SInt32 busy; struct thread_call *call; uint64_t tSubmit; bool latitude; };
 static NMXOrdered gNmxOrd[kNvMaxFB];
 static struct { unsigned id; uint64_t pub; } gNmxSeen[16];   // a surface's NMXPublished when it last went on the panel
@@ -2325,7 +2327,19 @@ static void nmxOrderedRun(void *p0, void *)
     }
     {
         const uint64_t last = lastShown;
-        while (!ready && waited < kNmxOrdMaxMs) { IOSleep(1); waited++; ready = nmxSurfaceReady(s, &pub); }
+        uint64_t maxWait; nanoseconds_to_absolutetime(kNmxOrdMaxMs * 1000000ull, &maxWait);
+        bool polled = false;
+        while (!ready && mach_absolute_time() - t0 < maxWait) {
+            IODelay(kNmxOrdPollUs);     // >= 10 us: the thread sleeps
+            polled = true;
+            ready = nmxSurfaceReady(s, &pub);
+        }
+        if (polled) {
+            // in whole ms as before (counters, ordtrace); a timeout only when it never became ready
+            uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+            const uint64_t ms = (ns + 999999) / 1000000;
+            waited = !ready ? kNmxOrdMaxMs : ms < kNmxOrdMaxMs ? (unsigned)ms : kNmxOrdMaxMs - 1;
+        }
         if (waited) {
             OSAddAtomic64(1, waited >= kNmxOrdMaxMs ? &gCntNmxOrdTimeout : &gCntNmxOrdWaited);
             if (waited >= kNmxOrdMaxMs) {

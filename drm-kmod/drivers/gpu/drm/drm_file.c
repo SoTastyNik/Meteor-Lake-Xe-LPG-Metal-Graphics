@@ -230,6 +230,10 @@ static void drm_events_release(struct drm_file *file_priv)
  *
  * If NULL is passed, this is a no-op.
  */
+#ifdef NMXKPI
+void nmx_drm_file_quiesce(struct drm_device *dev, struct drm_file *file);
+#endif
+
 void drm_file_free(struct drm_file *file)
 {
 	struct drm_device *dev;
@@ -250,6 +254,15 @@ void drm_file_free(struct drm_file *file)
 		drm_fb_release(file);
 		drm_property_destroy_user_blobs(dev, file);
 	}
+
+#ifdef NMXKPI
+	/*
+	 * macOS port (v69): Mesa leaves the memory objects already bound out of each execbuffer (exec trim), so i915 does
+	 * not hold them busy: a client that exits with work on the GPU would have them freed under it. Let that work finish
+	 * (bounded) before the handles go.
+	 */
+	nmx_drm_file_quiesce(dev, file);
+#endif
 
 	if (drm_core_check_feature(dev, DRIVER_SYNCOBJ))
 		drm_syncobj_release(file);

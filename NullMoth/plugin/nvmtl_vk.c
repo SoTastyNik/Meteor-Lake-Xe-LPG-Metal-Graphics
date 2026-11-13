@@ -1041,6 +1041,11 @@ static int nvmtl_vk_initialize(void)
             }
         }
     }
+    // v69: Mesa leaves the memory objects already bound in the GPU's address space out of each execbuffer (exec trim,
+    // ANV's i915 batch chain): WindowServer's carried all ~800 of them, 2.4 ms of kernel time per execbuffer, on every
+    // frame's way to the panel. Off with /Library/GPUBundles/nvmtl-no-exec-trim.
+    if (access("/Library/GPUBundles/nvmtl-no-exec-trim", F_OK) != 0) setenv("ANV_LATITUDE_EXEC_TRIM", "1", 1);
+    else { unsetenv("ANV_LATITUDE_EXEC_TRIM"); nvlog("vk: exec trim off (nvmtl-no-exec-trim)"); }
     g_lib = dlopen(NVMTL_ICD_LIB, RTLD_NOW | RTLD_LOCAL);
     if (g_lib) {
         pvkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(g_lib, "vkGetInstanceProcAddr");
