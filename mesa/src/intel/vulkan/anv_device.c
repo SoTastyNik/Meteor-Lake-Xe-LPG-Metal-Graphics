@@ -2026,6 +2026,10 @@ VkResult anv_AllocateMemory(
       if (result != VK_SUCCESS)
          goto fail;
 
+      mem->bo->xemtl_host_map = mem->vk.host_ptr;
+      mem->bo->xemtl_host_offset = 0;
+      mem->bo->xemtl_host_size = mem->vk.size;
+
       goto success;
    }
 
@@ -2269,6 +2273,10 @@ VkResult anv_MapMemory2(
    mem->map = map;
    mem->map_size = map_size;
    mem->map_delta = (offset - map_offset);
+
+   mem->bo->xemtl_host_map = map;
+   mem->bo->xemtl_host_offset = map_offset;
+   mem->bo->xemtl_host_size = map_size;
    *ppData = mem->map + mem->map_delta;
 
    return VK_SUCCESS;
@@ -2289,6 +2297,9 @@ VkResult anv_UnmapMemory2(
                           pMemoryUnmapInfo->flags & VK_MEMORY_UNMAP_RESERVE_BIT_EXT);
    if (result != VK_SUCCESS)
       return result;
+
+   if (mem->bo->xemtl_host_map == mem->map)
+      mem->bo->xemtl_host_map = NULL;
 
    mem->map = NULL;
    mem->map_size = 0;

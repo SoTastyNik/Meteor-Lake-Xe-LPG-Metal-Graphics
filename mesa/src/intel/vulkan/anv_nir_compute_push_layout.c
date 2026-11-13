@@ -32,6 +32,7 @@
 struct push_data {
    bool push_ubo_ranges;
    bool push_pointer_ranges;
+   bool push_ssbo_ranges;
    bool needs_wa_18019110168;
    bool needs_dyn_tess_config;
    BITSET_DECLARE(push_dwords, PUSH_CONSTANTS_DWORDS);
@@ -56,6 +57,18 @@ adjust_driver_push_values(nir_shader *nir,
          anv_drv_const_offset(drv_data.gfx.push_reg_mask[nir->info.stage]);
       assert(anv_drv_const_size(drv_data.gfx.push_reg_mask[nir->info.stage]) <= 4);
       BITSET_SET(data->push_dwords, push_reg_mask_start / 4);
+   }
+
+   if (data->push_ssbo_ranges) {
+      const uint32_t shift_start =
+         anv_drv_const_offset(drv_data.gfx.ssbo_push_shift[nir->info.stage]);
+      BITSET_SET(data->push_dwords, shift_start / 4);
+
+      if (robust_flags & BRW_ROBUSTNESS_SSBO) {
+         const uint32_t push_reg_mask_start =
+            anv_drv_const_offset(drv_data.gfx.push_reg_mask[nir->info.stage]);
+         BITSET_SET(data->push_dwords, push_reg_mask_start / 4);
+      }
    }
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -118,9 +131,12 @@ gather_push_data(nir_shader *nir,
                  struct brw_base_prog_key *prog_key,
                  struct anv_pipeline_bind_map *map,
                  struct set *lowered_ubo_instrs,
-                 struct set *lowered_pointer_instrs)
+                 struct set *lowered_pointer_instrs,
+                 struct set *lowered_ssbo_instrs,
+                 bool ubo_ptr)
 {
    bool has_const_ubo = false;
+   bool has_const_ssbo = false;
    bool has_const_ptr_ubo = false;
    struct push_data data = { 0, };
    BITSET_ZERO(data.push_dwords);
@@ -139,6 +155,11 @@ gather_push_data(nir_shader *nir,
                   has_const_ubo = true;
                break;
 
+            case nir_intrinsic_load_ssbo:
+               if (nir->info.stage <= MESA_SHADER_FRAGMENT &&
+                   anv_nir_is_pushable_ssbo_load(intrin))
+                  has_const_ssbo = true;
+               break;
 
             case nir_intrinsic_load_push_constant: {
                unsigned base = nir_intrinsic_base(intrin);
@@ -161,6 +182,11 @@ gather_push_data(nir_shader *nir,
             }
 
             case nir_intrinsic_load_push_data_intel: {
+               if (lowered_ssbo_instrs &&
+                   _mesa_set_search(lowered_ssbo_instrs, intrin)) {
+                  has_const_ssbo = true;
+                  break;
+               }
                if (lowered_ubo_instrs &&
                    _mesa_set_search(lowered_ubo_instrs, intrin)) {
                   has_const_ubo = true;
@@ -180,9 +206,14 @@ gather_push_data(nir_shader *nir,
             }
 
             case nir_intrinsic_load_global_constant: {
-               uint32_t push_offset, load_offset;
+               uint32_t push_offset, load_offset, block;
                if (anv_nir_is_pushable_pointer(intrin, &push_offset, &load_offset))
                   has_const_ptr_ubo = true;
+               else if (ubo_ptr && nir->info.stage <= MESA_SHADER_FRAGMENT &&
+                        anv_nir_is_pushable_ubo_pointer(intrin, &block,
+                                                        &push_offset,
+                                                        &load_offset))
+                  has_const_ssbo = true;
                break;
             }
 
@@ -199,6 +230,10 @@ gather_push_data(nir_shader *nir,
 
    data.push_ubo_ranges =
       has_const_ubo && nir->info.stage != MESA_SHADER_COMPUTE &&
+      !brw_shader_stage_requires_bindless_resources(nir->info.stage);
+
+   data.push_ssbo_ranges =
+      has_const_ssbo && nir->info.stage <= MESA_SHADER_FRAGMENT &&
       !brw_shader_stage_requires_bindless_resources(nir->info.stage);
 
    data.needs_wa_18019110168 =
@@ -219,6 +254,7 @@ struct lower_to_push_data_intel_state {
 
    struct set *lowered_ubo_instrs;
    struct set *lowered_pointer_instrs;
+   struct set *lowered_ssbo_instrs;
 
    /* Amount that should be subtracted to UBOs loads converted to
     * push_data_intel (in lowered_ubo_or_pointer_instrs)
@@ -250,6 +286,84 @@ lower_internal_ubo(nir_builder *b,
    return true;
 }
 
+static nir_def *
+load_shifted_push_data(nir_builder *b,
+                       const struct lower_to_push_data_intel_state *state,
+                       nir_intrinsic_instr *intrin,
+                       const struct anv_push_range *push_range,
+                       uint32_t range_offset,
+                       uint32_t slot,
+                       uint32_t byte_offset)
+{
+   const unsigned num_components =
+      nir_def_last_component_read(&intrin->def) + 1;
+   const int bytes = num_components * (intrin->def.bit_size / 8);
+
+   b->cursor = nir_before_instr(&intrin->instr);
+   nir_def *shift = nir_load_push_data_intel(
+      b, 1, 32, nir_imm_int(b, 0),
+      .base = anv_drv_const_offset(
+         drv_data.gfx.ssbo_push_shift[b->shader->info.stage]),
+      .range = 4);
+   shift = nir_iand_imm(b, nir_ushr_imm(b, shift, slot * 8), 0xff);
+
+   nir_def *data = nir_load_push_data_intel(
+      b, num_components, intrin->def.bit_size, shift,
+      .base = range_offset + byte_offset - push_range->start * 32,
+      .range = bytes + 32);
+   nir_def_replace(&intrin->def, data);
+
+   _mesa_set_add(state->lowered_ubo_instrs, nir_def_as_intrinsic(data));
+   _mesa_set_add(state->lowered_ssbo_instrs, nir_def_as_intrinsic(data));
+   return data;
+}
+
+static bool
+lower_ubo_pointer_to_push_data_intel(nir_builder *b,
+                                     nir_intrinsic_instr *intrin,
+                                     void *_data)
+{
+   uint32_t block, ptr_offset, load_offset;
+   if (intrin->intrinsic != nir_intrinsic_load_global_constant ||
+       b->shader->info.stage > MESA_SHADER_FRAGMENT ||
+       brw_shader_stage_requires_bindless_resources(b->shader->info.stage) ||
+       !anv_nir_is_pushable_ubo_pointer(intrin, &block, &ptr_offset,
+                                        &load_offset))
+      return false;
+
+   const struct lower_to_push_data_intel_state *state = _data;
+   assert(block < state->push_map->block_count);
+   const struct anv_pipeline_binding *binding =
+      &state->push_map->block_to_descriptor[block];
+
+   const unsigned num_components =
+      nir_def_last_component_read(&intrin->def) + 1;
+   const int bytes = num_components * (intrin->def.bit_size / 8);
+
+   uint32_t range_offset = 0, slot = 0;
+   const struct anv_push_range *push_range = NULL;
+   for (uint32_t i = 0; i < 4; i++) {
+      const struct anv_push_range *r = &state->bind_map->push_ranges[i];
+      if (r->ubo_ptr && r->set == binding->set &&
+          r->index == binding->index && r->ubo_ptr_offset == ptr_offset &&
+          load_offset >= r->start * 32 &&
+          (load_offset + bytes + 32) <= (r->start + r->length) * 32) {
+         push_range = r;
+         break;
+      }
+      if (r->ssbo || r->ubo_ptr)
+         slot++;
+      range_offset += r->length * 32;
+   }
+
+   if (push_range == NULL)
+      return false;
+
+   load_shifted_push_data(b, state, intrin, push_range, range_offset, slot,
+                          load_offset);
+   return true;
+}
+
 static bool
 lower_ubo_or_pointer_to_push_data_intel(nir_builder *b,
                                         nir_intrinsic_instr *intrin,
@@ -276,7 +390,9 @@ lower_ubo_or_pointer_to_push_data_intel(nir_builder *b,
       uint32_t range_offset = 0;
       const struct anv_push_range *push_range = NULL;
       for (uint32_t i = 0; i < 4; i++) {
-         if (state->bind_map->push_ranges[i].set == binding->set &&
+         if (!state->bind_map->push_ranges[i].ubo_ptr &&
+             !state->bind_map->push_ranges[i].ssbo &&
+             state->bind_map->push_ranges[i].set == binding->set &&
              state->bind_map->push_ranges[i].index == binding->index &&
              byte_offset >= state->bind_map->push_ranges[i].start * 32 &&
              (byte_offset + bytes) <= (state->bind_map->push_ranges[i].start +
@@ -304,6 +420,46 @@ lower_ubo_or_pointer_to_push_data_intel(nir_builder *b,
       _mesa_set_add(state->lowered_ubo_instrs,
                     nir_def_as_intrinsic(data));
 
+      return true;
+   }
+
+   case nir_intrinsic_load_ssbo: {
+      if (!anv_nir_is_pushable_ssbo_load(intrin) ||
+          b->shader->info.stage > MESA_SHADER_FRAGMENT ||
+          brw_shader_stage_requires_bindless_resources(b->shader->info.stage))
+         return false;
+
+      const struct lower_to_push_data_intel_state *state = _data;
+      const int block = anv_nir_get_ubo_binding_push_block(intrin->src[0]);
+      assert(block < state->push_map->block_count);
+      const struct anv_pipeline_binding *binding =
+         &state->push_map->block_to_descriptor[block];
+      const unsigned byte_offset = nir_src_as_uint(intrin->src[1]);
+
+      const unsigned num_components =
+         nir_def_last_component_read(&intrin->def) + 1;
+      const int bytes = num_components * (intrin->def.bit_size / 8);
+
+      uint32_t range_offset = 0, slot = 0;
+      const struct anv_push_range *push_range = NULL;
+      for (uint32_t i = 0; i < 4; i++) {
+         const struct anv_push_range *r = &state->bind_map->push_ranges[i];
+         if (r->ssbo && r->set == binding->set && r->index == binding->index &&
+             byte_offset >= r->start * 32 &&
+             (byte_offset + bytes + 32) <= (r->start + r->length) * 32) {
+            push_range = r;
+            break;
+         }
+         if (r->ssbo || r->ubo_ptr)
+            slot++;
+         range_offset += r->length * 32;
+      }
+
+      if (push_range == NULL)
+         return false;
+
+      load_shifted_push_data(b, state, intrin, push_range, range_offset, slot,
+                             byte_offset);
       return true;
    }
 
@@ -666,7 +822,8 @@ anv_nir_compute_push_layout(nir_shader *nir,
 
    struct push_data data =
       gather_push_data(nir, robust_flags, devinfo, push_info,
-                       prog_key, map, NULL, NULL);
+                       prog_key, map, NULL, NULL, NULL,
+                       pdevice->xemtl_ssbo_push);
 
    struct anv_push_range push_constant_range =
       compute_final_push_range(nir, devinfo, &data, map);
@@ -709,8 +866,10 @@ anv_nir_compute_push_layout(nir_shader *nir,
    }
 
    struct anv_push_range analysis_ranges[4] = {};
-   if (data.push_ubo_ranges || data.push_pointer_ranges) {
+   if (data.push_ubo_ranges || data.push_pointer_ranges ||
+       data.push_ssbo_ranges) {
       anv_nir_analyze_push_constants_ranges(nir, devinfo, push_map,
+                                            pdevice->xemtl_ssbo_push,
                                             analysis_ranges);
    }
 
@@ -776,9 +935,17 @@ anv_nir_compute_push_layout(nir_shader *nir,
       .push_map = push_map,
       .lowered_ubo_instrs = _mesa_pointer_set_create(NULL),
       .lowered_pointer_instrs = _mesa_pointer_set_create(NULL),
+      .lowered_ssbo_instrs = _mesa_pointer_set_create(NULL),
    };
 
-   bool progress = nir_shader_intrinsics_pass(
+   bool progress = false;
+   if (pdevice->xemtl_ssbo_push) {
+      progress |= nir_shader_intrinsics_pass(
+         nir, lower_ubo_pointer_to_push_data_intel,
+         nir_metadata_control_flow, &lower_state);
+   }
+
+   progress |= nir_shader_intrinsics_pass(
          nir, lower_ubo_or_pointer_to_push_data_intel,
          nir_metadata_control_flow, &lower_state);
 
@@ -787,7 +954,9 @@ anv_nir_compute_push_layout(nir_shader *nir,
       data = gather_push_data(nir, robust_flags, devinfo, push_info, prog_key,
                               map,
                               lower_state.lowered_ubo_instrs,
-                              lower_state.lowered_pointer_instrs);
+                              lower_state.lowered_pointer_instrs,
+                              lower_state.lowered_ssbo_instrs,
+                              pdevice->xemtl_ssbo_push);
 
       /* Update the ranges */
       struct anv_push_range shrinked_push_constant_range =
@@ -813,6 +982,7 @@ anv_nir_compute_push_layout(nir_shader *nir,
 
    ralloc_free(lower_state.lowered_ubo_instrs);
    ralloc_free(lower_state.lowered_pointer_instrs);
+   ralloc_free(lower_state.lowered_ssbo_instrs);
 
    /* Do this before calling brw_cs_fill_push_const_info(), it uses the data
     * in prog_data->push_sizes[].
@@ -824,7 +994,9 @@ anv_nir_compute_push_layout(nir_shader *nir,
       /* We only bother to shader-zero pushed client UBOs */
       if (map->push_ranges[i].length > 0 &&
           map->push_ranges[i].set < MAX_SETS &&
-          (robust_flags & BRW_ROBUSTNESS_UBO))
+          !map->push_ranges[i].ubo_ptr &&
+          (robust_flags & (map->push_ranges[i].ssbo ? BRW_ROBUSTNESS_SSBO :
+                                                       BRW_ROBUSTNESS_UBO)))
          prog_data->robust_ubo_ranges |= (uint8_t) (1 << i);
 
       prog_data->push_sizes[i] = map->push_ranges[i].length * 32;

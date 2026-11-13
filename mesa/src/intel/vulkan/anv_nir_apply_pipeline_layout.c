@@ -213,6 +213,12 @@ add_binding_type(struct apply_pipeline_layout_state *state,
         set_layout->binding[binding].type == VK_DESCRIPTOR_TYPE_MUTABLE_EXT) &&
        type == nir_descriptor_type_uniform_buffer)
       state->set[set].binding[binding].properties |= BINDING_PROPERTY_PUSHABLE;
+
+   if (state->pdevice->xemtl_ssbo_push &&
+       is_set_pushable && is_binding_pushable &&
+       set_layout->binding[binding].type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+       type == nir_descriptor_type_storage_buffer)
+      state->set[set].binding[binding].properties |= BINDING_PROPERTY_PUSHABLE;
 }
 
 static struct anv_binding_apply_layout *

@@ -71,6 +71,8 @@ cmp_push_range_entry(const void *va, const void *vb)
 enum push_block_type {
    PUSH_BLOCK_TYPE_UBO = 1,
    PUSH_BLOCK_TYPE_POINTER = 2,
+   PUSH_BLOCK_TYPE_SSBO = 3,
+   PUSH_BLOCK_TYPE_UBO_POINTER = 4,
 };
 
 struct push_block_key
@@ -95,7 +97,22 @@ struct push_analysis_state
 {
    const struct intel_device_info *devinfo;
    struct hash_table *blocks;
+   bool ssbo;
+   bool ubo_ptr;
+   int shifted_min_benefit;
+   int shifted_max_length;
+   bool shifted_skip_loops;
 };
+
+static bool
+block_in_loop(nir_block *block)
+{
+   for (nir_cf_node *n = block->cf_node.parent; n; n = n->parent) {
+      if (n->type == nir_cf_node_loop)
+         return true;
+   }
+   return false;
+}
 
 static uint32_t
 push_block_key_hash(const void *key)
@@ -129,7 +146,8 @@ get_block_info(struct push_analysis_state *state,
 
 static void
 maybe_add_pushable_ubo(struct push_analysis_state *state,
-                       nir_intrinsic_instr *intrin)
+                       nir_intrinsic_instr *intrin,
+                       enum push_block_type type)
 {
    const int block = anv_nir_get_ubo_binding_push_block(intrin->src[0]);
    const unsigned byte_offset = nir_src_as_uint(intrin->src[1]);
@@ -150,13 +168,15 @@ maybe_add_pushable_ubo(struct push_analysis_state *state,
    const int bytes = num_components * (intrin->def.bit_size / 8);
    const int start = ROUND_DOWN_TO(byte_offset, state->devinfo->grf_size);
    const int end = align(byte_offset + bytes, state->devinfo->grf_size);
-   const int chunks = (end - start) / state->devinfo->grf_size;
+   int chunks = (end - start) / state->devinfo->grf_size;
+   if (type == PUSH_BLOCK_TYPE_SSBO)
+      chunks = MIN2(chunks + 1, 64 - offset);
 
    /* TODO: should we count uses in loops as higher benefit? */
 
    struct push_block_info *info =
-      get_block_info(state, PUSH_BLOCK_TYPE_UBO, block);
-   info->offsets |= ((1ull << chunks) - 1) << offset;
+      get_block_info(state, type, block);
+   info->offsets |= (chunks >= 64 ? ~0ull : ((1ull << chunks) - 1)) << offset;
    info->uses[offset]++;
 }
 
@@ -231,6 +251,95 @@ anv_nir_is_pushable_pointer(nir_intrinsic_instr *intrin,
     return true;
 }
 
+bool
+anv_nir_is_pushable_ubo_pointer(nir_intrinsic_instr *intrin,
+                                uint32_t *out_block,
+                                uint32_t *out_ptr_offset,
+                                uint32_t *out_load_offset)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_global_constant)
+      return false;
+
+   const enum gl_access_qualifier access = nir_intrinsic_access(intrin);
+   if (!(access & ACCESS_NON_WRITEABLE) ||
+       (access & (ACCESS_VOLATILE | ACCESS_COHERENT)))
+      return false;
+
+   nir_scalar val = { intrin->src[0].ssa, 0 };
+   uint64_t load_offset = 0;
+   if (nir_scalar_is_alu(val) && nir_scalar_alu_op(val) == nir_op_iadd) {
+      nir_scalar a = nir_scalar_chase_alu_src(val, 0);
+      nir_scalar b = nir_scalar_chase_alu_src(val, 1);
+      if (nir_scalar_is_const(b)) {
+         load_offset = nir_scalar_as_uint(b);
+         val = a;
+      } else if (nir_scalar_is_const(a)) {
+         load_offset = nir_scalar_as_uint(a);
+         val = b;
+      } else {
+         return false;
+      }
+   }
+   if (load_offset >= 2048)
+      return false;
+
+   nir_intrinsic_instr *ubo;
+   uint32_t comp_offset;
+   if (nir_scalar_is_alu(val) &&
+       nir_scalar_alu_op(val) == nir_op_pack_64_2x32_split) {
+      nir_scalar lo = nir_scalar_chase_alu_src(val, 0);
+      nir_scalar hi = nir_scalar_chase_alu_src(val, 1);
+      if (!nir_scalar_is_intrinsic(lo) || lo.def != hi.def ||
+          hi.comp != lo.comp + 1 || lo.def->bit_size != 32)
+         return false;
+      ubo = nir_def_as_intrinsic(lo.def);
+      comp_offset = lo.comp * 4;
+   } else if (nir_scalar_is_intrinsic(val) && val.def->bit_size == 64) {
+      ubo = nir_def_as_intrinsic(val.def);
+      comp_offset = val.comp * 8;
+   } else {
+      return false;
+   }
+
+   if (ubo->intrinsic != nir_intrinsic_load_ubo ||
+       !anv_nir_is_promotable_ubo_binding(ubo->src[0]) ||
+       !nir_src_is_const(ubo->src[1]))
+      return false;
+
+   const uint64_t ptr_offset = nir_src_as_uint(ubo->src[1]) + comp_offset;
+   const uint32_t block = anv_nir_get_ubo_binding_push_block(ubo->src[0]);
+   if (ptr_offset >= 65536 || block >= 65536)
+      return false;
+
+   *out_block = block;
+   *out_ptr_offset = ptr_offset;
+   *out_load_offset = load_offset;
+   return true;
+}
+
+static void
+add_pushable_ubo_pointer(struct push_analysis_state *state,
+                         nir_intrinsic_instr *intrin,
+                         uint32_t block,
+                         uint32_t ptr_offset,
+                         uint32_t load_offset)
+{
+   const unsigned grf = state->devinfo->grf_size;
+   const int offset = load_offset / grf;
+   const unsigned num_components =
+      nir_def_last_component_read(&intrin->def) + 1;
+   const int bytes = num_components * (intrin->def.bit_size / 8);
+   const int start = ROUND_DOWN_TO(load_offset, grf);
+   const int end = align(load_offset + bytes, grf);
+   const int chunks = MIN2((end - start) / grf + 1, 64 - offset);
+
+   struct push_block_info *info =
+      get_block_info(state, PUSH_BLOCK_TYPE_UBO_POINTER,
+                     (block << 16) | ptr_offset);
+   info->offsets |= (chunks >= 64 ? ~0ull : ((1ull << chunks) - 1)) << offset;
+   info->uses[offset]++;
+}
+
 static void
 add_pushable_pointer(struct push_analysis_state *state,
                      nir_intrinsic_instr *intrin,
@@ -264,6 +373,8 @@ add_pushable_pointer(struct push_analysis_state *state,
 static void
 analyze_pushable_block(struct push_analysis_state *state, nir_block *block)
 {
+   const bool shifted_ok = !(state->shifted_skip_loops && block_in_loop(block));
+
    nir_foreach_instr(instr, block) {
       if (instr->type != nir_instr_type_intrinsic)
          continue;
@@ -273,13 +384,23 @@ analyze_pushable_block(struct push_analysis_state *state, nir_block *block)
       case nir_intrinsic_load_ubo:
          if (anv_nir_is_promotable_ubo_binding(intrin->src[0]) &&
              nir_src_is_const(intrin->src[1]))
-            maybe_add_pushable_ubo(state, intrin);
+            maybe_add_pushable_ubo(state, intrin, PUSH_BLOCK_TYPE_UBO);
+         break;
+
+      case nir_intrinsic_load_ssbo:
+         if (state->ssbo && shifted_ok && anv_nir_is_pushable_ssbo_load(intrin))
+            maybe_add_pushable_ubo(state, intrin, PUSH_BLOCK_TYPE_SSBO);
          break;
 
      case nir_intrinsic_load_global_constant: {
-        uint32_t push_offset, load_offset;
+        uint32_t push_offset, load_offset, block;
         if (anv_nir_is_pushable_pointer(intrin, &push_offset, &load_offset))
            add_pushable_pointer(state, intrin, push_offset, load_offset);
+        else if (state->ubo_ptr && shifted_ok &&
+                 anv_nir_is_pushable_ubo_pointer(intrin, &block, &push_offset,
+                                                 &load_offset))
+           add_pushable_ubo_pointer(state, intrin, block, push_offset,
+                                    load_offset);
         break;
      }
 
@@ -307,6 +428,7 @@ void
 anv_nir_analyze_push_constants_ranges(nir_shader *nir,
                                       const struct intel_device_info *devinfo,
                                       const struct anv_pipeline_push_map *push_map,
+                                      bool ubo_ptr,
                                       struct anv_push_range out_ranges[4])
 {
    void *mem_ctx = ralloc_context(NULL);
@@ -316,6 +438,17 @@ anv_nir_analyze_push_constants_ranges(nir_shader *nir,
       .blocks = _mesa_hash_table_create(mem_ctx,
                                         push_block_key_hash,
                                         push_block_key_compare),
+      .ssbo = nir->info.stage <= MESA_SHADER_FRAGMENT,
+      .ubo_ptr = ubo_ptr && nir->info.stage <= MESA_SHADER_FRAGMENT &&
+                 nir_shader_get_entrypoint(nir)->ssa_alloc <=
+                 (getenv("XEMTL_PTR_PUSH_MAXSSA") ?
+                  (unsigned)atoi(getenv("XEMTL_PTR_PUSH_MAXSSA")) : 16000u),
+      .shifted_min_benefit = getenv("XEMTL_PTR_PUSH_MIN") ?
+                             atoi(getenv("XEMTL_PTR_PUSH_MIN")) : 16,
+      .shifted_max_length = getenv("XEMTL_PTR_PUSH_MAXLEN") ?
+                            atoi(getenv("XEMTL_PTR_PUSH_MAXLEN")) : 64,
+      .shifted_skip_loops = getenv("XEMTL_PTR_PUSH_LOOPS") ?
+                            atoi(getenv("XEMTL_PTR_PUSH_LOOPS")) == 0 : false,
    };
 
    /* Walk the IR, recording how many times each UBO block/offset is used. */
@@ -369,13 +502,24 @@ anv_nir_analyze_push_constants_ranges(nir_shader *nir,
          struct push_range_entry *entry =
             util_dynarray_grow(&ranges, struct push_range_entry, 1);
 
-         if (info->key.type == PUSH_BLOCK_TYPE_UBO) {
+         if (info->key.type == PUSH_BLOCK_TYPE_UBO ||
+             info->key.type == PUSH_BLOCK_TYPE_SSBO) {
             assert(info->key.index < push_map->block_count);
             const struct anv_pipeline_binding *binding =
                &push_map->block_to_descriptor[info->key.index];
             entry->range.set = binding->set;
             entry->range.index = binding->index;
             entry->range.dynamic_offset_index = binding->dynamic_offset_index;
+            entry->range.ssbo = info->key.type == PUSH_BLOCK_TYPE_SSBO;
+         } else if (info->key.type == PUSH_BLOCK_TYPE_UBO_POINTER) {
+            assert((info->key.index >> 16) < push_map->block_count);
+            const struct anv_pipeline_binding *binding =
+               &push_map->block_to_descriptor[info->key.index >> 16];
+            entry->range.set = binding->set;
+            entry->range.index = binding->index;
+            entry->range.dynamic_offset_index = binding->dynamic_offset_index;
+            entry->range.ubo_ptr = 1;
+            entry->range.ubo_ptr_offset = info->key.index & 0xffff;
          } else {
             entry->range.set = ANV_DESCRIPTOR_SET_PUSH_POINTER;
             entry->range.index = info->key.index;
@@ -387,6 +531,17 @@ anv_nir_analyze_push_constants_ranges(nir_shader *nir,
 
          for (int i = 0; i < entry->range.length; i++)
             entry->benefit += info->uses[first_bit + i];
+
+         if ((info->key.type == PUSH_BLOCK_TYPE_UBO_POINTER ||
+              info->key.type == PUSH_BLOCK_TYPE_SSBO) &&
+             entry->benefit < state.shifted_min_benefit) {
+            entry->range.length = 0;
+            entry->benefit = -1000;
+         } else if (info->key.type == PUSH_BLOCK_TYPE_UBO_POINTER ||
+                    info->key.type == PUSH_BLOCK_TYPE_SSBO) {
+            entry->range.length = MIN2(entry->range.length,
+                                       state.shifted_max_length);
+         }
 
          if (false)
             print_push_entry(stderr, info, entry, &state);

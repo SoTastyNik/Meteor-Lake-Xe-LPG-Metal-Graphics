@@ -257,6 +257,9 @@ anv_shader_init_uuid(struct anv_physical_device *device)
    const bool efficient_64bit = device->uses_efficient_64bit;
    _mesa_blake3_update(&ctx, &efficient_64bit, sizeof(efficient_64bit));
 
+   const bool ssbo_push = device->xemtl_ssbo_push;
+   _mesa_blake3_update(&ctx, &ssbo_push, sizeof(ssbo_push));
+
    const int spilling_rate = device->compiler->spilling_rate;
    _mesa_blake3_update(&ctx, &spilling_rate, sizeof(spilling_rate));
 

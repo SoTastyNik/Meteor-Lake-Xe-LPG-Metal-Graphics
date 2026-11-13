@@ -460,6 +460,10 @@ struct anv_bo {
     */
    void *map;
 
+   void *xemtl_host_map;
+   uint64_t xemtl_host_offset;
+   uint64_t xemtl_host_size;
+
    /* The actual size of bo allocated by kmd, basically:
     * align(size, mem_alignment)
     */
@@ -1074,6 +1078,12 @@ struct anv_push_range {
 
    /** Range in units of 32B */
    uint8_t length;
+
+   uint8_t ssbo;
+
+   uint8_t ubo_ptr;
+
+   uint16_t ubo_ptr_offset;
 };
 
 enum anv_pipeline_bind_mask {
@@ -1573,6 +1583,8 @@ struct anv_physical_device {
      * address.
      */
     bool                                        uses_efficient_64bit;
+
+    bool                                        xemtl_ssbo_push;
 
     bool                                        uses_relocs;
 

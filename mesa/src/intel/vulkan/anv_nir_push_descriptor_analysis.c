@@ -247,7 +247,9 @@ anv_nir_push_desc_ubo_fully_promoted(nir_shader *nir,
 
             bool promoted = false;
             for (unsigned i = 0; i < ARRAY_SIZE(bind_map->push_ranges); i++) {
-               if (bind_map->push_ranges[i].set == pipe_bind->set &&
+               if (!bind_map->push_ranges[i].ubo_ptr &&
+                   !bind_map->push_ranges[i].ssbo &&
+                   bind_map->push_ranges[i].set == pipe_bind->set &&
                    bind_map->push_ranges[i].index == desc_idx &&
                    bind_map->push_ranges[i].start * 32 <= load_offset &&
                    (bind_map->push_ranges[i].start +

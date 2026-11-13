@@ -149,6 +149,8 @@ struct anv_drv_push_data {
          /** Robust access pushed registers. */
          uint8_t push_reg_mask[MESA_SHADER_FRAGMENT + 1][4];
 
+         uint8_t ssbo_push_shift[MESA_SHADER_FRAGMENT + 1][4];
+
          /** Wa_18019110168
           * bits  4:0 : provoking vertex value
           * bits 31:5 : per primitive table remapping offset

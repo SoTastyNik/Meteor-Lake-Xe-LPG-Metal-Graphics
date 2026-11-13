@@ -175,6 +175,51 @@ cmd_buffer_emit_descriptor_pointers(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
+static uint64_t
+get_push_range_ubo_pointer(const struct anv_bind_point_state *bind_state,
+                           const struct anv_push_range *range)
+{
+   const struct anv_descriptor_set *set = bind_state->descriptors[range->set];
+   if (set == NULL)
+      return 0;
+
+   const struct anv_descriptor *desc = &set->descriptors[range->index];
+   if (desc->buffer == NULL)
+      return 0;
+
+   uint64_t offset = desc->offset + range->ubo_ptr_offset;
+   if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
+      offset += bind_state->dynamic_offsets[
+         range->set].offsets[range->dynamic_offset_index];
+   } else if (desc->type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+      return 0;
+   }
+
+   if (offset + 8 > desc->buffer->vk.size)
+      return 0;
+
+   const struct anv_bo *bo = desc->buffer->address.bo;
+   if (bo == NULL)
+      return 0;
+
+   const uint64_t bo_offset = desc->buffer->address.offset + offset;
+   const char *map;
+   if (bo->map) {
+      map = (const char *)bo->map + bo_offset;
+   } else if (bo->xemtl_host_map && bo_offset >= bo->xemtl_host_offset &&
+              bo_offset + 8 <= bo->xemtl_host_offset + bo->xemtl_host_size) {
+      map = (const char *)bo->xemtl_host_map +
+            (bo_offset - bo->xemtl_host_offset);
+   } else {
+      mesa_logw_once("xemtl: pushed pointer table is not host mapped");
+      return 0;
+   }
+
+   uint64_t ptr;
+   memcpy(&ptr, map, sizeof(ptr));
+   return intel_canonical_address(ptr);
+}
+
 static struct anv_address
 get_push_range_address(struct anv_cmd_buffer *cmd_buffer,
                        const struct anv_shader *shader,
@@ -221,6 +266,15 @@ get_push_range_address(struct anv_cmd_buffer *cmd_buffer,
 
    default: {
       assert(range->set < MAX_SETS);
+      if (range->ubo_ptr) {
+         const uint64_t ptr = get_push_range_ubo_pointer(bind_state, range);
+         if (ptr != 0)
+            return anv_address_from_u64(ptr & ~31ull);
+
+         assert((range->start + range->length) * 32 <= 2048);
+         return cmd_buffer->device->workaround_address;
+      }
+
       struct anv_descriptor_set *set = bind_state->descriptors[range->set];
       const struct anv_descriptor *desc = &set->descriptors[range->index];
 
@@ -228,6 +282,14 @@ get_push_range_address(struct anv_cmd_buffer *cmd_buffer,
          if (desc->buffer) {
             return anv_address_add(desc->buffer->address,
                                    desc->offset);
+         }
+      } else if (desc->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+         assert(range->ssbo);
+         if (desc->buffer) {
+            struct anv_address addr =
+               anv_address_add(desc->buffer->address, desc->offset);
+            addr.offset -= anv_address_physical(addr) & 31;
+            return addr;
          }
       } else {
          assert(desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
@@ -306,6 +368,16 @@ get_push_range_bound_size(struct anv_cmd_buffer *cmd_buffer,
             return 0;
 
          return desc->bind_range;
+      } else if (desc->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+         if (!desc->buffer)
+            return 0;
+
+         const uint64_t shift = anv_address_physical(
+            anv_address_add(desc->buffer->address, desc->offset)) & 31;
+         if (range->start * 32 > desc->bind_range + shift)
+            return 0;
+
+         return desc->bind_range + shift;
       } else {
          if (!desc->buffer)
             return 0;
@@ -491,6 +563,41 @@ cmd_buffer_flush_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer,
                mesa_to_vk_shader_stage(stage);
             bind_state->push_constants_state = ANV_STATE_NULL;
          }
+      }
+   }
+
+   anv_foreach_stage(stage, dirty_stages) {
+      if (!anv_gfx_has_stage(gfx, stage) || stage > MESA_SHADER_FRAGMENT)
+         continue;
+
+      const struct anv_shader *shader = gfx->shaders[stage];
+      const struct anv_pipeline_bind_map *bind_map = &shader->bind_map;
+      struct anv_push_constants *push = &bind_state->push_constants;
+      unsigned slot = 0;
+      for (unsigned r = 0; r < 4; r++) {
+         const struct anv_push_range *range = &bind_map->push_ranges[r];
+         if (!range->ssbo && !range->ubo_ptr)
+            continue;
+
+         uint8_t shift = 0;
+         if (range->ubo_ptr) {
+            shift = get_push_range_ubo_pointer(bind_state, range) & 31;
+         } else {
+            struct anv_descriptor_set *set = bind_state->descriptors[range->set];
+            const struct anv_descriptor *desc = &set->descriptors[range->index];
+            if (desc->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && desc->buffer) {
+               shift = anv_address_physical(
+                  anv_address_add(desc->buffer->address, desc->offset)) & 31;
+            }
+         }
+
+         if (shift != push->drv_data.gfx.ssbo_push_shift[stage][slot]) {
+            push->drv_data.gfx.ssbo_push_shift[stage][slot] = shift;
+            cmd_buffer->state.push_constants_dirty |=
+               mesa_to_vk_shader_stage(stage);
+            bind_state->push_constants_state = ANV_STATE_NULL;
+         }
+         slot++;
       }
    }
 

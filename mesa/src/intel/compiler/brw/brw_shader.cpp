@@ -339,6 +339,16 @@ brw_shader::assign_curb_setup()
             assert(inst->src[i].nr < 64);
             used |= BITFIELD64_BIT(inst->src[i].nr);
 
+            if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT && i == 0 &&
+                inst->src[2].file == IMM) {
+               const unsigned last =
+                  MIN2(inst->src[i].nr +
+                       (inst->src[i].offset + inst->src[2].ud - 1) / REG_SIZE,
+                       63);
+               used |= BITFIELD64_RANGE(inst->src[i].nr,
+                                        last - inst->src[i].nr + 1);
+            }
+
             assert(inst->src[i].nr < this->push_data_size);
 
             brw_reg = brw_vec1_grf(payload().num_regs + inst->src[i].nr, 0);

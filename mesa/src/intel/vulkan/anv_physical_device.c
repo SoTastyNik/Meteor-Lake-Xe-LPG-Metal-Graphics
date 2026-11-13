@@ -3,6 +3,7 @@
  */
 
 #include "anv_private.h"
+#include <unistd.h>
 #include "anv_latitude_heap.h"
 #include "anv_api_version.h"
 #include "anv_measure.h"
@@ -3224,6 +3225,12 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
    device->uses_efficient_64bit =
       device->info.verx10 >= 350 &&
       device->drirc.debug.enable_efficient_64bit;
+
+   {
+      const char *e = getenv("ANV_LATITUDE_SHADER_PUSH");
+      device->xemtl_ssbo_push = e ? e[0] == '1' :
+         access("/Library/GPUBundles/nvmtl-no-shader-push", F_OK) != 0;
+   }
 
    device->alloc_aux_tt_mem =
       device->info.has_aux_map && device->info.verx10 >= 125;

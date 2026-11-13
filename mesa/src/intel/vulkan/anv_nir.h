@@ -211,13 +211,29 @@ anv_nir_get_ubo_binding_push_block(nir_src src)
    return nir_intrinsic_resource_block_intel(intrin);
 }
 
+static inline bool
+anv_nir_is_pushable_ssbo_load(const nir_intrinsic_instr *intrin)
+{
+   return intrin->intrinsic == nir_intrinsic_load_ssbo &&
+      anv_nir_is_promotable_ubo_binding(intrin->src[0]) &&
+      nir_src_is_const(intrin->src[1]) &&
+      (nir_intrinsic_access(intrin) & ACCESS_NON_WRITEABLE) &&
+      !(nir_intrinsic_access(intrin) & (ACCESS_VOLATILE | ACCESS_COHERENT));
+}
+
 bool anv_nir_is_pushable_pointer(nir_intrinsic_instr *intrin,
                                  uint32_t *out_push_offset,
                                  uint32_t *out_load_offset);
 
+bool anv_nir_is_pushable_ubo_pointer(nir_intrinsic_instr *intrin,
+                                     uint32_t *out_block,
+                                     uint32_t *out_ptr_offset,
+                                     uint32_t *out_load_offset);
+
 void anv_nir_analyze_push_constants_ranges(nir_shader *nir,
                                            const struct intel_device_info *devinfo,
                                            const struct anv_pipeline_push_map *push_map,
+                                           bool ubo_ptr,
                                            struct anv_push_range out_ranges[4]);
 
 enum anv_pipeline_behavior anv_nir_clear_shader_analysis(nir_shader *shader);
