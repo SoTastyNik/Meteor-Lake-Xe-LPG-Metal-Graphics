@@ -185,9 +185,24 @@ static int validate_priority(struct drm_i915_private *i915,
 	    priority < I915_CONTEXT_MIN_USER_PRIORITY)
 		return -EINVAL;
 
+#ifdef NMXKPI
+	/*
+	 * macOS port (v69): capable() is root here, and WindowServer runs as _windowserver; its frames pace the whole
+	 * desktop, so it may raise its contexts (the plugin asks HIGH for its queue).
+	 */
+	if (priority > I915_CONTEXT_DEFAULT_PRIORITY && !capable(CAP_SYS_NICE)) {
+		extern void proc_selfname(char *buf, int size);
+		char name[32];
+
+		proc_selfname(name, sizeof(name));
+		if (strcmp(name, "WindowServer") != 0)
+			return -EPERM;
+	}
+#else
 	if (priority > I915_CONTEXT_DEFAULT_PRIORITY &&
 	    !capable(CAP_SYS_NICE))
 		return -EPERM;
+#endif
 
 	return 0;
 }

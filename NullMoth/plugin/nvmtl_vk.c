@@ -1129,20 +1129,21 @@ static int nvmtl_vk_initialize(void)
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, NULL, 0, g_qfam, 1, &prio };
 
-    static const char *kWant[15] = { "VK_EXT_extended_dynamic_state3", "VK_EXT_depth_clip_enable", "VK_EXT_memory_budget",
+    static const char *kWant[16] = { "VK_EXT_extended_dynamic_state3", "VK_EXT_depth_clip_enable", "VK_EXT_memory_budget",
                                     "VK_KHR_acceleration_structure", "VK_KHR_ray_query", "VK_KHR_deferred_host_operations",
                                     "VK_EXT_external_memory_host",
                                     "VK_EXT_image_drm_format_modifier",
                                     "VK_KHR_external_memory_fd",
-                                    "VK_EXT_mutable_descriptor_type", "VK_KHR_cooperative_matrix", "VK_EXT_calibrated_timestamps", "VK_EXT_sample_locations", "VK_KHR_pipeline_executable_properties", "VK_EXT_provoking_vertex" };
-    const char *exts[15]; uint32_t next = 0; int have[15] = {0};
+                                    "VK_EXT_mutable_descriptor_type", "VK_KHR_cooperative_matrix", "VK_EXT_calibrated_timestamps", "VK_EXT_sample_locations", "VK_KHR_pipeline_executable_properties", "VK_EXT_provoking_vertex",
+                                    "VK_KHR_global_priority" };
+    const char *exts[16]; uint32_t next = 0; int have[16] = {0};
     uint32_t na = 0;
     if (pvkEnumerateDeviceExtensionProperties &&
         pvkEnumerateDeviceExtensionProperties(g_pdev, NULL, &na, NULL) == VK_SUCCESS && na) {
         VkExtensionProperties *props = calloc(na, sizeof *props);
         if (props && pvkEnumerateDeviceExtensionProperties(g_pdev, NULL, &na, props) == VK_SUCCESS)
             for (uint32_t i = 0; i < na; i++)
-                for (int w = 0; w < 15; w++)
+                for (int w = 0; w < 16; w++)
                     if (!have[w] && !strcmp(props[i].extensionName, kWant[w])) { have[w] = 1; exts[next++] = kWant[w]; }
         free(props);
     }
@@ -1314,9 +1315,23 @@ static int nvmtl_vk_initialize(void)
     if (pnvk_sparse && pnvk_sparse() == 1 && supported.sparseBinding) { enabled.sparseBinding = VK_TRUE; g_sparse = 1; }
     nvlog("vk: alphaToCoverage always, alphaToOne %s", g_a2one ? "AVAILABLE" : "ABSENT");
     nvlog("vk: tessellation %s, vertex-stage stores %s", g_tess ? "AVAILABLE" : "ABSENT", supported.vertexPipelineStoresAndAtomics ? "on" : "off");
+    // v69: WindowServer's queue at HIGH GPU priority (I915_CONTEXT_PARAM_PRIORITY, which NMXGPU lets WindowServer raise
+    // although it is not root), as ArrowWhatever runs it: its frames pace the desktop, and an app's work queued on the GPU
+    // ahead of a frame delayed it. Off with /Library/GPUBundles/nvmtl-ws-no-high-priority; refused, the default priority.
+    VkDeviceQueueGlobalPriorityCreateInfoKHR qprio = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR, NULL,
+                                                       VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR };
+    const int wsHigh = have[15] && !strcmp(getprogname(), "WindowServer") &&
+                       access("/Library/GPUBundles/nvmtl-ws-no-high-priority", F_OK) != 0;
+    if (wsHigh) qci.pNext = &qprio;
     VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, g_dyn3 ? (const void *)&dyn3 : (const void *)&v11, 0,
                                1, &qci, 0, NULL, next, next ? exts : NULL, &enabled };
-    VKCK(pvkCreateDevice(g_pdev, &dci, NULL, &g_dev), "vkCreateDevice");
+    VkResult dev_r = pvkCreateDevice(g_pdev, &dci, NULL, &g_dev);
+    if (wsHigh && dev_r != VK_SUCCESS) {
+        nvlog("vk: vkCreateDevice with a HIGH priority queue -> %d; again at the default priority", dev_r);
+        qci.pNext = NULL;
+        dev_r = pvkCreateDevice(g_pdev, &dci, NULL, &g_dev);
+    } else if (wsHigh) nvlog("vk: WindowServer's queue at HIGH GPU priority");
+    VKCK(dev_r, "vkCreateDevice");
     DEVICE_FNS(LOAD_D)
     nvmtl_mc_install();
     {

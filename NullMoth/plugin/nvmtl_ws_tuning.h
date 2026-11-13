@@ -27,9 +27,11 @@
  *                                                previous command buffer's GPU work (v18 sample).
  *   /Library/GPUBundles/nvmtl-ws-submit-locked   keep the command buffer class lock across a submit-ahead execbuffer, as
  *                                                before v27. Default (absent): released around it.
- *   /Library/GPUBundles/nvmtl-ws-nowait          with early schedule and the pipeline: WindowServer's commit does not wait
- *                                                to be scheduled at all (NMXAccel's ordered flips hold the surface until
- *                                                it is published). Experimental.
+ *   /Library/GPUBundles/nvmtl-ws-no-nowait       WindowServer's commit waits until its command buffer is submitted.
+ *                                                Default (v69, with early schedule and the pipeline): it does not wait at
+ *                                                all; NMXAccel's ordered flips hold the surface until it is published.
+ *                                                v27 measured frames under 17 ms 47% -> 57% with it; ArrowWhatever runs
+ *                                                WindowServer this way. (Before v69 opt-in, nvmtl-ws-nowait.)
  *   /Library/GPUBundles/nvmtl-ws-no-split-submit the execution worker submits as well. Default, with the pipeline:
  *                                                execbuffers run on their own serial queue, kicked by every commit;
  *                                                the worker only waits for completions (v38, NVMTLEventSync.m
@@ -94,7 +96,7 @@ static inline int nvmtl_ws_submit_unlocked(void)
 static inline int nvmtl_ws_nowait(void)
 {
     static int on = -1;
-    return nvmtl_ws_pipeline() && nvmtl_ws_early_schedule() && nvmtl_ws_flag("/Library/GPUBundles/nvmtl-ws-nowait", &on);
+    return nvmtl_ws_pipeline() && nvmtl_ws_early_schedule() && nvmtl_ws_default("/Library/GPUBundles/nvmtl-ws-no-nowait", &on);
 }
 
 static inline int nvmtl_ws_split_submit(void)
