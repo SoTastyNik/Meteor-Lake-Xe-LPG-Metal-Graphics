@@ -122,7 +122,13 @@ extern "C" int nmx_xnu_mm_copy(void *mm, uint64_t uaddr, void *kbuf, size_t len,
 }
 
 namespace {
-/* a wired user range: the descriptor and the task reference that keeps its map valid until unwire */
+/*
+ * a wired user range: the descriptor, wired by prepare() until complete(). v74_1: no task reference past the wiring
+ * (as WTLIntelGfx's xg_vm_x_hold_user): the descriptor's wiring is its UPLs, which need neither the task nor its map
+ * to be undone, and a reference held until the buffer went kept an exited process's task, and with it the task's
+ * port, alive: launchd tears a process's domain down (a login session's with loginwindow's) only when that port dies.
+ * task is kept as the owner's identity for the census only.
+ */
 struct UserWire {
     IOMemoryDescriptor *md;
     task_t task;
@@ -214,6 +220,7 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
         gWires->prev = w;
     gWires = w;
     IOLockUnlock(gLock);
+    task_deallocate(task);              /* the wiring stands without it; w->task is only a name from here on */
     *handle = w;
     SInt64 live = __atomic_add_fetch(&g_user_wired_pages, (SInt64)npages, __ATOMIC_RELAXED);
     __atomic_add_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
@@ -405,7 +412,6 @@ extern "C" void nmx_xnu_user_unwire(void *handle)
     IOLockUnlock(gLock);
     w->md->complete();
     w->md->release();
-    task_deallocate(w->task);
     __atomic_sub_fetch(&g_user_wired_pages, (SInt64)w->npages, __ATOMIC_RELAXED);
     __atomic_sub_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
     IODelete(w, UserWire, 1);
