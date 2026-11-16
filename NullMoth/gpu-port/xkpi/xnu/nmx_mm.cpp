@@ -17,13 +17,16 @@
 #include <IOKit/IOLib.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
+#include <sys/proc.h>
 #include <kern/task_ref.h>
 #include "nmx_xnu.h"
 
 namespace {
 struct MmTask {
     void *mm;
-    task_t task;
+    task_t task;            /* nullptr once the process is gone (nmx_xnu_task_gone) */
+    int pid;                /* v74: who, for the census */
+    char name[24];
     MmTask *next;
 };
 MmTask *gList;
@@ -47,7 +50,8 @@ task_t find_ref(void *mm)
     for (MmTask *e = gList; e != nullptr; e = e->next)
         if (e->mm == mm) {
             task = e->task;
-            task_reference(task);
+            if (task != nullptr)
+                task_reference(task);
             break;
         }
     IOLockUnlock(gLock);
@@ -62,6 +66,8 @@ extern "C" void nmx_xnu_mm_note_task(void *mm)
         return;     /* the copy helpers then report EFAULT for this process: nothing is written blindly */
     e->mm = mm;
     e->task = current_task();
+    e->pid = proc_selfpid();
+    proc_selfname(e->name, sizeof(e->name));
     task_reference(e->task);
     IOLockLock(lock());
     e->next = gList;
@@ -77,7 +83,8 @@ extern "C" void nmx_xnu_mm_forget(void *mm)
             MmTask *e = *pp;
             *pp = e->next;
             IOLockUnlock(gLock);
-            task_deallocate(e->task);
+            if (e->task != nullptr)
+                task_deallocate(e->task);
             IODelete(e, MmTask, 1);
             return;
         }
@@ -120,7 +127,11 @@ struct UserWire {
     IOMemoryDescriptor *md;
     task_t task;
     size_t npages;
+    int pid;                /* v74: the census */
+    char name[24];
+    UserWire *prev, *next;
 };
+UserWire *gWires;           /* under lock() */
 /* live user wirings, to tell a pin leak from a range that went away when xnu refuses one (kIOReturnCannotWire) */
 SInt64 g_user_wired_pages, g_user_wired_ranges, g_user_wires_total, g_user_wired_peak;
 }
@@ -187,6 +198,22 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
     w->md = md;
     w->task = task;
     w->npages = npages;
+    w->pid = -1;
+    w->name[0] = 0;
+    IOLockLock(lock());
+    if (mm == nullptr) {
+        w->pid = proc_selfpid();
+        proc_selfname(w->name, sizeof(w->name));
+    } else {
+        for (MmTask *e = gList; e != nullptr; e = e->next)
+            if (e->mm == mm) { w->pid = e->pid; strlcpy(w->name, e->name, sizeof(w->name)); break; }
+    }
+    w->prev = nullptr;
+    w->next = gWires;
+    if (gWires != nullptr)
+        gWires->prev = w;
+    gWires = w;
+    IOLockUnlock(gLock);
     *handle = w;
     SInt64 live = __atomic_add_fetch(&g_user_wired_pages, (SInt64)npages, __ATOMIC_RELAXED);
     __atomic_add_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
@@ -368,10 +395,157 @@ extern "C" void nmx_xnu_user_unwire(void *handle)
     UserWire *w = (UserWire *)handle;
     if (w == nullptr)
         return;
+    IOLockLock(lock());
+    if (w->prev != nullptr)
+        w->prev->next = w->next;
+    else
+        gWires = w->next;
+    if (w->next != nullptr)
+        w->next->prev = w->prev;
+    IOLockUnlock(gLock);
     w->md->complete();
     w->md->release();
     task_deallocate(w->task);
     __atomic_sub_fetch(&g_user_wired_pages, (SInt64)w->npages, __ATOMIC_RELAXED);
     __atomic_sub_fetch(&g_user_wired_ranges, 1, __ATOMIC_RELAXED);
     IODelete(w, UserWire, 1);
+}
+
+/*
+ * v74: tasks a process left behind. xnu destroys a task's port only when the last reference to the task goes, and
+ * launchd tears a process's domain down when that port dies; a login session's domain goes with loginwindow's. On
+ * accelerated boots the login after a logout waited forever for the previous session (v70..v73): loginwindow had
+ * exited (it draws the login window through Metal), launchd never cleaned up after it. The port holds task references
+ * here (the mm records, the wirings) and in nmx_devfs.cpp (fixed mappings, opens).
+ *
+ * nmx_xnu_task_gone: the process is gone (its last DRM open closed after it exited): its mm record lets the task go.
+ * The record then answers EFAULT to a worker copying into that process, as for an unknown mm.
+ */
+extern "C" int nmx_xnu_task_gone(task_t task)
+{
+    task_t drop[8];
+    int n = 0;
+    IOLockLock(lock());
+    for (MmTask *e = gList; e != nullptr && n < 8; e = e->next)
+        if (e->task == task) {
+            drop[n++] = e->task;
+            e->task = nullptr;
+        }
+    IOLockUnlock(gLock);
+    for (int i = 0; i < n; i++)
+        task_deallocate(drop[i]);
+    return n;
+}
+
+namespace {
+struct CensusRow {
+    task_t task;
+    int pid;
+    char name[24];
+    unsigned mm, wires, maps, opens;
+    uint64_t pages;
+};
+struct Census {
+    CensusRow row[64];
+    int n;
+    task_t only;            /* one task, or nullptr for all */
+};
+}
+
+/* one reference of kind 0 mm record, 1 wiring (amount pages), 2 fixed mapping, 3 open */
+extern "C" void nmx_xnu_census_add(void *ctx, task_t task, int pid, const char *name, int kind, uint64_t amount)
+{
+    Census *c = (Census *)ctx;
+    if (task == nullptr || (c->only != nullptr && task != c->only))
+        return;
+    CensusRow *r = nullptr;
+    for (int i = 0; i < c->n; i++)
+        if (c->row[i].task == task) { r = &c->row[i]; break; }
+    if (r == nullptr) {
+        if (c->n == 64)
+            return;
+        r = &c->row[c->n++];
+        bzero(r, sizeof(*r));
+        r->task = task;
+        r->pid = pid;
+        strlcpy(r->name, name != nullptr ? name : "?", sizeof(r->name));
+    }
+    if (kind == 0) r->mm++;
+    else if (kind == 1) { r->wires++; r->pages += amount; }
+    else if (kind == 2) r->maps++;
+    else r->opens++;
+}
+
+extern "C" void nmx_xnu_devfs_census(void *ctx);
+
+/* whether pid is still the process that name was recorded for */
+static bool census_alive(int pid, const char *name)
+{
+    if (pid <= 0)
+        return false;
+    proc_t p = proc_find(pid);
+    if (p == nullptr)
+        return false;
+    char now[24];
+    proc_name(pid, now, sizeof(now));
+    const bool alive = !proc_exiting(p) && strncmp(now, name, sizeof(now)) == 0;
+    proc_rele(p);
+    return alive;
+}
+
+static void census_fill(Census *c)
+{
+    IOLockLock(lock());
+    for (MmTask *e = gList; e != nullptr; e = e->next)
+        nmx_xnu_census_add(c, e->task, e->pid, e->name, 0, 0);
+    for (UserWire *w = gWires; w != nullptr; w = w->next)
+        nmx_xnu_census_add(c, w->task, w->pid, w->name, 1, w->npages);
+    IOLockUnlock(gLock);
+    nmx_xnu_devfs_census(c);
+}
+
+/* every task the port still references whose process is gone; why: what asked */
+extern "C" void nmx_xnu_census(const char *why)
+{
+    Census *c = IONew(Census, 1);
+    if (c == nullptr)
+        return;
+    bzero(c, sizeof(*c));
+    census_fill(c);
+    int gone = 0;
+    for (int i = 0; i < c->n; i++) {
+        CensusRow *r = &c->row[i];
+        if (census_alive(r->pid, r->name))
+            continue;
+        gone++;
+        IOLog("NullMoth GPU: census (%s): pid %d (%s) is gone, its task still held by %u mm record(s), %u wiring(s) "
+              "(%llu pages), %u fixed mapping(s), %u open(s)\n", why, r->pid, r->name, r->mm, r->wires,
+              (unsigned long long)r->pages, r->maps, r->opens);
+    }
+    IOLog("NullMoth GPU: census (%s): %d process(es) referenced, %d of them gone\n", why, c->n, gone);
+    IODelete(c, Census, 1);
+}
+
+/* after a gone process's last close (nmx_devfs.cpp): let its mm record go, then report what still holds the task */
+extern "C" void nmx_xnu_task_gone_check(task_t task, int pid, const char *name, int secs)
+{
+    const int dropped = nmx_xnu_task_gone(task);
+    Census *c = IONew(Census, 1);
+    if (c == nullptr)
+        return;
+    bzero(c, sizeof(*c));
+    c->only = task;
+    census_fill(c);
+    if (c->n > 0) {
+        CensusRow *r = &c->row[0];
+        IOLog("NullMoth GPU: pid %d (%s) closed its last DRM open %d s ago and is gone: %d mm record(s) let its task go; "
+              "still held by %u wiring(s) (%llu pages), %u fixed mapping(s), %u open(s)\n", pid, name, secs, dropped,
+              r->wires, (unsigned long long)r->pages, r->maps, r->opens);
+    } else if (dropped > 0) {
+        static SInt32 said;
+        if (OSIncrementAtomic(&said) < 8)
+            IOLog("NullMoth GPU: pid %d (%s) is gone: its mm record let its task go %d s after its last DRM close\n",
+                  pid, name, secs);
+    }
+    IODelete(c, Census, 1);
 }

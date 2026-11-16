@@ -22,6 +22,8 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOLocks.h>
 #include <libkern/OSAtomic.h>
+#include <kern/thread_call.h>
+#include <kern/clock.h>
 #include "nmx_xnu.h"
 
 /* exported to kexts (xnu config: Mach.exports task_reference/task_deallocate; Unsupported.exports get_task_map,
@@ -43,6 +45,58 @@ static void *g_node_handle[NODE_MINORS];       /* devfs node handles */
 static char g_node_name[NODE_MINORS][32];      /* devfs path of each node ("dri/renderD128"), for the user client */
 static uint16_t g_open_node[OPEN_MINOR_MAX];   /* open minor -> node minor + 1 (0 = free) */
 static uint8_t g_open_active[OPEN_MINOR_MAX];  /* 1 while an open() of that minor succeeded and is not closed */
+
+/*
+ * v74: who made each open, with a reference on its task until the open is closed. When a process is gone and its
+ * last open closes, a check 3 s later lets its mm record release the task and reports what still holds it
+ * (nmx_mm.cpp, nmx_xnu_task_gone_check): a task the port keeps alive keeps its port, and launchd waited on it.
+ */
+struct OpenRec {
+    int minor;
+    int pid;
+    task_t task;
+    char name[24];
+    OpenRec *next;
+};
+static OpenRec *g_opens;                       /* under g_lock */
+struct GoneRec {
+    task_t task;                               /* referenced until the check */
+    int pid;
+    char name[24];
+};
+static GoneRec g_gone[16];                     /* under g_lock */
+static int g_gone_n;
+static thread_call_t g_gone_tc;
+extern "C" void nmx_xnu_task_gone_check(task_t task, int pid, const char *name, int secs);
+extern "C" void nmx_xnu_census_add(void *ctx, task_t task, int pid, const char *name, int kind, uint64_t amount);
+
+static void gone_fire(thread_call_param_t, thread_call_param_t)
+{
+    GoneRec now[16];
+    IOLockLock(g_lock);
+    const int n = g_gone_n;
+    memcpy(now, g_gone, sizeof(GoneRec) * (size_t)n);
+    g_gone_n = 0;
+    IOLockUnlock(g_lock);
+    for (int i = 0; i < n; i++) {
+        nmx_xnu_task_gone_check(now[i].task, now[i].pid, now[i].name, 3);
+        task_deallocate(now[i].task);
+    }
+}
+
+/* whether the opener of a closing open is gone: closing on its way out (exit closes its files on its own thread), or
+   no longer found (an IOKit client closed for a process that died) */
+static bool opener_gone(const OpenRec *r, struct proc *closer)
+{
+    if (closer != nullptr && proc_pid(closer) == r->pid)
+        return proc_exiting(closer) != 0;
+    proc_t p = proc_find(r->pid);
+    if (p == nullptr)
+        return true;
+    const bool gone = proc_exiting(p) != 0;
+    proc_rele(p);
+    return gone;
+}
 static int g_open_next = NODE_MINORS;
 
 /* ---- clone minors ------------------------------------------------------------------------------------------------- */
@@ -124,11 +178,23 @@ static int nmx_open(dev_t dev, int flags, int devtype, struct proc *p)
         return ENXIO;
     int err = nmx_cdev_open(cookie, m, flags);
     irq_check("open", 0);
+    OpenRec *rec = err ? nullptr : IONew(OpenRec, 1);
+    if (rec != nullptr) {
+        rec->minor = m;
+        rec->pid = proc_selfpid();
+        proc_selfname(rec->name, sizeof(rec->name));
+        rec->task = current_task();
+        task_reference(rec->task);
+    }
     IOLockLock(g_lock);
     if (err)
         g_open_node[m] = 0;
     else
         g_open_active[m] = 1;
+    if (rec != nullptr) {
+        rec->next = g_opens;
+        g_opens = rec;
+    }
     IOLockUnlock(g_lock);
     return err;
 }
@@ -138,12 +204,46 @@ static int nmx_close(dev_t dev, int flags, int devtype, struct proc *p)
     int m = minor(dev);
     int err = nmx_cdev_close(m, flags);
     irq_check("close", 0);
+    OpenRec *rec = nullptr;
+    bool last = false;
     IOLockLock(g_lock);
     if (m >= NODE_MINORS && m < OPEN_MINOR_MAX) {
         g_open_node[m] = 0;
         g_open_active[m] = 0;
     }
+    for (OpenRec **pp = &g_opens; *pp != nullptr; pp = &(*pp)->next)
+        if ((*pp)->minor == m) { rec = *pp; *pp = rec->next; break; }
+    if (rec != nullptr) {
+        last = true;
+        for (OpenRec *o = g_opens; o != nullptr; o = o->next)
+            if (o->task == rec->task) { last = false; break; }
+    }
     IOLockUnlock(g_lock);
+    if (rec != nullptr) {
+        bool queued = false;
+        if (last && opener_gone(rec, p)) {
+            IOLockLock(g_lock);
+            if (g_gone_n < 16) {
+                GoneRec *g = &g_gone[g_gone_n++];
+                g->task = rec->task;            /* the open's reference moves to the check */
+                g->pid = rec->pid;
+                strlcpy(g->name, rec->name, sizeof(g->name));
+                queued = true;
+            }
+            if (g_gone_tc == nullptr)
+                g_gone_tc = thread_call_allocate(gone_fire, nullptr);
+            thread_call_t tc = g_gone_tc;
+            IOLockUnlock(g_lock);
+            if (queued && tc != nullptr) {
+                uint64_t deadline;
+                clock_interval_to_deadline(3, kSecondScale, &deadline);
+                thread_call_enter_delayed(tc, deadline);
+            }
+        }
+        if (!queued)
+            task_deallocate(rec->task);
+        IODelete(rec, OpenRec, 1);
+    }
     return err;
 }
 
@@ -295,7 +395,11 @@ struct UserMap {
     task_t task;            /* fixed mappings only: the task whose range is removed at unmap */
     uint64_t addr;
     uint64_t size;
+    int pid;                /* v74: the census (fixed mappings, on g_maps under g_lock) */
+    char name[24];
+    UserMap *prev, *next;
 };
+static UserMap *g_maps;
 
 extern "C" int nmx_xnu_map_user(const uint64_t *pages, size_t npages, int cache, int writable, uint64_t fixed,
                                 uint64_t *uaddr, void **handle)
@@ -338,9 +442,18 @@ extern "C" int nmx_xnu_map_user(const uint64_t *pages, size_t npages, int cache,
     um->addr = map->getAddress();
     um->size = (uint64_t)npages * PAGE_SIZE;
     um->task = nullptr;
+    um->prev = um->next = nullptr;
     if (fixed) {
         um->task = current_task();
         task_reference(um->task);
+        um->pid = proc_selfpid();
+        proc_selfname(um->name, sizeof(um->name));
+        IOLockLock(g_lock);
+        um->next = g_maps;
+        if (g_maps != nullptr)
+            g_maps->prev = um;
+        g_maps = um;
+        IOLockUnlock(g_lock);
     }
     *uaddr = um->addr;
     *handle = um;
@@ -353,6 +466,14 @@ extern "C" void nmx_xnu_unmap_user(void *handle)
     if (um == nullptr)
         return;
     if (um->task != nullptr) {
+        IOLockLock(g_lock);
+        if (um->prev != nullptr)
+            um->prev->next = um->next;
+        else
+            g_maps = um->next;
+        if (um->next != nullptr)
+            um->next->prev = um->prev;
+        IOLockUnlock(g_lock);
         /* the range goes first, while the map still holds the pages: the process never sees freed memory */
         vm_deallocate(get_task_map(um->task), (vm_offset_t)um->addr, (vm_size_t)um->size);
         task_deallocate(um->task);
@@ -395,4 +516,17 @@ extern "C" int nmx_xnu_uc_ioctl(int open_minor, unsigned long cmd, void *data)
 extern "C" void nmx_xnu_uc_close(int open_minor)
 {
     nmx_close(makedev(g_major, open_minor), FREAD | FWRITE, 0, nullptr);
+}
+
+/* v74: the census's devfs half (nmx_mm.cpp): fixed mappings and opens, by task */
+extern "C" void nmx_xnu_devfs_census(void *ctx)
+{
+    if (g_lock == nullptr)
+        return;
+    IOLockLock(g_lock);
+    for (UserMap *um = g_maps; um != nullptr; um = um->next)
+        nmx_xnu_census_add(ctx, um->task, um->pid, um->name, 2, 0);
+    for (OpenRec *o = g_opens; o != nullptr; o = o->next)
+        nmx_xnu_census_add(ctx, o->task, o->pid, o->name, 3, 0);
+    IOLockUnlock(g_lock);
 }

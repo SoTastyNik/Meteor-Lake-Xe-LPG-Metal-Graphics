@@ -3686,6 +3686,7 @@ static bool check_buffer_count(size_t count)
 extern int nmx_guc_slpc_animation_min(struct intel_guc_slpc *slpc, u32 freq);
 extern void proc_selfname(char *buf, int size);
 extern int nmx_xnu_tunable(const char *name);
+extern void nmx_xnu_census(const char *why);
 static struct intel_guc_slpc *nmx_boost_slpc;
 static struct delayed_work nmx_boost_off;
 static atomic_t nmx_boost_ready = ATOMIC_INIT(0), nmx_boosted = ATOMIC_INIT(0);
@@ -3713,7 +3714,15 @@ static void nmx_ws_boost(struct intel_guc_slpc *slpc, bool tunables)
 		atomic_set(&nmx_boost_ready, 2);
 	}
 	if (tunables) {
+		static int census_seen = -1;
+		const int census = nmx_xnu_tunable("nmxgpu-census");
 		const int v = nmx_xnu_tunable("nmxgpu-boost-mhz");
+
+		/* v74: debug.nmxgpu_census asks which gone processes' tasks the port still holds (nmx_mm.cpp) */
+		if (census >= 0 && census != census_seen) {
+			nmx_xnu_census("sysctl");
+			census_seen = census;
+		}
 
 		if (v >= 0 && v != nmx_boost_mhz) {
 			nmx_boost_mhz = v;

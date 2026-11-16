@@ -1646,6 +1646,23 @@ static int nmxgpu_min_mhz_sysctl SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_gt_min_mhz, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
             nmxgpu_min_mhz_sysctl, "I",
             "MateBook GPU: GT frequency floor in MHz, applied by NMXGPU within ~64 submissions (0 = the driver's default)");
+// v74: writing anything asks NMXGPU which gone processes' tasks it still holds (logged; read every 64 submissions)
+static int gNmxGpuCensus = 0;
+static int nmxgpu_census_sysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gNmxGpuCensus;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    NVAccel *a = NVAccel::gAccel;
+    IOService *pci = a ? a->getProvider() : nullptr;
+    if (!pci) return ENXIO;
+    gNmxGpuCensus++;
+    pci->setProperty("nmxgpu-census", (unsigned long long)gNmxGpuCensus, 32);
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_census, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
+            nmxgpu_census_sysctl, "I",
+            "MateBook GPU: write to log which exited processes' tasks NMXGPU still references (census)");
 // v73: the GT floor while WindowServer animates (NMXGPU's animation boost, read every 64 submissions); 0 = off
 static int gNmxGpuBoostMhz = 1500;
 static int nmxgpu_boost_mhz_sysctl SYSCTL_HANDLER_ARGS
@@ -1774,6 +1791,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
     sysctl_register_oid(&sysctl__debug_nmxgpu_gt_min_mhz);
     sysctl_register_oid(&sysctl__debug_nmxgpu_boost_mhz);
+    sysctl_register_oid(&sysctl__debug_nmxgpu_census);
     sysctl_register_oid(&sysctl__debug_nmxgpu_pin_reclaim);
     sysctl_register_oid(&sysctl__debug_nmxgpu_zero_pool);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_under_9ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_9_13ms);
