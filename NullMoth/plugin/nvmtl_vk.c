@@ -2382,7 +2382,7 @@ static int ipark_put(const nvk_image *i)
 void nvmtl_vk_mesa_census(void)
 {
     typedef unsigned (*stats_fn)(uint64_t *, unsigned);
-    enum { N = 14 };
+    enum { N = 15 };
     static stats_fn fn; static int looked; static uint64_t last[N];
     if (!looked) {
         looked = 1;
@@ -2391,13 +2391,14 @@ void nvmtl_vk_mesa_census(void)
     }
     if (!fn) return;
     uint64_t now[N] = {0}, d[N];
-    if (fn(now, N) < N) return;
+    const unsigned have = fn(now, N);   // a v71 Mesa has 14: no private BOs left out
+    if (have < N - 1) return;
     for (unsigned i = 0; i < N; i++) { d[i] = now[i] - last[i]; last[i] = now[i]; }
     const double e = d[0] ? (double)d[0] : 1.0;
     syslog(LOG_ERR, "NullMoth: Mesa census: %llu execbuffers, %.0f objects each; memory objects each: %.1f new, %.1f left out, "
-           "%.1f imported, %.1f exportable, %.1f other; image private %.1f, released %.2f | shaders %llu, %llu with table push, "
+           "%.1f imported, %.1f exportable, %.1f other; image private %.1f, left out %.1f, released %.2f | shaders %llu, %llu with table push, "
            "%llu with SSBO push (in all %llu, %llu, %llu); table pointers read %llu, unmapped %llu",
-           (unsigned long long)d[0], d[1] / e, d[2] / e, d[3] / e, d[4] / e, d[5] / e, d[6] / e, d[7] / e, d[8] / e,
+           (unsigned long long)d[0], d[1] / e, d[2] / e, d[3] / e, d[4] / e, d[5] / e, d[6] / e, d[7] / e, d[14] / e, d[8] / e,
            (unsigned long long)d[9], (unsigned long long)d[10], (unsigned long long)d[11],
            (unsigned long long)now[9], (unsigned long long)now[10], (unsigned long long)now[11],
            (unsigned long long)d[12], (unsigned long long)d[13]);

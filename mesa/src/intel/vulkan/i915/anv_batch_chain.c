@@ -522,10 +522,24 @@ setup_execbuf_for_cmd_buffers(struct anv_execbuf *execbuf,
                        &device->image_private_objects, link) {
       struct anv_bo *private_bo =
          image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].address.bo;
+#ifdef __APPLE__
+      /* v72: an image's private BO (its aux surfaces) stays bound like a memory object; its release is deferred the
+       * same way (anv_device_release_bo, of the slab parent when it is a slab entry)
+       */
+      struct anv_bo *private_real = anv_bo_get_real(private_bo);
+      const bool private_trim = anv_latitude_bo_trimmable(device, private_real);
+
+      if (private_trim && private_real->latitude_resident) {
+         ANV_LAT_ADD(ANV_LAT_IMAGE_PRIVATE_TRIMMED, 1);
+         continue;
+      }
+#endif
       result = anv_execbuf_add_bo(device, execbuf, private_bo, NULL, 0);
       if (result != VK_SUCCESS)
          return result;
 #ifdef __APPLE__
+      if (private_trim)
+         private_real->latitude_resident = true;
       ANV_LAT_ADD(ANV_LAT_IMAGE_PRIVATE, 1);
 #endif
    }

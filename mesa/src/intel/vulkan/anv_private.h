@@ -3195,6 +3195,7 @@ enum anv_latitude_stat {
    ANV_LAT_SHADERS_SSBO,   /* ... with a pushed read-only SSBO range */
    ANV_LAT_PTR_READS,      /* address table pointers read when push constants were emitted */
    ANV_LAT_PTR_UNMAPPED,   /* ... found unmapped (the workaround address was pushed instead) */
+   ANV_LAT_IMAGE_PRIVATE_TRIMMED, /* v72: images' private BOs left out */
    ANV_LAT_COUNT
 };
 extern uint64_t anv_latitude_stat[ANV_LAT_COUNT];

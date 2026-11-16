@@ -2322,12 +2322,14 @@ anv_latitude_zombies_init(struct anv_device *device)
    const char *e = getenv("ANV_LATITUDE_EXEC_TRIM");
 
    /* With one render queue every execbuf runs on one context, in order (no companion RCS context beside it): a
-    * zombie that rides in a later one outlives the earlier work that may use it. Softpin only: with relocations
-    * every BO goes in anyway.
+    * zombie that rides in a later one outlives the earlier work that may use it.
+    *
+    * v72: no uses_relocs test. On i915 it is always set (anv_physical_device.c) and only means the batches keep
+    * reloc lists to know which BOs they reference; every exec object is pinned at its address (EXEC_OBJECT_PINNED,
+    * relocation_count 0). v69..v71 tested !uses_relocs, so exec trim never came on.
     */
    device->latitude_exec_trim = e && e[0] == '1' &&
                                 device->info->kmd_type == INTEL_KMD_TYPE_I915 &&
-                                !device->physical->uses_relocs &&
                                 device->queue_count == 1 &&
                                 device->queues[0].family->engine_class == INTEL_ENGINE_CLASS_RENDER;
    simple_mtx_init(&device->latitude_zombie_mutex, mtx_plain);

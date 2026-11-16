@@ -99,7 +99,13 @@ static NSString *const kSrc = @"#include <metal_stdlib>\nusing namespace metal;\
     "                         constant float &lvl [[buffer(1)]], uint i [[thread_position_in_grid]]) {\n"
     "    if (i == 0) out[0] = t.sample(s, float2(0.5, 0.5), level(lvl)); }\n"
     "kernel void write_srgb(texture2d<float, access::write> t [[texture(0)]], uint2 p [[thread_position_in_grid]]) {\n"
-    "    if (p.x >= t.get_width() || p.y >= t.get_height()) return; t.write(float4(0.5, 0.25, 1.0, 1.0), p); }\n";
+    "    if (p.x >= t.get_width() || p.y >= t.get_height()) return; t.write(float4(0.5, 0.25, 1.0, 1.0), p); }\n"
+    // v72: pixel coordinates (OpenGL's rectangle textures through Metal), with the app's sampler and with the shader's own
+    "fragment float4 px_app(VOut in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) { return t.sample(s, in.pos.xy); }\n"
+    "fragment float4 px_own(VOut in [[stage_in]], texture2d<float> t [[texture(0)]]) {\n"
+    "    constexpr sampler ps(coord::pixel, filter::nearest, address::clamp_to_edge); return t.sample(ps, in.pos.xy); }\n"
+    "kernel void tex_size(texture2d<float> t [[texture(0)]], device uint *out [[buffer(0)]], uint i [[thread_position_in_grid]]) {\n"
+    "    if (i == 0) { out[0] = t.get_width(); out[1] = t.get_height(); } }\n";
 
 // ---- 1. compute chains: serial encoder, and a concurrent encoder with memory barriers ------------------------------------
 static void test_chain(const char *name, BOOL concurrent, BOOL split)
@@ -466,55 +472,115 @@ static GLuint gl_fbo(int W, int H, GLuint *rb)
     glViewport(0, 0, W, H);
     return fb;
 }
-// The surface as a rectangle texture (CGLTexImageIOSurface2D, as CoreVideo's texture cache makes them), texel (0, 0) drawn
-// at the framebuffer's (0, 0). OpenGL takes the surface's first row as t = 0 (CoreVideo calls such textures flipped), so
-// the bottom row read back should be red.
-static int gl_surface_texture(BOOL accelerated, IOSurfaceRef s, int W, int H, char *bottom, char *top, char *renderer, size_t rn)
+// v72: a column of the framebuffer, bottom to top, as letters: R red, B blue, G green (the clear colour), K black,
+// W white, ? anything else (the first one's value goes into odd)
+static char px_class(const uint8_t *p)
+{
+    if (p[0] > 160 && p[1] < 90 && p[2] < 90) return 'R';
+    if (p[2] > 160 && p[0] < 90 && p[1] < 90) return 'B';
+    if (p[1] > 160 && p[0] < 90 && p[2] < 90) return 'G';
+    if (p[0] < 40 && p[1] < 40 && p[2] < 40) return 'K';
+    if (p[0] > 215 && p[1] > 215 && p[2] > 215) return 'W';
+    return '?';
+}
+static void gl_column(int W, int H, char prof[9], char *odd, size_t on)
+{
+    uint8_t *fbuf = malloc((size_t)W * H * 4);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, fbuf);   // rows bottom to top
+    if (odd && on) odd[0] = 0;
+    for (int k = 0; k < 8; k++) {
+        const uint8_t *q = fbuf + ((size_t)((2 * k + 1) * H / 16) * W + W / 2) * 4;
+        prof[k] = px_class(q);
+        if (prof[k] == '?' && odd && on && !odd[0]) snprintf(odd, on, " (first odd pixel %u,%u,%u,%u)", q[0], q[1], q[2], q[3]);
+    }
+    prof[8] = 0;
+    free(fbuf);
+}
+// How a picture with red first rows (the top of the picture) reaches an OpenGL framebuffer, texel (0, 0) drawn at the
+// framebuffer's (0, 0). OpenGL takes the first row as t = 0 (CoreVideo calls such textures flipped), so read bottom to top
+// the column should be RRRRBBBB. The ways:
+//   0 the IOSurface as a rectangle texture (CGLTexImageIOSurface2D, as CoreVideo's texture cache makes them), fixed function
+//   1 the same bytes uploaded into a rectangle texture (glTexImage2D), fixed function
+//   2 the same bytes in a 2D texture, normalized coordinates, fixed function
+//   3 the IOSurface rectangle texture drawn by a GLSL shader (texture2DRect, as Core Image and Quartz Composer draw)
+static const char *const kGLWays[4] = { "IOSurface rectangle", "rectangle from memory", "2D from memory", "IOSurface rectangle, GLSL" };
+static int gl_texture_way(BOOL accelerated, int way, IOSurfaceRef s, int W, int H, char prof[9], int *texH, char *odd, size_t on, char *renderer, size_t rn)
 {
     CGLContextObj ctx = gl_context(accelerated);
     if (!ctx) return -1;
     CGLSetCurrentContext(ctx);
     snprintf(renderer, rn, "%s", (const char *)glGetString(GL_RENDERER));
-    GLuint rb = 0, fb = gl_fbo(W, H, &rb), tex = 0;
+    GLuint rb = 0, fb = gl_fbo(W, H, &rb), tex = 0, prog = 0;
     int r = -2;
+    const GLenum target = way == 2 ? GL_TEXTURE_2D : GL_TEXTURE_RECTANGLE_ARB;
     if (fb) {
-        glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_RECTANGLE_ARB, tex);
-        if (CGLTexImageIOSurface2D(ctx, GL_TEXTURE_RECTANGLE_ARB, GL_RGBA, W, H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, s, 0) == kCGLNoError) {
+        glGenTextures(1, &tex); glBindTexture(target, tex);
+        BOOL ok;
+        if (way == 0 || way == 3)
+            ok = CGLTexImageIOSurface2D(ctx, target, GL_RGBA, W, H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, s, 0) == kCGLNoError;
+        else {
+            IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(IOSurfaceGetBytesPerRow(s) / 4));
+            glTexImage2D(target, 0, GL_RGBA8, W, H, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, IOSurfaceGetBaseAddress(s));
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+            glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            ok = glGetError() == GL_NO_ERROR;
+        }
+        GLint th = -1; glGetTexLevelParameteriv(target, 0, GL_TEXTURE_HEIGHT, &th); *texH = th;
+        if (ok && way == 3) {
+            const char *vs = "void main() { gl_TexCoord[0] = gl_MultiTexCoord0; gl_Position = ftransform(); }\n";
+            const char *fs = "#extension GL_ARB_texture_rectangle : require\nuniform sampler2DRect t;\n"
+                             "void main() { gl_FragColor = texture2DRect(t, gl_TexCoord[0].st); }\n";
+            GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
+            glShaderSource(v, 1, &vs, NULL); glCompileShader(v); glShaderSource(f, 1, &fs, NULL); glCompileShader(f);
+            prog = glCreateProgram(); glAttachShader(prog, v); glAttachShader(prog, f); glLinkProgram(prog);
+            GLint linked = 0; glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+            glDeleteShader(v); glDeleteShader(f);
+            if (!linked) { ok = NO; r = -4; }
+            else { glUseProgram(prog); glUniform1i(glGetUniformLocation(prog, "t"), 0); }
+        }
+        if (ok) {
+            const float tw = way == 2 ? 1.0f : (float)W, tt = way == 2 ? 1.0f : (float)H;
             glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
             glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, W, 0, H, -1, 1);
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-            glEnable(GL_TEXTURE_RECTANGLE_ARB); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+            if (way != 3) { glEnable(target); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE); }
             glBegin(GL_QUADS);
-            glTexCoord2f(0, 0); glVertex2f(0, 0); glTexCoord2f(W, 0); glVertex2f(W, 0);
-            glTexCoord2f(W, H); glVertex2f(W, H); glTexCoord2f(0, H); glVertex2f(0, H);
+            glTexCoord2f(0, 0); glVertex2f(0, 0); glTexCoord2f(tw, 0); glVertex2f(W, 0);
+            glTexCoord2f(tw, tt); glVertex2f(W, H); glTexCoord2f(0, tt); glVertex2f(0, H);
             glEnd();
-            glDisable(GL_TEXTURE_RECTANGLE_ARB);
+            if (way != 3) glDisable(target); else glUseProgram(0);
             glFinish();
-            uint8_t px[4];
-            glReadPixels(W / 2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); *bottom = rb_of(px);
-            glReadPixels(W / 2, H - 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); *top = rb_of(px);
+            gl_column(W, H, prof, odd, on);
             r = 0;
-        } else r = -3;
+        } else if (r == -2) r = -3;
+        if (prog) glDeleteProgram(prog);
         glDeleteTextures(1, &tex); glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, &rb);
     }
     CGLSetCurrentContext(NULL); CGLDestroyContext(ctx);
     return r;
 }
-static void test_gl_surface_texture(void)
+static void test_gl_texture_ways(void)
 {
-    const char *name = "opengl-iosurface-texture";
-    if (!wanted(name)) return;
+    static const char *const names[4] = { "opengl-iosurface-texture", "opengl-rect-texture", "opengl-2d-texture", "opengl-iosurface-glsl" };
     const int W = 128, H = 96;
-    IOSurfaceRef s = surface_red_top(W, H);
-    if (!s) { report(name, FAIL, @"no IOSurface"); return; }
-    char ab = 0, at = 0, sb = 0, st = 0, ra[128] = "", rs[128] = "";
-    const int ha = gl_surface_texture(YES, s, W, H, &ab, &at, ra, sizeof ra), hs = gl_surface_texture(NO, s, W, H, &sb, &st, rs, sizeof rs);
-    if (ha) { report(name, FAIL, [NSString stringWithFormat:@"accelerated OpenGL could not draw the surface (%d, %s)", ha, ra]); CFRelease(s); return; }
-    const BOOL ok = ab == 'R' && at == 'B';
-    NSString *soft = hs ? [NSString stringWithFormat:@"could not draw it (%d)", hs] : [NSString stringWithFormat:@"bottom %c top %c", sb, st];
-    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"framebuffer bottom %c top %c (expected R B: the surface's first row at t = 0) on %s; "
-                                    "software OpenGL %@", ab, at, ra, soft]);
-    CFRelease(s);
+    for (int way = 0; way < 4; way++) {
+        const char *name = names[way];
+        if (!wanted(name)) continue;
+        IOSurfaceRef s = surface_red_top(W, H);
+        if (!s) { report(name, FAIL, @"no IOSurface"); continue; }
+        char pa[9] = "", ps[9] = "", oa[64] = "", os[64] = "", ra[128] = "", rs[128] = "";
+        int ha_h = -1, hs_h = -1;
+        const int ha = gl_texture_way(YES, way, s, W, H, pa, &ha_h, oa, sizeof oa, ra, sizeof ra);
+        const int hs = gl_texture_way(NO, way, s, W, H, ps, &hs_h, os, sizeof os, rs, sizeof rs);
+        CFRelease(s);
+        if (ha) { report(name, FAIL, [NSString stringWithFormat:@"%s: accelerated OpenGL could not draw it (%d, %s)", kGLWays[way], ha, ra]); continue; }
+        const BOOL ok = !strcmp(pa, "RRRRBBBB");
+        NSString *soft = hs ? [NSString stringWithFormat:@"could not draw it (%d)", hs] : [NSString stringWithFormat:@"%s%s", ps, os];
+        report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"%s: column bottom to top %s%s (want RRRRBBBB), texture height %d, on %s; "
+                                        "software OpenGL %@", kGLWays[way], pa, oa, ha_h, ra, soft]);
+    }
 }
 // Core Image drawing into an IOSurface on the GPU (Metal) and on the CPU: the same rows should come out on top
 static void test_coreimage_surface(void)
@@ -568,7 +634,7 @@ static void test_coreimage_opengl(void)
     CGLSetCurrentContext(ctx);
     char renderer[128]; snprintf(renderer, sizeof renderer, "%s", (const char *)glGetString(GL_RENDERER));
     GLuint rb = 0, fb = gl_fbo(W, H, &rb);
-    char bottom = '-', top = '-';
+    char bottom = '-', top = '-', prof[9] = "-", odd[64] = "";
     if (fb) {
         glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
         CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -579,13 +645,107 @@ static void test_coreimage_opengl(void)
         uint8_t px[4];
         glReadPixels(W / 2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); bottom = rb_of(px);
         glReadPixels(W / 2, H - 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px); top = rb_of(px);
+        gl_column(W, H, prof, odd, sizeof odd);
         CGColorSpaceRelease(cs);
         glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, &rb);
     }
     CGLSetCurrentContext(NULL); CGLDestroyContext(ctx); CFRelease(s);
     const BOOL ok = bottom == 'B' && top == 'R';
-    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"framebuffer bottom %c top %c (expected B R: upright) on %s%s", bottom, top, renderer,
-                                    bottom == 'R' && top == 'B' ? " - upside down, as Photo Booth's preview" : ""]);
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"framebuffer bottom %c top %c (expected B R: upright), column bottom to top %s%s (upright BBBBRRRR) on %s%s",
+                                    bottom, top, prof, odd, renderer, bottom == 'R' && top == 'B' ? " - upside down, as Photo Booth's preview" : ""]);
+}
+
+// ---- 8c. pixel-coordinate samplers, as OpenGL's rectangle textures reach Metal (v72) ------------------------------------
+// A 32x32 picture whose texel (x, y) holds R = 8y, G = 8x, drawn into a 32x32 target where each fragment samples at its
+// own pixel centre: every pixel should come back as its texel. Ordinary and IOSurface textures, nearest and linear, with
+// the app's sampler (normalizedCoordinates NO) and with a constexpr coord::pixel one; and what get_width/get_height say.
+static NSString *px_case(id<MTLTexture> src, id<MTLRenderPipelineState> rp, id<MTLSamplerState> smp, id<MTLComputePipelineState> rd)
+{
+    const int W = 32, H = 32;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; td.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> t = [D newTextureWithDescriptor:td];
+    id<MTLBuffer> out = [D newBufferWithLength:W * H * 4 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [Q commandBuffer];
+    MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
+    rpd.colorAttachments[0].texture = t; rpd.colorAttachments[0].loadAction = MTLLoadActionClear; rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    rpd.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 1, 1);
+    id<MTLRenderCommandEncoder> re = [cb renderCommandEncoderWithDescriptor:rpd];
+    [re setRenderPipelineState:rp]; [re setFragmentTexture:src atIndex:0];
+    if (smp) [re setFragmentSamplerState:smp atIndex:0];
+    [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [re endEncoding];
+    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+    [ce setComputePipelineState:rd]; [ce setTexture:t atIndex:0]; [ce setBuffer:out offset:0 atIndex:0];
+    [ce dispatchThreads:MTLSizeMake(W, H, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)]; [ce endEncoding];
+    [cb commit]; [cb waitUntilCompleted];
+    const uint8_t *px = out.contents; int bad = 0;
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const uint8_t *q = px + (y * W + x) * 4;
+        if (abs(q[0] - 8 * y) > 2 || abs(q[1] - 8 * x) > 2) bad++;
+    }
+    if (!bad) return nil;
+    NSMutableString *m = [NSMutableString stringWithFormat:@"%d of %d wrong, rows read at x=16 for y=0,4..28:", bad, W * H];
+    for (int y = 0; y < H; y += 4) { const uint8_t *q = px + (y * W + 16) * 4; [m appendFormat:@" %.1f", q[0] / 8.0]; }
+    const uint8_t *q = px + (16 * W + 16) * 4;
+    [m appendFormat:@", column at (16,16) %.1f, pixel %u,%u,%u", q[1] / 8.0, q[0], q[1], q[2]];
+    return m;
+}
+static void test_pixel_samplers(void)
+{
+    const char *name = "metal-pixel-sampler";
+    if (!wanted(name)) return;
+    const int W = 32, H = 32;
+    id<MTLRenderPipelineState> app = rps(@"fs_tri", @"px_app", MTLPixelFormatRGBA8Unorm), own = rps(@"fs_tri", @"px_own", MTLPixelFormatRGBA8Unorm);
+    id<MTLComputePipelineState> rd = cps(@"tex_to_buf"), sz = cps(@"tex_size");
+    if (!app || !own || !rd || !sz) { report(name, FAIL, @"pipeline"); return; }
+    IOSurfaceRef s = IOSurfaceCreate((__bridge CFDictionaryRef)@{ (id)kIOSurfaceWidth: @(W), (id)kIOSurfaceHeight: @(H), (id)kIOSurfaceBytesPerElement: @4,
+                                                                  (id)kIOSurfacePixelFormat: @((uint32_t)'BGRA') });
+    if (!s) { report(name, FAIL, @"no IOSurface"); return; }
+    IOSurfaceLock(s, 0, NULL);
+    for (int y = 0; y < H; y++) { uint8_t *r = (uint8_t *)IOSurfaceGetBaseAddress(s) + y * IOSurfaceGetBytesPerRow(s);
+        for (int x = 0; x < W; x++) { r[x * 4] = 0x40; r[x * 4 + 1] = (uint8_t)(8 * x); r[x * 4 + 2] = (uint8_t)(8 * y); r[x * 4 + 3] = 255; } }
+    IOSurfaceUnlock(s, 0, NULL);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead; td.storageMode = MTLStorageModeShared;
+    id<MTLTexture> st = [D newTextureWithDescriptor:td iosurface:s plane:0];
+    td.storageMode = MTLStorageModeManaged;
+    id<MTLTexture> ot = [D newTextureWithDescriptor:td];
+    IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
+    [ot replaceRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0 withBytes:IOSurfaceGetBaseAddress(s) bytesPerRow:IOSurfaceGetBytesPerRow(s)];
+    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+    if (!st || !ot) { report(name, FAIL, @"no texture"); CFRelease(s); return; }
+    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+    sd.normalizedCoordinates = NO; sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterNearest;
+    id<MTLSamplerState> nearest = [D newSamplerStateWithDescriptor:sd];
+    sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+    id<MTLSamplerState> linear = [D newSamplerStateWithDescriptor:sd];
+    NSMutableString *bad = [NSMutableString string];
+    if (!nearest || !linear) [bad appendString:@" no pixel sampler state;"];
+    const char *what[6] = { "texture, app sampler nearest", "texture, app sampler linear", "IOSurface, app sampler nearest",
+                            "IOSurface, app sampler linear", "texture, coord::pixel", "IOSurface, coord::pixel" };
+    id<MTLTexture> tex[6] = { ot, ot, st, st, ot, st };
+    id<MTLSamplerState> smp[6] = { nearest, linear, nearest, linear, nil, nil };
+    for (int i = 0; i < 6; i++) {
+        if (i < 4 && !smp[i]) continue;
+        NSString *m = px_case(tex[i], i < 4 ? app : own, smp[i], rd);
+        if (m) [bad appendFormat:@" %s: %@;", what[i], m];
+    }
+    id<MTLBuffer> out = [D newBufferWithLength:16 options:MTLResourceStorageModeShared];
+    uint32_t dims[2][2];
+    id<MTLTexture> both[2] = { ot, st };
+    for (int k = 0; k < 2; k++) {
+        memset(out.contents, 0xff, 16);
+        id<MTLCommandBuffer> cb = [Q commandBuffer]; id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+        [e setComputePipelineState:sz]; [e setTexture:both[k] atIndex:0]; [e setBuffer:out offset:0 atIndex:0];
+        [e dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)]; [e endEncoding];
+        [cb commit]; [cb waitUntilCompleted];
+        memcpy(dims[k], out.contents, 8);
+        if (dims[k][0] != (uint32_t)W || dims[k][1] != (uint32_t)H) [bad appendFormat:@" %s reports %ux%u;", k ? "IOSurface texture" : "texture", dims[k][0], dims[k][1]];
+    }
+    CFRelease(s);
+    report(name, bad.length ? FAIL : PASS, bad.length ? bad : [NSString stringWithFormat:@"6 ways each texel at its pixel; sizes %ux%u and %ux%u",
+                                                               dims[0][0], dims[0][1], dims[1][0], dims[1][1]]);
 }
 
 // ---- 9. VideoToolbox: encode frames, decode them, compare --------------------------------------------------------------
@@ -810,7 +970,8 @@ int main(int argc, char **argv)
         test_srgb_write();
         test_coreimage();
         test_opengl();
-        test_gl_surface_texture();
+        test_gl_texture_ways();
+        test_pixel_samplers();
         test_coreimage_surface();
         test_coreimage_opengl();
         test_video("video-h264-roundtrip", kCMVideoCodecType_H264);
