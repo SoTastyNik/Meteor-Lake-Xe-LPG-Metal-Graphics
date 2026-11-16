@@ -524,9 +524,9 @@ extern "C" void nmx_xnu_census(const char *why)
         if (census_alive(r->pid, r->name))
             continue;
         gone++;
-        IOLog("NullMoth GPU: census (%s): pid %d (%s) is gone, its task still held by %u mm record(s), %u wiring(s) "
-              "(%llu pages), %u fixed mapping(s), %u open(s)\n", why, r->pid, r->name, r->mm, r->wires,
-              (unsigned long long)r->pages, r->maps, r->opens);
+        IOLog("NullMoth GPU: census (%s): pid %d (%s) is gone; its task held by %u mm record(s), %u fixed mapping(s), "
+              "%u open(s); %u wiring(s) of its memory left (%llu pages)\n", why, r->pid, r->name, r->mm, r->maps,
+              r->opens, r->wires, (unsigned long long)r->pages);
     }
     IOLog("NullMoth GPU: census (%s): %d process(es) referenced, %d of them gone\n", why, c->n, gone);
     IODelete(c, Census, 1);
@@ -545,8 +545,8 @@ extern "C" void nmx_xnu_task_gone_check(task_t task, int pid, const char *name, 
     if (c->n > 0) {
         CensusRow *r = &c->row[0];
         IOLog("NullMoth GPU: pid %d (%s) closed its last DRM open %d s ago and is gone: %d mm record(s) let its task go; "
-              "still held by %u wiring(s) (%llu pages), %u fixed mapping(s), %u open(s)\n", pid, name, secs, dropped,
-              r->wires, (unsigned long long)r->pages, r->maps, r->opens);
+              "task still held by %u fixed mapping(s), %u open(s); %u wiring(s) of its memory left (%llu pages)\n", pid,
+              name, secs, dropped, r->maps, r->opens, r->wires, (unsigned long long)r->pages);
     } else if (dropped > 0) {
         static SInt32 said;
         if (OSIncrementAtomic(&said) < 8)
