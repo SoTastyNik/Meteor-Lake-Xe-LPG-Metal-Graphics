@@ -3674,6 +3674,70 @@ static bool check_buffer_count(size_t count)
 	return !(count < 1 || count > INT_MAX || count > SIZE_MAX / sz - 1);
 }
 
+#ifdef NMXKPI
+/*
+ * v73: GuC SLPC hardly leaves the floor it is given (top 800 MHz with the 800 MHz floor, top 1200 with a 1200 one), so
+ * a Launchpad animation ran at ~600 MHz and its frames took 4-8 ms of GPU time each: half missed their refresh. i915
+ * raises the clock for a flip that waits on the GPU; this port's flips wait in NMXAccel, so instead the floor goes up
+ * while WindowServer submits at animation pace (two gaps under 10.5 ms in a row, as at 120 Hz; at rest it submits at
+ * 30-60 per second) and comes back 300 ms after the last such gap. debug.nmxgpu_boost_mhz (NMXAccel, read every 64
+ * submissions) sets the boosted floor; 0 turns it off.
+ */
+extern int nmx_guc_slpc_animation_min(struct intel_guc_slpc *slpc, u32 freq);
+extern void proc_selfname(char *buf, int size);
+extern int nmx_xnu_tunable(const char *name);
+static struct intel_guc_slpc *nmx_boost_slpc;
+static struct delayed_work nmx_boost_off;
+static atomic_t nmx_boost_ready = ATOMIC_INIT(0), nmx_boosted = ATOMIC_INIT(0);
+static int nmx_boost_mhz = 1500;
+static u64 nmx_boosts;
+
+static void nmx_boost_off_fn(struct work_struct *work)
+{
+	if (atomic_cmpxchg(&nmx_boosted, 1, 0) == 1)
+		nmx_guc_slpc_animation_min(nmx_boost_slpc, 0);
+}
+
+static void nmx_ws_boost(struct intel_guc_slpc *slpc, bool tunables)
+{
+	static u64 last_ns;
+	static unsigned int streak;
+	char name[32];
+	u64 now, gap;
+
+	if (atomic_read(&nmx_boost_ready) != 2) {
+		if (atomic_cmpxchg(&nmx_boost_ready, 0, 1) != 0)
+			return;
+		nmx_boost_slpc = slpc;
+		INIT_DELAYED_WORK(&nmx_boost_off, nmx_boost_off_fn);
+		atomic_set(&nmx_boost_ready, 2);
+	}
+	if (tunables) {
+		const int v = nmx_xnu_tunable("nmxgpu-boost-mhz");
+
+		if (v >= 0 && v != nmx_boost_mhz) {
+			nmx_boost_mhz = v;
+			if (!v)
+				mod_delayed_work(system_wq, &nmx_boost_off, 0);
+		}
+	}
+	proc_selfname(name, sizeof(name));
+	if (strcmp(name, "WindowServer"))
+		return;
+	now = ktime_get_ns();
+	gap = now - last_ns;
+	last_ns = now;
+	streak = gap < 10500000ull ? streak + 1 : 0;
+	if (streak < 2 || nmx_boost_mhz <= 0)
+		return;
+	if (atomic_cmpxchg(&nmx_boosted, 0, 1) == 0) {
+		nmx_guc_slpc_animation_min(slpc, nmx_boost_mhz);
+		nmx_boosts++;
+	}
+	mod_delayed_work(system_wq, &nmx_boost_off, msecs_to_jiffies(300));
+}
+#endif
+
 int
 i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 			   struct drm_file *file)
@@ -3729,6 +3793,8 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 			 * waited 3-40 ms each for it and queued 50-250 ms deep: GuC SLPC did not raise the clock. Let
 			 * debug.nmxgpu_gt_min_mhz (NMXAccel) set the floor at runtime to find out; 0 restores it.
 			 */
+			if (intel_uc_uses_guc_slpc(&to_gt(to_i915(dev))->uc))
+				nmx_ws_boost(slpc, (nmx_calls & 63) == 0);
 			if ((nmx_calls & 63) == 0 && intel_uc_uses_guc_slpc(&to_gt(to_i915(dev))->uc)) {
 				const int want = nmx_xnu_tunable("nmxgpu-gt-min-mhz");
 
@@ -3756,10 +3822,11 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 				}
 			}
 			if ((nmx_calls & 1023) == 0) {
-				drm_info(dev, "Latitude MTL: execbuffer GT MHz: awake in %u of 64 samples, avg %u top %u, punit request %u, limits %u-%u\n",
+				drm_info(dev, "Latitude MTL: execbuffer GT MHz: awake in %u of 64 samples, avg %u top %u, punit request %u, limits %u-%u; animation boosts %llu to %d MHz\n",
 					 nmx_awake, nmx_awake ? nmx_sum / nmx_awake : 0, nmx_top,
 					 intel_rps_read_punit_req_frequency(rps),
-					 intel_rps_get_min_frequency(rps), intel_rps_get_max_frequency(rps));
+					 intel_rps_get_min_frequency(rps), intel_rps_get_max_frequency(rps),
+					 (unsigned long long)nmx_boosts, nmx_boost_mhz);
 				nmx_awake = nmx_sum = nmx_top = 0;
 			}
 		}

@@ -758,6 +758,26 @@ done:
 	return ret;
 }
 
+#ifdef NMXKPI
+/*
+ * v73: WindowServer's animation boost (i915_gem_execbuffer.c). A floor of freq MHz without touching the softlimit, as
+ * a waitboost does; 0 puts back the softlimit, or i915's own waitboost while one is on. Non-blocking towards GuC.
+ */
+int nmx_guc_slpc_animation_min(struct intel_guc_slpc *slpc, u32 freq)
+{
+	int err;
+
+	mutex_lock(&slpc->lock);
+	if (!freq)
+		freq = atomic_read(&slpc->num_waiters) ? slpc->boost_freq : slpc->min_freq_softlimit;
+	else
+		freq = clamp(freq, slpc->min_freq_softlimit, slpc->rp0_freq);
+	err = slpc_force_min_freq(slpc, freq);
+	mutex_unlock(&slpc->lock);
+	return err;
+}
+#endif
+
 void intel_guc_slpc_dec_waiters(struct intel_guc_slpc *slpc)
 {
 	/*

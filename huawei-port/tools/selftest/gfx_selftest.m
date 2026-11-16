@@ -504,6 +504,42 @@ static void gl_column(int W, int H, char prof[9], char *odd, size_t on)
 //   2 the same bytes in a 2D texture, normalized coordinates, fixed function
 //   3 the IOSurface rectangle texture drawn by a GLSL shader (texture2DRect, as Core Image and Quartz Composer draw)
 static const char *const kGLWays[4] = { "IOSurface rectangle", "rectangle from memory", "2D from memory", "IOSurface rectangle, GLSL" };
+// v73: the texel a framebuffer point shows, out of a coordinate picture (R = 2x, G = 2y, B = 128; surface_coords):
+// "fb(x,y)>(tx,ty)" for a 3x3 grid, x/y in OpenGL's framebuffer (from the bottom), tx/ty in the picture's memory
+// (from its first row); "?" where the pixel is not one of the picture's
+static void gl_grid(int W, int H, char *grid, size_t gn, int pts[9][2])
+{
+    uint8_t *fbuf = malloc((size_t)W * H * 4);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, fbuf);
+    size_t used = 0; grid[0] = 0;
+    const int xs[3] = { W / 8, W / 2, W - W / 8 - 1 }, ys[3] = { H / 8, H / 2, H - H / 8 - 1 };
+    for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+        const uint8_t *q = fbuf + ((size_t)ys[j] * W + xs[i]) * 4;
+        int n;
+        if (pts) { const int k = j * 3 + i, odd = abs(q[2] - 128) > 6; pts[k][0] = odd ? -1 : (q[0] + 1) / 2; pts[k][1] = odd ? -1 : (q[1] + 1) / 2; }
+        if (abs(q[2] - 128) > 6) n = snprintf(grid + used, gn - used, " (%d,%d)>?%u,%u,%u", xs[i], ys[j], q[0], q[1], q[2]);
+        else n = snprintf(grid + used, gn - used, " (%d,%d)>(%d,%d)", xs[i], ys[j], (q[0] + 1) / 2, (q[1] + 1) / 2);
+        if (n < 0 || (size_t)n >= gn - used) break;
+        used += (size_t)n;
+    }
+    free(fbuf);
+}
+static IOSurfaceRef surface_coords(int W, int H)
+{
+    NSDictionary *pr = @{ (id)kIOSurfaceWidth: @(W), (id)kIOSurfaceHeight: @(H), (id)kIOSurfaceBytesPerElement: @4,
+                          (id)kIOSurfacePixelFormat: @((unsigned)'BGRA') };
+    IOSurfaceRef s = IOSurfaceCreate((__bridge CFDictionaryRef)pr);
+    if (!s) return NULL;
+    IOSurfaceLock(s, 0, NULL);
+    uint8_t *base = IOSurfaceGetBaseAddress(s); const size_t row = IOSurfaceGetBytesPerRow(s);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        uint8_t *q = base + y * row + x * 4;   // BGRA
+        q[0] = 128; q[1] = (uint8_t)(2 * y); q[2] = (uint8_t)(2 * x); q[3] = 255;
+    }
+    IOSurfaceUnlock(s, 0, NULL);
+    return s;
+}
+static char *g_gl_grid; static size_t g_gl_grid_n;   // set: gl_texture_way fills it (nearest filtering)
 static int gl_texture_way(BOOL accelerated, int way, IOSurfaceRef s, int W, int H, char prof[9], int *texH, char *odd, size_t on, char *renderer, size_t rn)
 {
     CGLContextObj ctx = gl_context(accelerated);
@@ -516,8 +552,10 @@ static int gl_texture_way(BOOL accelerated, int way, IOSurfaceRef s, int W, int 
     if (fb) {
         glGenTextures(1, &tex); glBindTexture(target, tex);
         BOOL ok;
-        if (way == 0 || way == 3)
+        if (way == 0 || way == 3) {
             ok = CGLTexImageIOSurface2D(ctx, target, GL_RGBA, W, H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, s, 0) == kCGLNoError;
+            if (g_gl_grid) { glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST); }
+        }
         else {
             IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(IOSurfaceGetBytesPerRow(s) / 4));
@@ -553,6 +591,7 @@ static int gl_texture_way(BOOL accelerated, int way, IOSurfaceRef s, int W, int 
             if (way != 3) glDisable(target); else glUseProgram(0);
             glFinish();
             gl_column(W, H, prof, odd, on);
+            if (g_gl_grid) gl_grid(W, H, g_gl_grid, g_gl_grid_n, NULL);
             r = 0;
         } else if (r == -2) r = -3;
         if (prog) glDeleteProgram(prog);
@@ -582,6 +621,30 @@ static void test_gl_texture_ways(void)
                                         "software OpenGL %@", kGLWays[way], pa, oa, ha_h, ra, soft]);
     }
 }
+// v73: which texel each framebuffer point shows, the four ways: the accelerated grid next to Apple's software OpenGL
+static void test_gl_coord_map(void)
+{
+    static const char *const names[4] = { "opengl-map-iosurface-rect", "opengl-map-rect", "opengl-map-2d", "opengl-map-iosurface-glsl" };
+    const int W = 128, H = 96;
+    for (int way = 0; way < 4; way++) {
+        const char *name = names[way];
+        if (!wanted(name)) continue;
+        IOSurfaceRef s = surface_coords(W, H);
+        if (!s) { report(name, FAIL, @"no IOSurface"); continue; }
+        char pa[9], ps[9], oa[64], os[64], ra[128], rs[128], ga[400], gs[400];
+        int th = -1;
+        g_gl_grid = ga; g_gl_grid_n = sizeof ga; ga[0] = 0;
+        const int ha = gl_texture_way(YES, way, s, W, H, pa, &th, oa, sizeof oa, ra, sizeof ra);
+        g_gl_grid = gs; g_gl_grid_n = sizeof gs; gs[0] = 0;
+        const int hs = gl_texture_way(NO, way, s, W, H, ps, &th, os, sizeof os, rs, sizeof rs);
+        g_gl_grid = NULL;
+        CFRelease(s);
+        if (ha) { report(name, FAIL, [NSString stringWithFormat:@"%s: accelerated OpenGL could not draw it (%d)", kGLWays[way], ha]); continue; }
+        const BOOL ok = !hs && !strcmp(ga, gs);
+        report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"%s: fb(x,y)>texel(x,y):%s | software:%s", kGLWays[way], ga, hs ? " (could not draw)" : gs]);
+    }
+}
+
 // Core Image drawing into an IOSurface on the GPU (Metal) and on the CPU: the same rows should come out on top
 static void test_coreimage_surface(void)
 {
@@ -621,6 +684,43 @@ static void test_coreimage_surface(void)
     report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"first row / last row: GPU %c %c, CPU %c %c", rows[0][0], rows[0][1], rows[1][0], rows[1][1]]);
     CGColorSpaceRelease(cs); CFRelease(src); CFRelease(ga); CFRelease(gb);
 }
+// v73: Core Image on OpenGL with the coordinate picture: an upright draw shows the picture's first row at the top,
+// so fb(x,y) should show texel (x, H-1-y)
+static void test_coreimage_opengl_map(void)
+{
+    const char *name = "coreimage-on-opengl-map";
+    if (!wanted(name)) return;
+    const int W = 128, H = 96;
+    IOSurfaceRef s = surface_coords(W, H);
+    CGLContextObj ctx = gl_context(YES);
+    if (!s || !ctx) { report(name, SKIP, @"no IOSurface or no accelerated OpenGL"); if (s) CFRelease(s); if (ctx) CGLDestroyContext(ctx); return; }
+    CGLSetCurrentContext(ctx);
+    GLuint rb = 0, fb = gl_fbo(W, H, &rb);
+    char grid[400] = "-";
+    int pts[9][2]; memset(pts, 0xff, sizeof pts);
+    if (fb) {
+        glClearColor(0, 1, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CIContext *ci = [CIContext contextWithCGLContext:ctx pixelFormat:CGLGetPixelFormat(ctx) colorSpace:cs
+                                                 options:@{ kCIContextWorkingColorSpace: [NSNull null] }];
+        CIImage *img = [[CIImage imageWithIOSurface:s] imageBySamplingNearest];
+        [ci drawImage:img inRect:CGRectMake(0, 0, W, H) fromRect:img.extent];
+        glFinish();
+        gl_grid(W, H, grid, sizeof grid, pts);
+        CGColorSpaceRelease(cs);
+        glDeleteFramebuffersEXT(1, &fb); glDeleteRenderbuffersEXT(1, &rb);
+    }
+    CGLSetCurrentContext(NULL); CGLDestroyContext(ctx); CFRelease(s);
+    char want[400]; size_t used = 0; want[0] = 0;
+    const int xs[3] = { W / 8, W / 2, W - W / 8 - 1 }, ys[3] = { H / 8, H / 2, H - H / 8 - 1 };
+    int off = 0;
+    for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+        used += (size_t)snprintf(want + used, sizeof want - used, " (%d,%d)>(%d,%d)", xs[i], ys[j], xs[i], H - 1 - ys[j]);
+        if (abs(pts[j * 3 + i][0] - xs[i]) > 1 || abs(pts[j * 3 + i][1] - (H - 1 - ys[j])) > 1) off++;
+    }
+    report(name, !off ? PASS : FAIL, [NSString stringWithFormat:@"fb(x,y)>texel(x,y):%s | upright:%s", grid, want]);
+}
+
 // Core Image on an OpenGL context drawing the picture into a framebuffer object, as an OpenGL app with Core Image
 // effects shows a camera frame: upright, so the bottom row read back (OpenGL reads bottom up) is blue
 static void test_coreimage_opengl(void)
@@ -971,9 +1071,11 @@ int main(int argc, char **argv)
         test_coreimage();
         test_opengl();
         test_gl_texture_ways();
+        test_gl_coord_map();
         test_pixel_samplers();
         test_coreimage_surface();
         test_coreimage_opengl();
+        test_coreimage_opengl_map();
         test_video("video-h264-roundtrip", kCMVideoCodecType_H264);
         test_video("video-hevc-roundtrip", kCMVideoCodecType_HEVC);
         test_webrtc_keyframes("video-h264-webrtc-keyframes", kCMVideoCodecType_H264);
