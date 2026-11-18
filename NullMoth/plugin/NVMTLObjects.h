@@ -130,6 +130,7 @@ extern id gNVMTLMainDevice;
   CFTimeInterval _gpuStart, _gpuEnd;
   CFTimeInterval _legacyKernelStart, _legacyKernelEnd;
   uint64_t _traceCommitNS;
+  uint64_t _createdNS, _capWaitNS; // v75, WindowServer: when it was made (CLOCK_MONOTONIC_RAW), and the wait for queue capacity
   nvmtl_gpu_interval _gpuTiming; BOOL _gpuTimingSeen, _gpuTimingInvalid;
   NSMutableArray *_parts, *_scheduledHandlers;
   NSUInteger _nextPart;

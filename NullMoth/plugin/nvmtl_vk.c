@@ -3145,9 +3145,15 @@ typedef struct nvmtl_address_page { nvk_buffer buffer; struct nvmtl_address_page
 #define NVMTL_KEEP 256
 static pthread_mutex_t g_keep_lock = PTHREAD_MUTEX_INITIALIZER;
 static nvmtl_address_page *g_keep_page[NVMTL_KEEP]; static unsigned g_keep_npage;
+/* v75 (upstream #322): set once a process has lost NVMTL_WIT_LOST_MAX witnesses: reuse stops and address pages are freed
+   after their fences signal, so a witness that keeps going missing costs speed, never memory. Each lost one has already
+   cost its submit thread the verdict's wait (1 s), so the cap is small. */
+#define NVMTL_WIT_LOST_MAX 8
+static int g_keep_retired;
 static int nvmtl_keep_on(void)
 {
     static int on = -1;
+    if (__atomic_load_n(&g_keep_retired, __ATOMIC_ACQUIRE)) return 0;
     if (on < 0) {
         const char *e = getenv("NVMTL_POOL_REUSE");
         on = (!e || e[0] == '1') && getenv("NVMTL_NO_POOL_REUSE") == NULL;
@@ -3261,9 +3267,12 @@ static int nvmtl_keep_page_push(nvmtl_address_page *p)
 }
 #define NVMTL_WIT_SLOTS 4096u
 #define NVMTL_WSEQ_BLIND 0xFFFFFFFFu
+/* v75: the fence signalled but the witness never landed: the GPU is done with the command buffer, but its address pages are
+   not certified for reuse, so retire leaks them instead of keeping or freeing them */
+#define NVMTL_WSEQ_LOST 0xFFFFFFFEu
 static nvk_buffer g_wit; static int g_wit_state;
 static uint32_t g_wit_seq;
-static uint64_t g_wit_ok, g_wit_waited, g_wit_leak, g_wit_blind, g_wit_ctl_run, g_wit_ctl_fired;
+static uint64_t g_wit_ok, g_wit_waited, g_wit_leak, g_wit_blind, g_wit_ctl_run, g_wit_ctl_fired, g_wit_lost;
 static int nvmtl_wit_ready(void)
 {
     int st = __atomic_load_n(&g_wit_state, __ATOMIC_ACQUIRE);
@@ -3287,7 +3296,7 @@ static uint32_t nvmtl_wit_record(nvk_cmdbuf *c)
      * witness proves finished, so a kept pool could be overwritten while the GPU still reads them. */
     if (c->in_rp || c->direct_sass || !nvmtl_wit_ready()) { __atomic_add_fetch(&g_wit_blind, 1, __ATOMIC_RELAXED); return NVMTL_WSEQ_BLIND; }
     uint32_t s;
-    do s = __atomic_add_fetch(&g_wit_seq, 1, __ATOMIC_RELAXED); while (s == 0 || s == NVMTL_WSEQ_BLIND);
+    do s = __atomic_add_fetch(&g_wit_seq, 1, __ATOMIC_RELAXED); while (s == 0 || s >= NVMTL_WSEQ_LOST);
     VkMemoryBarrier toT = { VK_STRUCTURE_TYPE_MEMORY_BARRIER, NULL, g_bar_w, VK_ACCESS_TRANSFER_WRITE_BIT };
     pvkCmdPipelineBarrier(c->cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toT, 0, NULL, 0, NULL);
     pvkCmdFillBuffer(c->cb, (VkBuffer)g_wit.buf, (VkDeviceSize)(s % NVMTL_WIT_SLOTS) * 4, 4, s);
@@ -3298,13 +3307,14 @@ static uint32_t nvmtl_wit_record(nvk_cmdbuf *c)
 static void nvmtl_wit_control(uint32_t s)
 {
     static int on = -1; if (on < 0) { const char *e = getenv("NVMTL_KEEP_WITNESS_CONTROL"); on = e && e[0] == '1'; }
-    if (!on || s == 0 || s == NVMTL_WSEQ_BLIND) return;
+    if (!on || s == 0 || s >= NVMTL_WSEQ_LOST) return;
     __atomic_add_fetch(&g_wit_ctl_run, 1, __ATOMIC_RELAXED);
     if (nvmtl_wit_read(s) != s) __atomic_add_fetch(&g_wit_ctl_fired, 1, __ATOMIC_RELAXED);
     else nvlog("vk: keep witness CONTROL DID NOT FIRE - slot already held %u before its submit; the witness proves nothing", s);
 }
 static int nvmtl_keep_verdict(uint32_t s)
 {
+    if (s == NVMTL_WSEQ_LOST) return -1;   /* before the reuse switch: its pages leak even after reuse retired */
     if (!nvmtl_keep_on() || s == NVMTL_WSEQ_BLIND) return 0;
     if (s == 0) return 1;
     if (g_state != 1 || g_wit_state <= 0) return -1;
@@ -6370,16 +6380,21 @@ int nvmtl_vk_submit_finish(nvmtl_inflight *f)
         return -2;
     }
     if (c->wseq && c->wseq != NVMTL_WSEQ_BLIND) {
+        /* v75 (upstream #322, MeowXE3 0056): the fence has already signalled, so the GPU is finished with this command
+           buffer; the witness only certifies its address pages for reuse. A missing one used to switch the backend off
+           for the whole process (and end WindowServer on this machine): every later command buffer of an app came back
+           failed, a terminal printing fast froze for good. Now this command buffer's pages are leaked, its pool goes
+           after its fence as any other, and work goes on. */
         if (nvmtl_keep_verdict(c->wseq) < 0) {
-            g_state = -1;
-            nvmtl_pool_state(c,NVK_POOL_QUARANTINED);
-            if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_QUARANTINED);
-            nvmtl_counter_pool_state(c,NVK_POOL_QUARANTINED);
-            nvlog("vk: completion witness missing; disabling backend and retaining all in-flight resources");
-            nvmtl_vk_backend_lost();
-            return -2;
-        }
-        c->wseq = 0;
+            const unsigned long long n = __atomic_add_fetch(&g_wit_lost, 1, __ATOMIC_RELAXED);
+            if (n == 1 || (n & 0xFF) == 0)
+                syslog(LOG_ERR, "NullMoth: completion witness %u missing after its fence signalled (slot holds %u; %llu so far in %s) - "
+                       "its address pages are leaked, the backend stays on", c->wseq, g_wit_state > 0 ? nvmtl_wit_read(c->wseq) : 0, n, getprogname());
+            c->wseq = NVMTL_WSEQ_LOST;
+            if (n == NVMTL_WIT_LOST_MAX && !__atomic_exchange_n(&g_keep_retired, 1, __ATOMIC_ACQ_REL))
+                syslog(LOG_ERR, "NullMoth: %d completion witnesses missing in %s - address page reuse is off for this process",
+                       NVMTL_WIT_LOST_MAX, getprogname());
+        } else c->wseq = 0;
     }
     nvmtl_pool_state(c,NVK_POOL_COMPLETE);
     if(pre->begun)nvmtl_pool_state(&pre->cb,NVK_POOL_COMPLETE);

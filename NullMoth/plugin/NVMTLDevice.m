@@ -1077,6 +1077,23 @@ static void nvmtl_app_surface_note(IOSurfaceRef surf, NSUInteger plane, size_t w
            fail ? fail : !t ? "nil" : t->_vramOn ? "family VRAM" : t->_hybrid ? "hybrid (private tiled + copies)"
            : t->_hostOn ? "the surface's own pages" : "a private image, copied in and out");
 }
+/* v75 (upstream 5567619, #433, #461; MeowXE3 0062): a CAMetalLayer drawable with framebufferOnly=NO is, on real Metal,
+   usable as a render target AND a compute / Core Image destination. QuartzCore hands this driver a descriptor whose usage
+   is only ShaderRead for it, so Core Image refuses the texture ("texture usage must include MTLTextureUsageShaderWrite")
+   and may take another way to the window (Photo Booth's preview). Report what the surface's image can already do: render
+   target always, shader writes when it has a storage image (here only when the descriptor asked for ShaderWrite).
+   WindowServer keeps the usage it asked for: it wraps hundreds of surfaces a second, none of them Core Image targets.
+   Unknown usage permits everything already. */
+static NSUInteger nvmtl_surface_usage(NSUInteger usage, BOOL fbo, BOOL storage) {
+    if (usage == MTLTextureUsageUnknown) return usage;
+    static int ws = -1;
+    if (ws < 0) { const char *me = getprogname(); ws = me && !strcmp(me, "WindowServer"); }
+    if (!fbo && !ws) {
+        usage |= MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+        if (storage) usage |= MTLTextureUsageShaderWrite;
+    }
+    return usage;
+}
 /* CoreAnimation wraps the same IOSurfaces in new textures every frame (its flatten cache, layer contents) and drops
    them right after; with the weak cache alone each wrapper was a fresh host import (a userptr VM_BIND, 12% of
    WindowServer's main thread while dragging a window). The most recently used host images stay alive here, which also
@@ -1137,7 +1154,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
         if (backing->_hostOn || backing->_hybrid) nvmtl_host_keep(self, backing);
         NVMTLTexture *alias = (NVMTLTexture *)[backing newTextureViewWithPixelFormat:d.pixelFormat];
         if (alias) {
-            alias->_viewParent = nil; alias->_usage = d.usage; alias->_ropt = t->_ropt; alias->_fbo = t->_fbo;
+            alias->_viewParent = nil; alias->_usage = nvmtl_surface_usage(d.usage, t->_fbo, alias->_stex); alias->_ropt = t->_ropt; alias->_fbo = t->_fbo;
             nvmtl_texture_desc_swizzle(alias, d);
             return alias;
         }
@@ -1150,7 +1167,7 @@ static void nvmtl_host_keep(NVMTLDevice *dev, NVMTLTexture *t)
     t->_plane = plane;
     t->_fmt = d.pixelFormat;
     t->_stex = t->_i.storage != 0;
-    t->_usage = d.usage;
+    t->_usage = nvmtl_surface_usage(d.usage, t->_fbo, t->_stex);
     nvmtl_texture_desc_swizzle(t, d);
     if (key && !t->_vramOn) [cache setObject:t forKey:key];
     if (key && (t->_hostOn || t->_hybrid)) nvmtl_host_keep(self, t);

@@ -605,6 +605,7 @@ static void nvmtl_purge_report(const char *why) {
           (unsigned long long)atomic_load(&gPurgeAsks), (unsigned long long)(bemp >> 20));
 }
 static void nvmtl_pre_release(void *held) { @autoreleasepool { (void)CFBridgingRelease(held); } }
+static void nvmtl_zero_flush(void);
 static void nvmtl_managed_flush(void) {
     if (!atomic_load(&gManagedAny) || gManagedInFlush) return;
     gManagedInFlush = 1;
@@ -616,6 +617,9 @@ static void nvmtl_managed_flush(void) {
     }
     [gManagedDirty removeAllObjects]; atomic_store(&gManagedAny, 0);
     os_unfair_lock_unlock(&gManagedLock);
+    /* v75 (upstream #458): a managed buffer can be created and dirtied after presubmit's zero snapshot. Claim its initial
+       clear before uploading this dirty snapshot; otherwise the next submission clears data already uploaded here. */
+    if (todo.count) nvmtl_zero_flush();
     if (todo.count && nvmtl_vk_pre_open()) {
         for (NSArray *t in todo) {
             NVMTLBuffer *b = t[0]; NSUInteger lo = [t[1] unsignedIntegerValue], n = [t[2] unsignedIntegerValue] - lo;
@@ -815,7 +819,12 @@ static NVMTLTexture *nvmtl_texbuf_make(NVMTLBuffer *b, MTLTextureDescriptor *d, 
     if (!d) return nil;
     if (d.textureType == MTLTextureTypeTextureBuffer) return nvmtl_texbuf_make(self, d, offset);
     size_t w = d.width, h = d.height;
-    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount > 1 || d.sampleCount > 1 || d.arrayLength > 1 || d.depth > 1
+    /* v75 (MeowXE3 0061): WindowServer asks for Dock badges and the login picture as buffer textures with a full mip chain
+       (54x54 mips 6, 144x144 mips 8). A linear buffer view has one level; nil left those layers blank. The one-level live
+       view reports mipmapLevelCount 1 (_mips), sampling reads level 0. NVMTL_NO_BUFTEX_MIP1=1 keeps the old nil. */
+    static int mip1 = -1;
+    if (mip1 < 0) { const char *e = getenv("NVMTL_NO_BUFTEX_MIP1"); mip1 = !(e && e[0] == '1'); }
+    if (d.textureType != MTLTextureType2D || (d.mipmapLevelCount > 1 && !mip1) || d.sampleCount > 1 || d.arrayLength > 1 || d.depth > 1
         || !w || !h || w > UINT32_MAX || h > UINT32_MAX) {
         nvlog("buffer newTextureWithDescriptor:offset:%lu bytesPerRow:%lu: type %lu %zux%zu (mips %lu, samples %lu, array %lu, depth %lu) "
               "is not built - only a 2D single-level linear view -> nil", (unsigned long)offset, (unsigned long)bpr, (unsigned long)d.textureType,
@@ -5270,6 +5279,8 @@ static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned s
 - (void)dealloc { nvmtl_vk_queue_destroy(&_q); }
 - (id<MTLCommandBuffer>)commandBuffer {
     dispatch_semaphore_t cap = nil;
+    static int ws = -1; if (ws < 0) ws = !strcmp(getprogname(), "WindowServer");
+    const uint64_t w0 = ws ? clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) : 0;
     if (nvmtl_async_commit_on()) {
         @synchronized ([NVMTLCommandQueue class]) { if (!_capacity) _capacity = dispatch_semaphore_create(_capacityCount ? _capacityCount : 64); cap = _capacity; }
         dispatch_semaphore_wait(cap, DISPATCH_TIME_FOREVER);
@@ -5277,6 +5288,7 @@ static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned s
     NVMTLCommandBuffer *cb = [NVMTLCommandBuffer new];
     if (!cb) { if (cap) dispatch_semaphore_signal(cap); return nil; }
     cb->_queue = self; cb->_capacityHeld = cap != nil;
+    if (ws) { cb->_createdNS = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); cb->_capWaitNS = cb->_createdNS - w0; }
     if (nvmtl_vk_cmd_begin(&_q, &cb->_c)) {
         nvlog("queue: command buffer begin FAILED; returning terminal-error command buffer");
         [cb nvmtlRecordEncodingError:[NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorInternal

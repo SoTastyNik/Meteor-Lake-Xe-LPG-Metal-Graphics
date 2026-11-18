@@ -306,6 +306,29 @@ static void test_views(void)
     report(name, bad.length ? FAIL : PASS, bad.length ? bad : @"IOSurface and buffer textures, BGRA8 viewed as RGBA8");
 }
 
+// v75: WindowServer asks a buffer for a texture with a mip chain (Dock badges 54x54 mips 6): one live level instead of nil
+static void test_buffer_mips(void)
+{
+    const char *name = "buffer-texture-mipmapped";
+    if (!wanted(name)) return;
+    const int W = 54, H = 54;
+    const NSUInteger align = [D minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatBGRA8Unorm];
+    const NSUInteger bpr = (W * 4 + align - 1) / align * align;
+    id<MTLBuffer> buf = [D newBufferWithLength:bpr * H options:MTLResourceStorageModeShared];
+    for (int y = 0; y < H; y++) { uint8_t *r = (uint8_t *)buf.contents + y * bpr;
+        for (int x = 0; x < W; x++) { r[x * 4] = (uint8_t)x; r[x * 4 + 1] = (uint8_t)y; r[x * 4 + 2] = 200; r[x * 4 + 3] = 255; } }
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:YES];
+    td.usage = MTLTextureUsageShaderRead; td.storageMode = MTLStorageModeShared;
+    const NSUInteger asked = td.mipmapLevelCount;
+    id<MTLTexture> t = [buf newTextureWithDescriptor:td offset:0 bytesPerRow:bpr];
+    if (!t) { report(name, FAIL, [NSString stringWithFormat:@"%dx%d with %lu mips: nil (the layer stays blank)", W, H, (unsigned long)asked)]; return; }
+    uint8_t px[4] = { 0 };
+    [t getBytes:px bytesPerRow:4 fromRegion:MTLRegionMake2D(17, 23, 1, 1) mipmapLevel:0];
+    const BOOL ok = px[0] == 17 && px[1] == 23 && px[2] == 200;
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"%dx%d asked %lu mips, texture reports %lu; level 0 pixel (17,23) = %u,%u,%u (want 17,23,200)",
+                                    W, H, (unsigned long)asked, (unsigned long)t.mipmapLevelCount, px[0], px[1], px[2]]);
+}
+
 // ---- 6. a kernel writes an sRGB texture: the values land, encoded ------------------------------------------------------
 static void test_srgb_write(void)
 {
@@ -1067,6 +1090,7 @@ int main(int argc, char **argv)
         test_sampler_park();
         test_mips();
         test_views();
+        test_buffer_mips();
         test_srgb_write();
         test_coreimage();
         test_opengl();

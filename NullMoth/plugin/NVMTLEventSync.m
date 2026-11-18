@@ -638,6 +638,9 @@ static double gWsGpuSum, gWsLatSum, gWsGpuMax, gWsLatMax, gWsSchedSum, gWsSchedM
 enum { WSP_SCHED, WSP_PRE, WSP_EXEC, WSP_QUEUE, WSP_GPU, WSP_SIGNAL, WSP_AFTER, WSP_N };
 static double gWsPathSum[WSP_N], gWsPathMax[WSP_N];
 static unsigned long long gWsPathN;
+/* v75: before commit: WindowServer building the command buffer (made to committed) and waiting for queue capacity */
+static double gWsEncSum, gWsEncMax, gWsCapSum, gWsCapMax;
+static unsigned long long gWsEncN;
 static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, double deviceEnd) {
     if (!cb->_traceCommitNS) return;
     const double gpuSeconds = deviceEnd > deviceStart ? deviceEnd - deviceStart : 0;
@@ -647,6 +650,12 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
     do {
         const uint64_t nowNS = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         if (!gWsWindowT0) gWsWindowT0 = nowNS;
+        if (cb->_createdNS && cb->_traceCommitNS > cb->_createdNS) {
+            const double enc = (cb->_traceCommitNS - cb->_createdNS) * 1e-6, cap = cb->_capWaitNS * 1e-6;
+            gWsEncSum += enc; if (enc > gWsEncMax) gWsEncMax = enc;
+            gWsCapSum += cap; if (cap > gWsCapMax) gWsCapMax = cap;
+            gWsEncN++;
+        }
         if (cb->_scheduledNS > cb->_traceCommitNS) {
             const double sched = (cb->_scheduledNS - cb->_traceCommitNS) * 1e-6;
             gWsSchedSum += sched; if (sched > gWsSchedMax) gWsSchedMax = sched;
@@ -680,8 +689,11 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                nvmtl_split_submit_on() ? ", split submit" : "");
         if (gWsPathN) {
             const double n = (double)gWsPathN;
-            syslog(LOG_ERR, "NullMoth: frame timing path ms avg/max over %llu: sched %.2f/%.1f, pre-submit %.2f/%.1f, execbuffer %.2f/%.1f, "
+            const double ne = gWsEncN ? (double)gWsEncN : 1.0;
+            syslog(LOG_ERR, "NullMoth: frame timing path ms avg/max over %llu: encode %.2f/%.1f, capacity wait %.2f/%.1f, "
+                   "sched %.2f/%.1f, pre-submit %.2f/%.1f, execbuffer %.2f/%.1f, "
                    "GPU queue %.2f/%.1f, GPU %.2f/%.1f, signal %.2f/%.1f, after %.2f/%.1f", gWsPathN,
+                   gWsEncSum / ne, gWsEncMax, gWsCapSum / ne, gWsCapMax,
                    gWsPathSum[WSP_SCHED] / n, gWsPathMax[WSP_SCHED], gWsPathSum[WSP_PRE] / n, gWsPathMax[WSP_PRE],
                    gWsPathSum[WSP_EXEC] / n, gWsPathMax[WSP_EXEC], gWsPathSum[WSP_QUEUE] / n, gWsPathMax[WSP_QUEUE],
                    gWsPathSum[WSP_GPU] / n, gWsPathMax[WSP_GPU], gWsPathSum[WSP_SIGNAL] / n, gWsPathMax[WSP_SIGNAL],
@@ -689,6 +701,7 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
         }
         nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;
+        gWsEncSum = gWsEncMax = gWsCapSum = gWsCapMax = 0; gWsEncN = 0;
         memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
         gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = gWsSchedSum = gWsSchedMax = 0;
         gWsWindowT0 = nowNS;
