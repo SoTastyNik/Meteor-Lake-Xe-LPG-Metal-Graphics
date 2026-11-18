@@ -20,6 +20,7 @@
 #include <sys/time.h>
 #include <kern/locks.h>
 #include <kern/clock.h>
+#include "nmx_spin.h"
 
 extern void _disable_preemption(void);
 extern void _enable_preemption(void);
@@ -225,12 +226,12 @@ void nmx_sleepq_fini(void)
 
 void sleepq_lock(const void *wchan)
 {
-    lck_spin_lock(sc_lookup(wchan)->lock);
+    nmx_spin_lock(sc_lookup(wchan)->lock);
 }
 
 void sleepq_release(const void *wchan)
 {
-    lck_spin_unlock(sc_lookup(wchan)->lock);
+    nmx_spin_unlock(sc_lookup(wchan)->lock);
 }
 
 static void sc_count(struct sleepq_chain *sc, const void *wchan, int delta)
@@ -277,11 +278,11 @@ static int sleepq_block(const void *wchan, int want_timeout)
     else
         assert_wait((event_t)(uintptr_t)wchan, intr);
     sc_count(sc, wchan, 1);
-    lck_spin_unlock(sc->lock);
+    nmx_spin_unlock(sc->lock);
     wait_result_t wr = thread_block(THREAD_CONTINUE_NULL);
-    lck_spin_lock(sc->lock);
+    nmx_spin_lock(sc->lock);
     sc_count(sc, wchan, -1);
-    lck_spin_unlock(sc->lock);
+    nmx_spin_unlock(sc->lock);
     return result_to_errno(wr);
 }
 

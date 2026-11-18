@@ -28,6 +28,7 @@ void nmx_malloc_forget_contig(void *addr);
 #include <vm/vm_extern.h>
 #include <machine/cpufunc.h>
 #include "nmx_xnu.h"
+#include "nmx_spin.h"
 
 MALLOC_DEFINE(M_NMXPAGE, "nmxpage", "page records");
 
@@ -140,10 +141,10 @@ static int backing_register(struct backing *bk)
     struct reg_entry *ents = malloc(sizeof(*ents) * bk->npages, M_NMXPAGE, M_WAITOK);
     if (ents == NULL)
         return ENOMEM;
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     for (size_t i = 0; i < bk->npages; i++)
         reg_insert_locked(&bk->pages[i], &ents[i]);
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     return 0;
 }
 
@@ -185,9 +186,9 @@ static struct backing *backing_alloc(int kind, size_t npages, int contiguous, ui
 
 static void backing_release(struct backing *bk)
 {
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     struct reg_entry *ents = backing_unregister_locked(bk);
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     free(ents, M_NMXPAGE);
     nmx_xnu_mem_free(bk->handle);
     free(bk, M_NMXPAGE);
@@ -200,7 +201,7 @@ static struct vm_page *single_alloc(int want_zero, int *zeroed)
 {
     *zeroed = 0;
     for (;;) {
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         struct vm_page *m = NULL;
         if (zero_pages != NULL && (want_zero || free_pages == NULL)) {
             m = zero_pages;
@@ -214,16 +215,16 @@ static struct vm_page *single_alloc(int want_zero, int *zeroed)
         if (m) {
             ((struct backing *)m->nmx_alloc)->live++;
             pages_live++;
-            lck_spin_unlock(pg_lock);
+            nmx_spin_unlock(pg_lock);
             m->plinks.s.ss.sle_next = NULL;
             return m;
         }
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
 
         struct backing *bk = backing_alloc(BK_CHUNK, CHUNK_PAGES, 0, 0, PAGE_SIZE);
         if (bk == NULL)
             return NULL;
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         bk->next = chunks;
         chunks = bk;
         for (size_t i = 0; i < bk->npages; i++) {
@@ -231,7 +232,7 @@ static struct vm_page *single_alloc(int want_zero, int *zeroed)
             free_pages = &bk->pages[i];
             free_count++;
         }
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
     }
 }
 
@@ -273,7 +274,7 @@ static void zero_thread(void *arg)
         struct vm_page *batch = NULL;
         u_int n = 0;
         if (on) {
-            lck_spin_lock(pg_lock);
+            nmx_spin_lock(pg_lock);
             while (n < ZERO_BATCH && free_pages != NULL && zero_count + n < ZERO_TARGET) {
                 struct vm_page *m = free_pages;
                 free_pages = (struct vm_page *)(uintptr_t)m->plinks.s.ss.sle_next;
@@ -282,25 +283,25 @@ static void zero_thread(void *arg)
                 batch = m;
                 n++;
             }
-            lck_spin_unlock(pg_lock);
+            nmx_spin_unlock(pg_lock);
         }
         if (n == 0 && on && zero_count < ZERO_TARGET) {
             struct backing *bk = backing_alloc(BK_CHUNK, CHUNK_PAGES, 0, 0, PAGE_SIZE);
             if (bk != NULL) {
-                lck_spin_lock(pg_lock);
+                nmx_spin_lock(pg_lock);
                 bk->next = chunks;
                 chunks = bk;
-                lck_spin_unlock(pg_lock);
+                nmx_spin_unlock(pg_lock);
                 for (size_t i = 0; i < bk->npages; i++) {
                     bzero(bk->pages[i].nmx_kva, PAGE_SIZE);
                     pmap_invalidate_cache_range((vm_offset_t)bk->pages[i].nmx_kva, (vm_offset_t)bk->pages[i].nmx_kva + PAGE_SIZE);
                     bk->pages[i].plinks.s.ss.sle_next = i + 1 < bk->npages ? &bk->pages[i + 1] : NULL;
                 }
-                lck_spin_lock(pg_lock);
+                nmx_spin_lock(pg_lock);
                 bk->pages[bk->npages - 1].plinks.s.ss.sle_next = zero_pages;
                 zero_pages = &bk->pages[0];
                 zero_count += (u_int)bk->npages;
-                lck_spin_unlock(pg_lock);
+                nmx_spin_unlock(pg_lock);
                 __atomic_add_fetch(&zero_made, bk->npages, __ATOMIC_RELAXED);
                 __atomic_add_fetch(&zero_chunks, 1, __ATOMIC_RELAXED);
                 pause("nmxzero", 1);
@@ -317,12 +318,12 @@ static void zero_thread(void *arg)
             pmap_invalidate_cache_range((vm_offset_t)m->nmx_kva, (vm_offset_t)m->nmx_kva + PAGE_SIZE);
             last = m;
         }
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         last->plinks.s.ss.sle_next = zero_pages;
         zero_pages = batch;
         zero_count += n;
         const u_int ready = zero_count;
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
         const uint64_t made = __atomic_add_fetch(&zero_made, n, __ATOMIC_RELAXED);
         if (made >> 16 != said) {           /* every 256 MB zeroed */
             said = made >> 16;
@@ -366,10 +367,10 @@ vm_page_t vm_page_alloc_noobj_contig(int req, u_long npages, vm_paddr_t low, vm_
     struct backing *bk = backing_alloc(BK_RUN, npages, 1, high, alignment > PAGE_SIZE ? alignment : PAGE_SIZE);
     if (bk == NULL)
         return NULL;
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     bk->live = (u_int)npages;
     pages_live += npages;
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     for (u_long i = 0; i < npages; i++) {
         page_prepare(&bk->pages[i], req, 0);
         bk->pages[i].md.pat_mode = memattr;
@@ -383,18 +384,18 @@ void vm_page_free(vm_page_t m)
     struct backing *bk = m->nmx_alloc;
     if (bk == NULL || bk->kind == BK_FICTITIOUS)
         return;
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     pages_live--;
     bk->live--;
     if (bk->kind == BK_CHUNK) {
         m->plinks.s.ss.sle_next = free_pages;
         free_pages = m;
         free_count++;
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
         return;
     }
     int last = bk->live == 0;
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     if (last)
         backing_release(bk);
 }
@@ -497,14 +498,14 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
     *fresh = 0;
     for (int i = 0; i < npages;) {
         const int end = npages - i > 256 ? i + 256 : npages;
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         for (; i < end; i++) {
             if ((pages[i] = reg_find_locked(phys[i] >> PAGE_SHIFT)) == NULL)
                 missing++;
             else
                 __atomic_add_fetch(&pages[i]->ref_count, 1, __ATOMIC_SEQ_CST);
         }
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
     }
     if (missing == 0)
         return 0;
@@ -514,11 +515,11 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
         free(bk, M_NMXPAGE);
         free(ents, M_NMXPAGE);
         /* give the wirings back; a record left with none but the registry's stays (this path is out of memory anyway) */
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         for (int i = 0; i < npages; i++)
             if (pages[i] != NULL)
                 __atomic_sub_fetch(&pages[i]->ref_count, 1, __ATOMIC_SEQ_CST);
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
         return ENOMEM;
     }
     bk->kind = BK_FICTITIOUS;
@@ -536,7 +537,7 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
     }
     for (int i = 0, k = 0, used = 0; i < npages;) {
         const int end = npages - i > 256 ? i + 256 : npages;
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         for (; i < end; i++) {
             if (pages[i] != NULL)
                 continue;
@@ -552,7 +553,7 @@ static int nmx_phys_to_pages(const uint64_t *phys, int npages, vm_page_t *pages,
             pages[i] = m;
             k++;
         }
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
     }
     if (*fresh == 0)                       /* every one was registered meanwhile: nothing of the block is used */
         record_block_free(bk);
@@ -589,12 +590,12 @@ int nmx_user_pages_pin(void *mm, uintptr_t start, int npages, int write, vm_page
         const int end = npages - i > 256 ? i + 256 : npages;
         for (int k = i; k < end; k++)
             pin->refs[k].pin = pin;
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         for (; i < end; i++) {
             pin->refs[i].next = pages[i]->nmx_pins;
             pages[i]->nmx_pins = &pin->refs[i];
         }
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
     }
     free(phys, M_NMXPAGE);                 /* the pages were wired for the pin by nmx_phys_to_pages */
     nmx_xnu_pin_parts(t0, t1, t2, nmx_xnu_execbuf_begin(), fresh, reg_count, nmx_pin_reclaimed);
@@ -611,14 +612,14 @@ bool vm_page_unwire_noq(vm_page_t m)
         /* a pinned user page: this put releases one pin (see nmx_user_pages_pin), and a pin's record with nothing left
            on it leaves (record_unwire_locked). A fictitious record is never freed through vm_page_free. */
         struct user_pin *pin = NULL;
-        lck_spin_lock(pg_lock);
+        nmx_spin_lock(pg_lock);
         struct pin_ref *r = m->nmx_pins;
         if (r != NULL) {
             m->nmx_pins = r->next;
             pin = r->pin;                  /* r lives in its request's block */
         }
         struct backing *dead = record_unwire_locked(m);
-        lck_spin_unlock(pg_lock);
+        nmx_spin_unlock(pg_lock);
         if (pin != NULL)
             pin_put(pin);
         if (dead != NULL)
@@ -762,9 +763,9 @@ void vm_object_page_remove(vm_object_t o, vm_pindex_t start, vm_pindex_t end, in
 vm_page_t nmx_phys_to_page(vm_paddr_t pa)
 {
     vm_paddr_t pfn = pa >> PAGE_SHIFT;
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     struct vm_page *m = reg_find_locked(pfn);
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     if (m)
         return m;
 
@@ -781,7 +782,7 @@ vm_page_t nmx_phys_to_page(vm_paddr_t pa)
     page_record_init(&bk->pages[0], bk, pfn << PAGE_SHIFT, NULL);
     bk->pages[0].flags = PG_FICTITIOUS;
     bk->pages[0].ref_count = 1;
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     m = reg_find_locked(pfn);
     if (m == NULL) {
         reg_insert_locked(&bk->pages[0], e);
@@ -790,7 +791,7 @@ vm_page_t nmx_phys_to_page(vm_paddr_t pa)
         bk = NULL;
         e = NULL;
     }
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     free(bk, M_NMXPAGE);
     free(e, M_NMXPAGE);
     return m;
@@ -810,19 +811,19 @@ vm_page_t nmx_kva_to_page(const void *va)
 
 bool nmx_phys_in_dmap(vm_paddr_t pa)
 {
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     struct vm_page *m = reg_find_locked(pa >> PAGE_SHIFT);
     bool in = m && m->nmx_kva;
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     return in;
 }
 
 void *nmx_phys_to_kva(vm_paddr_t pa)
 {
-    lck_spin_lock(pg_lock);
+    nmx_spin_lock(pg_lock);
     struct vm_page *m = reg_find_locked(pa >> PAGE_SHIFT);
     void *kva = (m && m->nmx_kva) ? (char *)m->nmx_kva + (pa & PAGE_MASK) : NULL;
-    lck_spin_unlock(pg_lock);
+    nmx_spin_unlock(pg_lock);
     return kva;
 }
 

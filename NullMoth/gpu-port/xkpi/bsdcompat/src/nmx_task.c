@@ -20,6 +20,7 @@
 #include <sys/malloc.h>
 #include <sys/time.h>
 #include <kern/clock.h>
+#include "nmx_spin.h"
 
 MALLOC_DEFINE(M_TASKQUEUE, "taskqueue", "Task queues");
 
@@ -65,7 +66,7 @@ static void cc_insert(struct callout *c)
 
 static void softclock_thread(void *arg, wait_result_t wr)
 {
-    lck_spin_lock(cc_lock);
+    nmx_spin_lock(cc_lock);
     while (!cc_exiting) {
         uint64_t now = mach_absolute_time();
         struct callout *c = cc_head;
@@ -81,7 +82,7 @@ static void softclock_thread(void *arg, wait_result_t wr)
             int shared = (c->c_flags & CALLOUT_SHAREDLOCK) != 0;
             int retunlocked = (c->c_flags & CALLOUT_RETURNUNLOCKED) != 0;
             uint32_t gen = c->c_gen;
-            lck_spin_unlock(cc_lock);
+            nmx_spin_unlock(cc_lock);
             int run = 1;
             if (lk) {
                 nmx_lock_acquire(lk, shared);
@@ -93,7 +94,7 @@ static void softclock_thread(void *arg, wait_result_t wr)
                 fn(a);
             if (lk && (!run || !retunlocked))
                 nmx_lock_drop(lk);
-            lck_spin_lock(cc_lock);
+            nmx_spin_lock(cc_lock);
             cc_running = NULL;
             c->c_running = 0;
             thread_wakeup_prim((event_t)&c->c_running, FALSE, THREAD_AWAKENED);
@@ -103,13 +104,13 @@ static void softclock_thread(void *arg, wait_result_t wr)
             assert_wait_deadline((event_t)&cc_wakeup_chan, THREAD_UNINT, c->c_deadline);
         else
             assert_wait((event_t)&cc_wakeup_chan, THREAD_UNINT);
-        lck_spin_unlock(cc_lock);
+        nmx_spin_unlock(cc_lock);
         thread_block(THREAD_CONTINUE_NULL);
-        lck_spin_lock(cc_lock);
+        nmx_spin_lock(cc_lock);
     }
     cc_thread = NULL;
     thread_wakeup_prim((event_t)&cc_thread, FALSE, THREAD_AWAKENED);
-    lck_spin_unlock(cc_lock);
+    nmx_spin_unlock(cc_lock);
     thread_terminate(current_thread());
 }
 
@@ -131,16 +132,16 @@ void nmx_callout_fini(void)
 {
     if (cc_lock == NULL)
         return;
-    lck_spin_lock(cc_lock);
+    nmx_spin_lock(cc_lock);
     cc_exiting = 1;
     thread_wakeup_prim((event_t)&cc_wakeup_chan, FALSE, THREAD_AWAKENED);
     while (cc_thread != NULL) {
         assert_wait((event_t)&cc_thread, THREAD_UNINT);
-        lck_spin_unlock(cc_lock);
+        nmx_spin_unlock(cc_lock);
         thread_block(THREAD_CONTINUE_NULL);
-        lck_spin_lock(cc_lock);
+        nmx_spin_lock(cc_lock);
     }
-    lck_spin_unlock(cc_lock);
+    nmx_spin_unlock(cc_lock);
     lck_spin_free(cc_lock, nmx_lck_grp);
     cc_lock = NULL;
 }
@@ -170,7 +171,7 @@ int callout_reset_sbt_on(struct callout *c, sbintime_t sbt, sbintime_t prec, voi
         sbt = 0;
     nanoseconds_to_absolutetime((uint64_t)sbttons(sbt), &interval);
 
-    lck_spin_lock(cc_lock);
+    nmx_spin_lock(cc_lock);
     int was = (c->c_flags & CALLOUT_PENDING) != 0;
     if (was)
         cc_unlink(c);
@@ -181,7 +182,7 @@ int callout_reset_sbt_on(struct callout *c, sbintime_t sbt, sbintime_t prec, voi
     c->c_flags |= CALLOUT_PENDING | CALLOUT_ACTIVE;
     cc_insert(c);
     int first = (cc_head == c);
-    lck_spin_unlock(cc_lock);
+    nmx_spin_unlock(cc_lock);
     if (first)
         thread_wakeup_prim((event_t)&cc_wakeup_chan, FALSE, THREAD_AWAKENED);
     return was;
@@ -191,7 +192,7 @@ int _callout_stop_safe(struct callout *c, int flags)
 {
     if (cc_lock == NULL)
         return 0;
-    lck_spin_lock(cc_lock);
+    nmx_spin_lock(cc_lock);
     int was = (c->c_flags & CALLOUT_PENDING) != 0;
     if (was)
         cc_unlink(c);
@@ -200,12 +201,12 @@ int _callout_stop_safe(struct callout *c, int flags)
     if (flags & CS_DRAIN) {
         while (cc_running == c) {
             assert_wait((event_t)&c->c_running, THREAD_UNINT);
-            lck_spin_unlock(cc_lock);
+            nmx_spin_unlock(cc_lock);
             thread_block(THREAD_CONTINUE_NULL);
-            lck_spin_lock(cc_lock);
+            nmx_spin_lock(cc_lock);
         }
     }
-    lck_spin_unlock(cc_lock);
+    nmx_spin_unlock(cc_lock);
     return was;
 }
 

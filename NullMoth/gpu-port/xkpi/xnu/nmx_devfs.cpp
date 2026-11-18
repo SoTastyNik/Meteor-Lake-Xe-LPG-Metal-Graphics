@@ -159,8 +159,13 @@ static inline bool irqs_on(void)
 }
 
 extern "C" void nmx_crit_debug(int *nest, int *saved, void **who, void **self);
-static void irq_check(const char *what, unsigned long cmd)
+/* v75_2: and the CPU's preemption level, which a spin lock left held (or released on another CPU) leaves raised:
+   the process then panics at its next page fault (nmx_kernel.c) */
+extern "C" int nmx_preempt_level(void);
+extern "C" void nmx_preempt_check(const char *what, unsigned long cmd, int level0);
+static void irq_check(const char *what, unsigned long cmd, int pl0)
 {
+    nmx_preempt_check(what, cmd, pl0);
     if (!irqs_on()) {
         int nest, saved; void *who, *self;
         nmx_crit_debug(&nest, &saved, &who, &self);
@@ -176,8 +181,9 @@ static int nmx_open(dev_t dev, int flags, int devtype, struct proc *p)
     void *cookie = cookie_for_open(m, nullptr);
     if (cookie == nullptr)
         return ENXIO;
+    const int pl0 = nmx_preempt_level();
     int err = nmx_cdev_open(cookie, m, flags);
-    irq_check("open", 0);
+    irq_check("open", 0, pl0);
     OpenRec *rec = err ? nullptr : IONew(OpenRec, 1);
     if (rec != nullptr) {
         rec->minor = m;
@@ -202,8 +208,9 @@ static int nmx_open(dev_t dev, int flags, int devtype, struct proc *p)
 static int nmx_close(dev_t dev, int flags, int devtype, struct proc *p)
 {
     int m = minor(dev);
+    const int pl0 = nmx_preempt_level();
     int err = nmx_cdev_close(m, flags);
-    irq_check("close", 0);
+    irq_check("close", 0, pl0);
     OpenRec *rec = nullptr;
     bool last = false;
     IOLockLock(g_lock);
@@ -249,8 +256,9 @@ static int nmx_close(dev_t dev, int flags, int devtype, struct proc *p)
 
 static int nmx_ioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p)
 {
+    const int pl0 = nmx_preempt_level();
     int err = nmx_cdev_ioctl(minor(dev), cmd, data, fflag);
-    irq_check("ioctl", cmd);
+    irq_check("ioctl", cmd, pl0);
     return err;
 }
 
@@ -268,8 +276,9 @@ static int nmx_read(dev_t dev, struct uio *uio, int ioflag)
     user_addr_t base = uio_curriovbase(uio);
     user_size_t len = uio_curriovlen(uio);
     size_t done = 0;
+    const int pl0 = nmx_preempt_level();
     int err = nmx_cdev_read(minor(dev), (uint64_t)base, (size_t)len, &done, (ioflag & IO_NDELAY) ? 1 : 0);
-    irq_check("read", 0);
+    irq_check("read", 0, pl0);
     if (done > 0)
         uio_update(uio, (user_size_t)done);
     return err;
@@ -282,7 +291,10 @@ static int nmx_read(dev_t dev, struct uio *uio, int ioflag)
 static int nmx_select(dev_t dev, int which, void *wql, struct proc *p)
 {
     int events = which == FREAD ? 0x0001 /* POLLIN */ : which == FWRITE ? 0x0004 /* POLLOUT */ : 0x0002 /* POLLPRI */;
-    return nmx_cdev_poll(minor(dev), events) != 0;
+    const int pl0 = nmx_preempt_level();
+    int ready = nmx_cdev_poll(minor(dev), events) != 0;
+    irq_check("select", (unsigned long)which, pl0);
+    return ready;
 }
 
 static struct cdevsw g_cdevsw = {

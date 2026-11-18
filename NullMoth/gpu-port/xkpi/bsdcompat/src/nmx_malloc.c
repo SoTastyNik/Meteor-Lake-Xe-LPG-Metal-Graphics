@@ -16,6 +16,7 @@
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <kern/locks.h>
+#include "nmx_spin.h"
 
 MALLOC_DEFINE(M_TEMP, "temp", "misc temporary data buffers");
 MALLOC_DEFINE(M_DEVBUF, "devbuf", "device driver memory");
@@ -87,10 +88,10 @@ void *malloc(size_t size, struct malloc_type *type, int flags)
         rec->type = type;
         rec->contig = 0;
         unsigned b = big_bucket(p);
-        lck_spin_lock(big_lock);
+        nmx_spin_lock(big_lock);
         rec->next = big_table[b];
         big_table[b] = rec;
-        lck_spin_unlock(big_lock);
+        nmx_spin_unlock(big_lock);
         account(type, (int64_t)rounded);
         return p;
     }
@@ -115,16 +116,16 @@ void *malloc(size_t size, struct malloc_type *type, int flags)
 static struct big_rec *big_take(void *addr)
 {
     unsigned b = big_bucket(addr);
-    lck_spin_lock(big_lock);
+    nmx_spin_lock(big_lock);
     for (struct big_rec **pp = &big_table[b]; *pp; pp = &(*pp)->next) {
         if ((*pp)->addr == addr) {
             struct big_rec *r = *pp;
             *pp = r->next;
-            lck_spin_unlock(big_lock);
+            nmx_spin_unlock(big_lock);
             return r;
         }
     }
-    lck_spin_unlock(big_lock);
+    nmx_spin_unlock(big_lock);
     return NULL;
 }
 
@@ -132,10 +133,10 @@ static size_t big_size(const void *addr)
 {
     size_t size = 0;
     unsigned b = big_bucket(addr);
-    lck_spin_lock(big_lock);
+    nmx_spin_lock(big_lock);
     for (struct big_rec *r = big_table[b]; r; r = r->next)
         if (r->addr == addr) { size = r->size; break; }
-    lck_spin_unlock(big_lock);
+    nmx_spin_unlock(big_lock);
     return size;
 }
 
@@ -180,10 +181,10 @@ int nmx_malloc_note_contig(void *addr, size_t size, struct malloc_type *type)
     rec->type = type;
     rec->contig = 1;
     unsigned b = big_bucket(addr);
-    lck_spin_lock(big_lock);
+    nmx_spin_lock(big_lock);
     rec->next = big_table[b];
     big_table[b] = rec;
-    lck_spin_unlock(big_lock);
+    nmx_spin_unlock(big_lock);
     account(type, (int64_t)rec->size);
     return 0;
 }

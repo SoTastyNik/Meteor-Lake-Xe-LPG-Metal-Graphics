@@ -322,11 +322,26 @@ static void test_buffer_mips(void)
     const NSUInteger asked = td.mipmapLevelCount;
     id<MTLTexture> t = [buf newTextureWithDescriptor:td offset:0 bytesPerRow:bpr];
     if (!t) { report(name, FAIL, [NSString stringWithFormat:@"%dx%d with %lu mips: nil (the layer stays blank)", W, H, (unsigned long)asked]); return; }
-    uint8_t px[4] = { 0 };
-    [t getBytes:px bytesPerRow:4 fromRegion:MTLRegionMake2D(17, 23, 1, 1) mipmapLevel:0];
-    const BOOL ok = px[0] == 17 && px[1] == 23 && px[2] == 200;
-    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"%dx%d asked %lu mips, texture reports %lu; level 0 pixel (17,23) = %u,%u,%u (want 17,23,200)",
-                                    W, H, (unsigned long)asked, (unsigned long)t.mipmapLevelCount, px[0], px[1], px[2]]);
+    // WindowServer samples it in a shader: read level 0 the same way (memory B=x G=y R=200, so the shader sees 200,y,x)
+    id<MTLComputePipelineState> p = cps(@"tex_to_buf");
+    id<MTLBuffer> out = [D newBufferWithLength:W * H * 4 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [Q commandBuffer]; id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+    [e setComputePipelineState:p]; [e setTexture:t atIndex:0]; [e setBuffer:out offset:0 atIndex:0];
+    [e dispatchThreads:MTLSizeMake(W, H, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    [e endEncoding]; [cb commit]; [cb waitUntilCompleted];
+    const uint8_t *q = (const uint8_t *)out.contents + (23 * W + 17) * 4;
+    const BOOL ok = q[0] == 200 && q[1] == 23 && q[2] == 17;
+    // for reference: the CPU readback of the same texture and of a plain (single-level) one over the same bytes
+    uint8_t gm[4] = { 0 }, gp[4] = { 0 };
+    [t getBytes:gm bytesPerRow:4 fromRegion:MTLRegionMake2D(17, 23, 1, 1) mipmapLevel:0];
+    MTLTextureDescriptor *pd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:NO];
+    pd.usage = MTLTextureUsageShaderRead; pd.storageMode = MTLStorageModeShared;
+    id<MTLTexture> pt = [buf newTextureWithDescriptor:pd offset:0 bytesPerRow:bpr];
+    if (pt) [pt getBytes:gp bytesPerRow:4 fromRegion:MTLRegionMake2D(17, 23, 1, 1) mipmapLevel:0];
+    report(name, ok ? PASS : FAIL, [NSString stringWithFormat:@"%dx%d asked %lu mips, texture reports %lu; shader reads level 0 (17,23) = %u,%u,%u "
+                                    "(want 200,23,17); getBytes (want 17,23,200): mipmapped %u,%u,%u, plain %u,%u,%u",
+                                    W, H, (unsigned long)asked, (unsigned long)t.mipmapLevelCount, q[0], q[1], q[2],
+                                    gm[0], gm[1], gm[2], gp[0], gp[1], gp[2]]);
 }
 
 // ---- 6. a kernel writes an sRGB texture: the values land, encoded ------------------------------------------------------

@@ -24,6 +24,7 @@
 
 #include <sys/module.h>
 #include <sys/sysctl.h>
+#include "nmx_spin.h"
 
 /* xnu calls a kext may link (checked against macOS 15 with tools/kpi_probe.sh); _disable_preemption and
  * ml_get_max_cpus are not among them */
@@ -129,10 +130,10 @@ static struct proc *nmx_proc_for(void *xnu)
         return nmx_kernproc;
     const pid_t pid = proc_pid(xnu);
     unsigned b = bucket_of(xnu, NMX_PROC_BUCKETS);
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     for (struct nmx_proc_rec *r = nmx_procs[b]; r; r = r->next)
-        if (r->xnu == xnu && r->p.p_pid == pid) { lck_spin_unlock(nmx_thread_lock); return &r->p; }
-    lck_spin_unlock(nmx_thread_lock);
+        if (r->xnu == xnu && r->p.p_pid == pid) { nmx_spin_unlock(nmx_thread_lock); return &r->p; }
+    nmx_spin_unlock(nmx_thread_lock);
 
     struct nmx_proc_rec *nr = IOMallocZero(sizeof(*nr));
     if (nr == NULL)
@@ -142,13 +143,13 @@ static struct proc *nmx_proc_for(void *xnu)
     nr->p.p_pid = pid;
     proc_name(nr->p.p_pid, nr->p.p_comm, sizeof(nr->p.p_comm));
 
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     for (struct nmx_proc_rec *r = nmx_procs[b]; r; r = r->next)
-        if (r->xnu == xnu && r->p.p_pid == pid) { lck_spin_unlock(nmx_thread_lock); IOFree(nr, sizeof(*nr)); return &r->p; }
+        if (r->xnu == xnu && r->p.p_pid == pid) { nmx_spin_unlock(nmx_thread_lock); IOFree(nr, sizeof(*nr)); return &r->p; }
     const pid_t stale = nmx_proc_unlink_stale(b, xnu, pid);
     nr->next = nmx_procs[b];
     nmx_procs[b] = nr;
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     if (stale)
         printf("NullMoth xkpi: pid %d took over the process record of exited pid %d - a fresh record\n", pid, stale);
     return &nr->p;
@@ -225,9 +226,9 @@ static struct thread *nmx_thread_get(int transient, int *created)
     struct nmx_thread_rec *r = nmx_thread_find_fast(xt, xtid);
     if (r)
         return &r->td;
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     r = nmx_thread_find(xt, xtid);
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     if (r)
         return &r->td;
 
@@ -243,7 +244,7 @@ static struct thread *nmx_thread_get(int transient, int *created)
     nr->transient = transient;
 
     int stale = 0;
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     r = nmx_thread_find(xt, xtid);
     if (r == NULL) {
         stale = nmx_thread_unlink_stale(xt, xtid);
@@ -255,7 +256,7 @@ static struct thread *nmx_thread_get(int transient, int *created)
         nr = NULL;
         *created = 1;
     }
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     if (nr)
         IOFree(nr, sizeof(*nr));
     if (stale) {
@@ -284,7 +285,7 @@ static void nmx_thread_drop_current(void)
     const uint64_t xtid = thread_tid(xt);
     unsigned b = bucket_of(xt, NMX_THREAD_BUCKETS);
     struct nmx_thread_rec *found = NULL;
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     for (struct nmx_thread_rec **pp = &nmx_threads[b]; *pp; pp = &(*pp)->next) {
         if ((*pp)->td.td_xnu == xt && (*pp)->xtid == xtid) {
             found = *pp;
@@ -293,7 +294,7 @@ static void nmx_thread_drop_current(void)
             break;
         }
     }
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     (void)found;
 }
 
@@ -331,11 +332,11 @@ void nmx_thread_exit_cleanup(void)
 struct thread *tdfind(lwpid_t tid, pid_t pid)
 {
     struct thread *found = NULL;
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     for (unsigned b = 0; b < NMX_THREAD_BUCKETS && !found; b++)
         for (struct nmx_thread_rec *r = nmx_threads[b]; r; r = r->next)
             if (r->td.td_tid == tid && (pid == -1 || nmx_proc_pid(r->td.td_proc) == pid)) { found = &r->td; break; }
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     return found;
 }
 
@@ -498,6 +499,200 @@ int nmx_intr_disable(void)
 void nmx_intr_restore(int was)
 {
     (void)ml_set_interrupts_enabled(was ? TRUE : FALSE);
+}
+
+/* ---- v75_2: the preemption level on the way back to user space ---------------------------------------------------- */
+
+/*
+ * xnu keeps the preemption level per CPU in its cpu_data (%gs) and gives kexts no call to read it. A thread that goes
+ * back to user space with it raised panics at its next page fault: vm_fault refuses (KERN_FAILURE) and user_trap
+ * panics "vm_fault() KERN_FAILURE from user fault" (WallpaperVideoExtension, 2026-11-18, 105 s after boot). In this
+ * port only the layer's own lck_spin locks raise it (LinuxKPI's spinlock_t is an xnu mutex, preempt_disable() turns
+ * interrupts off). nmx_preempt_calibrate finds the level's offset in cpu_data once: the one dword that rises by one
+ * per lck_spin_lock and falls back after the unlocks. Each DRM entry point compares the level on the way out with the
+ * level it came in with.
+ */
+extern int proc_selfpid(void);
+extern void proc_selfname(char *buf, int size);
+#define NMX_PL_SCAN 256                     /* dwords: the first 1 KB of cpu_data */
+#define NMX_SPIN_CPUS 64
+#define NMX_SPIN_DEPTH 6
+static int nmx_pl_off = -1;
+static struct { const void *lk; const char *file; int line; } nmx_spin_held[NMX_SPIN_CPUS][NMX_SPIN_DEPTH];
+static unsigned char nmx_spin_n[NMX_SPIN_CPUS], nmx_spin_over[NMX_SPIN_CPUS];
+static char nmx_spin_stray[192];            /* the last unlock of a lock this CPU had not noted (another CPU took it) */
+static volatile unsigned nmx_spin_strays, nmx_pl_leaks;
+
+static inline int gs_read32(long off)
+{
+    int v;
+    __asm__ __volatile__("movl %%gs:(%1), %0" : "=r"(v) : "r"(off));
+    return v;
+}
+
+static inline void gs_write32(long off, int v)
+{
+    __asm__ __volatile__("movl %0, %%gs:(%1)" : : "r"(v), "r"(off) : "memory");
+}
+
+static const char *nmx_base(const char *path)
+{
+    const char *b = path;
+    for (const char *s = path; *s; s++)
+        if (*s == '/')
+            b = s + 1;
+    return b;
+}
+
+void nmx_spin_lock_at(lck_spin_t *lk, const char *file, int line)
+{
+    lck_spin_lock(lk);
+    boolean_t was = ml_set_interrupts_enabled(FALSE);
+    const int c = cpu_number();
+    if ((unsigned)c < NMX_SPIN_CPUS) {
+        if (nmx_spin_n[c] < NMX_SPIN_DEPTH) {
+            const int k = nmx_spin_n[c]++;
+            nmx_spin_held[c][k].lk = lk;
+            nmx_spin_held[c][k].file = file;
+            nmx_spin_held[c][k].line = line;
+        } else if (nmx_spin_over[c] < 255)
+            nmx_spin_over[c]++;
+    }
+    ml_set_interrupts_enabled(was);
+}
+
+void nmx_spin_unlock_at(lck_spin_t *lk, const char *file, int line)
+{
+    boolean_t was = ml_set_interrupts_enabled(FALSE);
+    const int c = cpu_number();
+    int stray = 0;
+    if ((unsigned)c < NMX_SPIN_CPUS) {
+        int k = nmx_spin_n[c] - 1;
+        while (k >= 0 && nmx_spin_held[c][k].lk != lk)
+            k--;
+        if (k >= 0) {
+            for (int j = k; j + 1 < nmx_spin_n[c]; j++)
+                nmx_spin_held[c][j] = nmx_spin_held[c][j + 1];
+            nmx_spin_n[c]--;
+        } else if (nmx_spin_over[c] > 0) {
+            nmx_spin_over[c]--;
+        } else {
+            /* taken on another CPU: that CPU keeps the level it raised, this one goes below what it had */
+            const char *tf = "?";
+            int tl = 0, tc = -1;
+            for (int o = 0; o < NMX_SPIN_CPUS && tc < 0; o++)
+                for (int j = 0; j < nmx_spin_n[o]; j++)
+                    if (nmx_spin_held[o][j].lk == lk) { tf = nmx_spin_held[o][j].file; tl = nmx_spin_held[o][j].line; tc = o; break; }
+            snprintf(nmx_spin_stray, sizeof(nmx_spin_stray), "lock %p unlocked at %s:%d on CPU %d, taken at %s:%d on CPU %d",
+                     (void *)lk, nmx_base(file), line, c, nmx_base(tf), tl, tc);
+            nmx_spin_strays++;
+            stray = 1;
+        }
+    }
+    if (stray && nmx_pl_off >= 0) {
+        /* this CPU never raised the level for this lock: the unlock must not lower it (the taker's CPU keeps the raise
+           its lock made; the taker's own entry point puts that back on its way out, nmx_preempt_check) */
+        const int before = gs_read32(nmx_pl_off);
+        lck_spin_unlock(lk);
+        gs_write32(nmx_pl_off, before);
+        ml_set_interrupts_enabled(was);
+        return;
+    }
+    ml_set_interrupts_enabled(was);
+    lck_spin_unlock(lk);
+}
+
+static void nmx_preempt_calibrate(void)
+{
+    static int v[4][NMX_PL_SCAN];
+    lck_spin_t *a = lck_spin_alloc_init(nmx_lck_grp, LCK_ATTR_NULL), *b = lck_spin_alloc_init(nmx_lck_grp, LCK_ATTR_NULL);
+    int found = -1, n = 0;
+    if (a != NULL && b != NULL) {
+        boolean_t was = ml_set_interrupts_enabled(FALSE);
+        for (int i = 0; i < NMX_PL_SCAN; i++) v[0][i] = gs_read32(4L * i);
+        lck_spin_lock(a);
+        for (int i = 0; i < NMX_PL_SCAN; i++) v[1][i] = gs_read32(4L * i);
+        lck_spin_lock(b);
+        for (int i = 0; i < NMX_PL_SCAN; i++) v[2][i] = gs_read32(4L * i);
+        lck_spin_unlock(b);
+        lck_spin_unlock(a);
+        for (int i = 0; i < NMX_PL_SCAN; i++) v[3][i] = gs_read32(4L * i);
+        ml_set_interrupts_enabled(was);
+        for (int i = 0; i < NMX_PL_SCAN; i++)
+            if (v[0][i] >= 0 && v[0][i] < 4 && v[1][i] == v[0][i] + 1 && v[2][i] == v[0][i] + 2 && v[3][i] == v[0][i]) {
+                found = 4 * i;
+                n++;
+            }
+    }
+    if (a != NULL) lck_spin_free(a, nmx_lck_grp);
+    if (b != NULL) lck_spin_free(b, nmx_lck_grp);
+    if (n == 1)
+        nmx_pl_off = found;
+    printf("NullMoth xkpi: preemption level at %%gs:0x%x (%d candidate%s) - the DRM entry points' leak check is %s\n",
+           found < 0 ? 0 : found, n, n == 1 ? "" : "s", n == 1 ? "on" : "OFF");
+}
+
+int nmx_preempt_level(void)
+{
+    return nmx_pl_off < 0 ? 0 : gs_read32(nmx_pl_off);
+}
+
+/*
+ * After a DRM entry point: level0 is what the CPU had when the call came in; both must be 0 (a system call enters
+ * with preemption on). The locks noted on this CPU are tried: one that is free was released on another CPU (a stale
+ * note: this CPU kept the level its lock raised) - the level is put back to 0 and the call named. One that stays
+ * taken for 2 ms is held by nobody running: every later taker would spin on it, so panic now, naming the call and where
+ * the lock was taken, instead of at the process's next page fault with no trace of either.
+ */
+extern boolean_t lck_spin_try_lock(lck_spin_t *lck);
+void nmx_preempt_check(const char *what, unsigned long cmd, int level0)
+{
+    if (nmx_pl_off < 0 || __builtin_expect(level0 == 0 && gs_read32(nmx_pl_off) == 0, 1))
+        return;
+    boolean_t was = ml_set_interrupts_enabled(FALSE);
+    const int lvl = gs_read32(nmx_pl_off), c = cpu_number();
+    if (lvl == 0 && level0 == 0) {
+        ml_set_interrupts_enabled(was);
+        return;
+    }
+    char held[160] = "", stale[160] = "", name[32] = "?";
+    int nh = 0, ns = 0, ah = 0, as = 0;
+    if ((unsigned)c < NMX_SPIN_CPUS) {
+        int keep = 0;
+        for (int j = 0; j < nmx_spin_n[c]; j++) {
+            lck_spin_t *lk = (lck_spin_t *)(uintptr_t)nmx_spin_held[c][j].lk;
+            const uint64_t t0 = mach_absolute_time();
+            boolean_t got;
+            while (!(got = lck_spin_try_lock(lk)) && abs_to_ns(mach_absolute_time() - t0) < 2000000)
+                __asm__ __volatile__("pause");
+            if (got) {
+                lck_spin_unlock(lk);
+                if (as < (int)sizeof(stale) - 1)
+                    as += snprintf(stale + as, sizeof(stale) - as, "%s%s:%d", ns ? ", " : "", nmx_base(nmx_spin_held[c][j].file), nmx_spin_held[c][j].line);
+                ns++;
+            } else {
+                if (ah < (int)sizeof(held) - 1)
+                    ah += snprintf(held + ah, sizeof(held) - ah, "%s%s:%d", nh ? ", " : "", nmx_base(nmx_spin_held[c][j].file), nmx_spin_held[c][j].line);
+                nh++;
+                nmx_spin_held[c][keep++] = nmx_spin_held[c][j];
+            }
+        }
+        nmx_spin_n[c] = (unsigned char)keep;
+    }
+    if (nh == 0)
+        gs_write32(nmx_pl_off, 0);
+    ml_set_interrupts_enabled(was);
+    proc_selfname(name, sizeof(name));
+    const unsigned n = ++nmx_pl_leaks;
+    if (nh > 0)
+        panic("NullMoth xkpi: %s (cmd 0x%lx) of pid %d (%s) returned to user space with the preemption level at %d (came in at %d) "
+              "on CPU %d: spin lock(s) taken at %s still held; stale notes %s; stray unlocks %u, last: %s", what, cmd, proc_selfpid(), name,
+              lvl, level0, c, held, ns ? stale : "none", nmx_spin_strays, nmx_spin_strays ? nmx_spin_stray : "none");
+    if (n <= 16 || (n & 255) == 0)
+        printf("NullMoth xkpi: PREEMPTION LEAK %u: %s (cmd 0x%lx) of pid %d (%s) left the preemption level at %d (came in at %d) on CPU %d "
+               "with no lock of this layer held - put back to 0; stale notes (locks released on another CPU): %s; stray unlocks %u, last: %s\n",
+               n, what, cmd, proc_selfpid(), name, lvl, level0, c, ns ? stale : "none", nmx_spin_strays,
+               nmx_spin_strays ? nmx_spin_stray : "none");
 }
 
 int nmx_curcpu(void)
@@ -705,6 +900,7 @@ int nmx_kernel_init(void)
     nmx_thread_lock = lck_spin_alloc_init(nmx_lck_grp, LCK_ATTR_NULL);
     if (nmx_thread_lock == NULL)
         return ENOMEM;
+    nmx_preempt_calibrate();
     mp_ncpus = nmx_xnu_ncpus();
     mp_ncores = mp_ncpus;
     mp_maxid = mp_ncpus - 1;
@@ -820,7 +1016,7 @@ struct task_struct *nmx_proc_any_task(struct proc *p, bool get)
 {
     extern void nmx_task_get(struct task_struct *ts);
     struct task_struct *ts = NULL;
-    lck_spin_lock(nmx_thread_lock);
+    nmx_spin_lock(nmx_thread_lock);
     for (unsigned b = 0; b < NMX_THREAD_BUCKETS && ts == NULL; b++)
         for (struct nmx_thread_rec *r = nmx_threads[b]; r; r = r->next)
             if (r->td.td_proc == p && r->td.td_lkpi_task != NULL) {
@@ -829,7 +1025,7 @@ struct task_struct *nmx_proc_any_task(struct proc *p, bool get)
                     nmx_task_get(ts);
                 break;
             }
-    lck_spin_unlock(nmx_thread_lock);
+    nmx_spin_unlock(nmx_thread_lock);
     return ts;
 }
 
@@ -838,11 +1034,11 @@ void nmx_threads_release_all(void (*release)(struct thread *))
 {
     for (;;) {
         struct thread *td = NULL;
-        lck_spin_lock(nmx_thread_lock);
+        nmx_spin_lock(nmx_thread_lock);
         for (unsigned b = 0; b < NMX_THREAD_BUCKETS && td == NULL; b++)
             for (struct nmx_thread_rec *r = nmx_threads[b]; r; r = r->next)
                 if (r->td.td_lkpi_task != NULL) { td = &r->td; break; }
-        lck_spin_unlock(nmx_thread_lock);
+        nmx_spin_unlock(nmx_thread_lock);
         if (td == NULL)
             return;
         release(td);            /* clears td_lkpi_task */
