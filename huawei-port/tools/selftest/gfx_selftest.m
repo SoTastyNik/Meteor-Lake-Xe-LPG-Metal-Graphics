@@ -321,7 +321,7 @@ static void test_buffer_mips(void)
     td.usage = MTLTextureUsageShaderRead; td.storageMode = MTLStorageModeShared;
     const NSUInteger asked = td.mipmapLevelCount;
     id<MTLTexture> t = [buf newTextureWithDescriptor:td offset:0 bytesPerRow:bpr];
-    if (!t) { report(name, FAIL, [NSString stringWithFormat:@"%dx%d with %lu mips: nil (the layer stays blank)", W, H, (unsigned long)asked)]; return; }
+    if (!t) { report(name, FAIL, [NSString stringWithFormat:@"%dx%d with %lu mips: nil (the layer stays blank)", W, H, (unsigned long)asked]); return; }
     uint8_t px[4] = { 0 };
     [t getBytes:px bytesPerRow:4 fromRegion:MTLRegionMake2D(17, 23, 1, 1) mipmapLevel:0];
     const BOOL ok = px[0] == 17 && px[1] == 23 && px[2] == 200;
