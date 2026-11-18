@@ -72,7 +72,6 @@
 #include "gem/i915_gem_pm.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
-#include "gt/intel_gt_requests.h"
 #include "gt/intel_gt_print.h"
 #include "gt/intel_rc6.h"
 
@@ -1059,15 +1058,6 @@ static void i915_driver_postclose(struct drm_device *dev, struct drm_file *file)
 
 	/* Catch up with all the deferred frees from "this" client */
 	i915_gem_flush_free_objects(to_i915(dev));
-#ifdef NMXKPI
-	/*
-	 * v74: retire what the closed contexts completed and free their objects now, not at the next background retire:
-	 * a userptr object's wiring holds its process's task (nmx_mm.cpp), and xnu destroys the task's port, which
-	 * launchd waits on to tear the process's domain (and a login session's) down, only with the last reference.
-	 */
-	intel_gt_retire_requests(to_gt(to_i915(dev)));
-	i915_gem_flush_free_objects(to_i915(dev));
-#endif
 }
 
 void i915_driver_shutdown(struct drm_i915_private *i915)

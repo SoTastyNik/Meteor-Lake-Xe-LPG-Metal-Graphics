@@ -1664,7 +1664,8 @@ SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_census, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_
             nmxgpu_census_sysctl, "I",
             "MateBook GPU: write to log which exited processes' tasks NMXGPU still references (census)");
 // v73: the GT floor while WindowServer animates (NMXGPU's animation boost, read every 64 submissions); 0 = off
-static int gNmxGpuBoostMhz = 1500;
+// (v74_2: the default; opening windows was slower with it on battery)
+static int gNmxGpuBoostMhz = 0;
 static int nmxgpu_boost_mhz_sysctl SYSCTL_HANDLER_ARGS
 {
     int v = gNmxGpuBoostMhz;

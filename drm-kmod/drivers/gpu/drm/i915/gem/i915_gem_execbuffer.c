@@ -3681,7 +3681,8 @@ static bool check_buffer_count(size_t count)
  * raises the clock for a flip that waits on the GPU; this port's flips wait in NMXAccel, so instead the floor goes up
  * while WindowServer submits at animation pace (two gaps under 10.5 ms in a row, as at 120 Hz; at rest it submits at
  * 30-60 per second) and comes back 300 ms after the last such gap. debug.nmxgpu_boost_mhz (NMXAccel, read every 64
- * submissions) sets the boosted floor; 0 turns it off.
+ * submissions) sets the boosted floor; 0 turns it off. v74_2: off by default: it gained 1-1.5 ms on Launchpad frames, but
+ * on battery the GPU's share of the package's power budget slowed the CPU work of opening windows (user, v74_1).
  */
 extern int nmx_guc_slpc_animation_min(struct intel_guc_slpc *slpc, u32 freq);
 extern void proc_selfname(char *buf, int size);
@@ -3690,7 +3691,7 @@ extern void nmx_xnu_census(const char *why);
 static struct intel_guc_slpc *nmx_boost_slpc;
 static struct delayed_work nmx_boost_off;
 static atomic_t nmx_boost_ready = ATOMIC_INIT(0), nmx_boosted = ATOMIC_INIT(0);
-static int nmx_boost_mhz = 1500;
+static int nmx_boost_mhz = 0;
 static u64 nmx_boosts;
 
 static void nmx_boost_off_fn(struct work_struct *work)
@@ -3730,6 +3731,8 @@ static void nmx_ws_boost(struct intel_guc_slpc *slpc, bool tunables)
 				mod_delayed_work(system_wq, &nmx_boost_off, 0);
 		}
 	}
+	if (nmx_boost_mhz <= 0)
+		return;     /* off: no process name per submission */
 	proc_selfname(name, sizeof(name));
 	if (strcmp(name, "WindowServer"))
 		return;
