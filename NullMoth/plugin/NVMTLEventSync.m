@@ -641,6 +641,8 @@ static unsigned long long gWsPathN;
 /* v75: before commit: WindowServer building the command buffer (made to committed) and waiting for queue capacity */
 static double gWsEncSum, gWsEncMax, gWsCapSum, gWsCapMax;
 static unsigned long long gWsEncN;
+/* v76: the CPU time inside this plugin per command buffer, by kind (NVMTLObjects.h NVWS_*), with passes and draws */
+static uint64_t gWsCpu[NVWS_N], gWsDraws, gWsPasses;
 static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, double deviceEnd) {
     if (!cb->_traceCommitNS) return;
     const double gpuSeconds = deviceEnd > deviceStart ? deviceEnd - deviceStart : 0;
@@ -655,6 +657,8 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
             gWsEncSum += enc; if (enc > gWsEncMax) gWsEncMax = enc;
             gWsCapSum += cap; if (cap > gWsCapMax) gWsCapMax = cap;
             gWsEncN++;
+            for (int k = 0; k < NVWS_N; k++) gWsCpu[k] += cb->_cpuNs[k];
+            gWsDraws += cb->_nDraws; gWsPasses += cb->_nPasses;
         }
         if (cb->_scheduledNS > cb->_traceCommitNS) {
             const double sched = (cb->_scheduledNS - cb->_traceCommitNS) * 1e-6;
@@ -699,8 +703,23 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    gWsPathSum[WSP_GPU] / n, gWsPathMax[WSP_GPU], gWsPathSum[WSP_SIGNAL] / n, gWsPathMax[WSP_SIGNAL],
                    gWsPathSum[WSP_AFTER] / n, gWsPathMax[WSP_AFTER]);
         }
+        if (gWsEncN && gNvWsCpu) {
+            extern void nvmtl_vk_bind_counts(uint64_t out[2]);
+            extern void nvmtl_resset_counts(uint64_t out[2]);
+            static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+            uint64_t bc[2], rc[2]; nvmtl_vk_bind_counts(bc); nvmtl_resset_counts(rc);
+            const double n = (double)gWsEncN, u = (double)tb.numer / tb.denom * 1e-6 / n;
+            const double plugin = (gWsCpu[NVWS_PASS] + gWsCpu[NVWS_DRAW] + gWsCpu[NVWS_SET] + gWsCpu[NVWS_END]) * u;
+            syslog(LOG_ERR, "NullMoth: frame timing CPU ms avg per command buffer over %llu: plugin %.2f of encode %.2f (pass setup %.2f, "
+                   "draws %.2f incl. bind %.2f, setters %.2f, pass ends %.2f) + commit %.2f; %.1f passes, %.1f draws each; "
+                   "pipeline binds skipped %llu of %llu, resource adds by address %llu of %llu", gWsEncN, plugin, gWsEncSum / n,
+                   gWsCpu[NVWS_PASS] * u, gWsCpu[NVWS_DRAW] * u, gWsCpu[NVWS_BIND] * u, gWsCpu[NVWS_SET] * u, gWsCpu[NVWS_END] * u,
+                   gWsCpu[NVWS_COMMIT] * u, gWsPasses / n, gWsDraws / n, (unsigned long long)bc[1], (unsigned long long)bc[0],
+                   (unsigned long long)rc[0], (unsigned long long)(rc[0] + rc[1]));
+        }
         nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;
+        memset(gWsCpu, 0, sizeof gWsCpu); gWsDraws = gWsPasses = 0;
         gWsEncSum = gWsEncMax = gWsCapSum = gWsCapMax = 0; gWsEncN = 0;
         memset(gWsGpu, 0, sizeof gWsGpu); memset(gWsLat, 0, sizeof gWsLat);
         gWsTimed = gWsUntimed = 0; gWsGpuSum = gWsLatSum = gWsGpuMax = gWsLatMax = gWsSchedSum = gWsSchedMax = 0;

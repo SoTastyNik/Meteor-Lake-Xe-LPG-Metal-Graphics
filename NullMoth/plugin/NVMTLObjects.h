@@ -131,6 +131,7 @@ extern id gNVMTLMainDevice;
   CFTimeInterval _legacyKernelStart, _legacyKernelEnd;
   uint64_t _traceCommitNS;
   uint64_t _createdNS, _capWaitNS; // v75, WindowServer: when it was made (CLOCK_MONOTONIC_RAW), and the wait for queue capacity
+  uint64_t _cpuNs[6]; uint32_t _nDraws, _nPasses; // v76, WindowServer: CPU time spent in this plugin by kind (NVWS_*), mach units
   nvmtl_gpu_interval _gpuTiming; BOOL _gpuTimingSeen, _gpuTimingInvalid;
   NSMutableArray *_parts, *_scheduledHandlers;
   NSUInteger _nextPart;
@@ -156,6 +157,15 @@ extern id gNVMTLMainDevice;
 - (void)nvmtlRecordEncodingError:(NSError *)error;
 - (void)nvmtlFinishCallbacks;
 @end
+/* v76: WindowServer's CPU time inside this plugin while it builds a command buffer, by kind: render pass setup, draws (of
+   which binding the pipeline and its descriptors), resource setters, pass ends and commit. A scope adds its time to the
+   command buffer when it ends; the frame timing census (NVMTLEventSync.m) averages it. nvmtl-no-cpu-census: off. */
+#include <mach/mach_time.h>
+enum { NVWS_PASS, NVWS_DRAW, NVWS_BIND, NVWS_SET, NVWS_END, NVWS_COMMIT, NVWS_N };
+extern int gNvWsCpu;
+typedef struct { __unsafe_unretained NVMTLCommandBuffer *cb; uint64_t t0; int k; } nvws_scope;
+static inline void nvws_scope_end(nvws_scope *s) { if (s->t0 && s->cb) s->cb->_cpuNs[s->k] += mach_absolute_time() - s->t0; }
+#define NVWS_SCOPE(cbx, kind) __attribute__((cleanup(nvws_scope_end), unused)) nvws_scope nvws_s_ = { (cbx), gNvWsCpu ? mach_absolute_time() : 0, (kind) }
 @interface NVMTLDepthStencilState : NSObject <MTLDepthStencilState> { @public int _write; int _compare;
   int _stencil; uint32_t _sf[6], _sb[6]; } @end
 @interface NVMTLSamplerState : NSObject <MTLSamplerState> { @public nvk_sampler _s; NSDictionary *_pixelState; uint64_t _resid; } @end
@@ -216,6 +226,7 @@ uint32_t nvmtl_geoms_from_descriptor(id desc, nvmtl_geom *out, uint32_t max, int
   BOOL _visActive, _visPending;
   NSMutableArray *_visRecords;
   nvk_pass _pass; nvk_rtsig _passSig; BOOL _hasRef, _refused;
+  unsigned _sampGen, _sampKeyGen; NVMTLRenderPipelineState *_sampKeyPs, *_sampSel;   // v76: the last pixel-sampler variant
 } @end
 @interface NVMTLRenderCommandEncoder ()
 - (BOOL)nvmtlBuildPass:(MTLRenderPassDescriptor *)d;
@@ -254,7 +265,8 @@ id<MTLCounterSet> nvmtl_timestamp_counter_set(void);
 } @end
 void nvmtl_texture_desc_swizzle(NVMTLTexture *t, MTLTextureDescriptor *d);
 #include <os/lock.h>
-@interface NVMTLResSet : NSMutableSet { @public NSMutableSet *_s; os_unfair_lock _lk; }
+@interface NVMTLResSet : NSMutableSet { @public NSMutableSet *_s; os_unfair_lock _lk;
+  __unsafe_unretained id _recent[4]; unsigned _rnext; }   // v76: the last members added, compared by address
 - (NVMTLResSet *)nvmtlTakeAll;
 @end
 @interface NVMTLFunction () { @public NSString *_label; } @end

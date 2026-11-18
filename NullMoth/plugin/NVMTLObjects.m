@@ -164,6 +164,9 @@ static inline void nvmtl_resref(id o, int d) {
                  nvmtl_res2_note_use(t); }
     else if (v == 0 && __atomic_load_n(&t->_wantOn, __ATOMIC_ACQUIRE)) nvmtl_res2_kick(1);
 }
+/* v76: adds answered by the last-four memo / by the hash lookup (frame timing CPU census) */
+static _Atomic unsigned long long gResSetFast, gResSetSlow;
+void nvmtl_resset_counts(uint64_t out[2]) { out[0] = atomic_exchange(&gResSetFast, 0); out[1] = atomic_exchange(&gResSetSlow, 0); }
 @implementation NVMTLResSet
 - (instancetype)init { if ((self = [super init])) _s = [NSMutableSet new]; return self; }
 - (instancetype)initWithCapacity:(NSUInteger)n { if ((self = [super init])) _s = [[NSMutableSet alloc] initWithCapacity:n]; return self; }
@@ -177,16 +180,24 @@ static inline void nvmtl_resref(id o, int d) {
 // for-in runs only over a command buffer part's own copy (one thread), never over a set still being encoded into
 - (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)st objects:(id __unsafe_unretained [])b count:(NSUInteger)n {
     return [_s countByEnumeratingWithState:st objects:b count:n]; }
-- (void)addObject:(id)o { if (!o) return; os_unfair_lock_lock(&_lk); BOOL had = [_s member:o] != nil; if (!had) [_s addObject:o];
-    os_unfair_lock_unlock(&_lk); if (!had) nvmtl_resref(o, 1); }
+// v76: CoreAnimation hands the same few resources over again and again (the pipeline and the index buffer at every
+// draw). The last four added are compared by address before the hash lookup; each is a member, held by the set, so its
+// address cannot belong to another object, and anything that takes members out clears them. nvmtl-no-resset-memo: off.
+- (void)addObject:(id)o { if (!o) return; os_unfair_lock_lock(&_lk);
+    if (!NVMTL_GB_OFF("nvmtl-no-resset-memo"))
+        for (unsigned k = 0; k < 4; k++) if (_recent[k] == o) { os_unfair_lock_unlock(&_lk); atomic_fetch_add_explicit(&gResSetFast, 1, memory_order_relaxed); return; }
+    BOOL had = [_s member:o] != nil; if (!had) [_s addObject:o];
+    _recent[_rnext++ & 3] = o;
+    os_unfair_lock_unlock(&_lk); atomic_fetch_add_explicit(&gResSetSlow, 1, memory_order_relaxed); if (!had) nvmtl_resref(o, 1); }
 - (void)removeObject:(id)o { if (!o) return; os_unfair_lock_lock(&_lk); BOOL had = [_s member:o] != nil; if (had) [_s removeObject:o];
+    memset(_recent, 0, sizeof _recent);
     os_unfair_lock_unlock(&_lk); if (had) nvmtl_resref(o, -1); }
 // Clearing, copying and sealing never go through -allObjects. That array is autoreleased into the CALLER's pool, and
 // these run on the app's own commit thread: Geekbench 7 never drains that pool, so every resource a command buffer had
 // ever touched stayed alive, and Super Resolution filled VRAM with 9 MB MPS buffers until allocations were refused.
 // The sets below are owned (+1) and released at the end of scope.
 - (void)removeAllObjects { NSMutableSet *fresh = [NSMutableSet new], *old;
-    os_unfair_lock_lock(&_lk); old = _s; _s = fresh; os_unfair_lock_unlock(&_lk);
+    os_unfair_lock_lock(&_lk); old = _s; _s = fresh; memset(_recent, 0, sizeof _recent); os_unfair_lock_unlock(&_lk);
     for (id o in old) nvmtl_resref(o, -1); }
 - (id)copyWithZone:(NSZone *)z { atomic_fetch_add(&gRes2Tick, 1);
     NVMTLResSet *c = [NVMTLResSet new];
@@ -201,7 +212,7 @@ static inline void nvmtl_resref(id o, int d) {
 // new owner, so each resource's residency count is unchanged; the new set's -dealloc gives it back.
 - (NVMTLResSet *)nvmtlTakeAll { atomic_fetch_add(&gRes2Tick, 1);
     NVMTLResSet *taken = [NVMTLResSet new]; NSMutableSet *empty = taken->_s;
-    os_unfair_lock_lock(&_lk); taken->_s = _s; _s = empty; os_unfair_lock_unlock(&_lk);
+    os_unfair_lock_lock(&_lk); taken->_s = _s; _s = empty; memset(_recent, 0, sizeof _recent); os_unfair_lock_unlock(&_lk);
     return taken; }
 - (void)dealloc { for (id o in _s) nvmtl_resref(o, -1); }
 @end
@@ -1494,8 +1505,27 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
 - (id<MTLTexture>)remoteStorageTexture { return nil; }
 - (id<MTLTexture>)newRemoteTextureViewForDevice:(id<MTLDevice>)d {
     return nil; }
+/* v76: a texture over a buffer's bytes reads them straight from the buffer, as Metal does (the caller has waited for any
+   GPU writes). The image read went through the GPU and answered zeros for a view no GPU work had used yet (selftest
+   buffer-texture-mipmapped, "plain"). Shared buffers only (a managed one keeps a CPU copy apart), level 0 (the view has
+   one), and never past the bytes the CPU owns (a caller's NoCopy pointer). nvmtl-no-buftex-cpu-read: the GPU read. */
+static BOOL nvmtl_buftex_cpu_read(NVMTLTexture *t, void *bytes, NSUInteger row, MTLRegion r, NSUInteger level) {
+    NVMTLBuffer *b = t->_backBuf;
+    if (!b || t->_tbView || t->_parent || level || b->_shadow.map || NVMTL_GB_OFF("nvmtl-no-buftex-cpu-read")) return NO;
+    const size_t bpp = t->_i.bpp, w = r.size.width * bpp;
+    if (!bpp || !t->_backBPR || r.size.depth > 1 || r.origin.z || r.origin.x + r.size.width > t->_i.w || r.origin.y + r.size.height > t->_i.h) return NO;
+    if (!r.size.height || !w) return YES;
+    const uint8_t *src = (const uint8_t *)[b contents];
+    const size_t len = b->_hostPtr ? b->_hostLen : b->_b.size;
+    const size_t end = t->_backOff + (r.origin.y + r.size.height - 1) * t->_backBPR + r.origin.x * bpp + w;
+    if (!src || end > len || row < w) return NO;
+    for (NSUInteger y = 0; y < r.size.height; y++)
+        memcpy((uint8_t *)bytes + y * row, src + t->_backOff + (r.origin.y + y) * t->_backBPR + r.origin.x * bpp, w);
+    return YES;
+}
 - (void)getBytes:(void *)bytes bytesPerRow:(NSUInteger)row fromRegion:(MTLRegion)region mipmapLevel:(NSUInteger)level { NVS(NVS_GETBYTES);
     if (level >= [self mipmapLevelCount]) { nvlog("getBytes: mip level %lu — this texture has %lu", (unsigned long)level, (unsigned long)[self mipmapLevelCount]); return; }
+    if (nvmtl_buftex_cpu_read(self, bytes, row, region, level)) return;
     [self nvmtlSurfaceIn];
     nvmtl_census("getBytes", (uint32_t)region.size.width, (uint32_t)region.size.height, _surf != NULL);
     if (nvmtl_vk_image_read_region_level_layer(_q, [self nvi], (uint8_t *)bytes, row, (uint32_t)region.origin.x, (uint32_t)region.origin.y,
@@ -1509,6 +1539,7 @@ static id nvmtl_surface_sync(NVMTLTexture *t) {
         if (!src || region.origin.x + region.size.width > _i.w) { nvlog("getBytes: texture buffer is not CPU-visible or the region is outside it"); return; }
         memcpy(bytes, src + _backOff + region.origin.x * _i.bpp, region.size.width * _i.bpp); return; }
     if (level >= [self mipmapLevelCount]) { nvlog("getBytes: mip level %lu — this texture has %lu", (unsigned long)level, (unsigned long)[self mipmapLevelCount]); return; }
+    if (!slice && nvmtl_buftex_cpu_read(self, bytes, row, region, level)) return;
     [self nvmtlSurfaceIn];
     nvk_image *im = [self nvi]; BOOL vol = im->mtl_type == 7; NSUInteger nz = vol ? (region.size.depth ? region.size.depth : 1) : 1;
     NSUInteger per = img ? img : row * region.size.height; int rc = 0;
@@ -2752,9 +2783,14 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     return o;
 }
 - (BOOL)nvmtlBindSamplerPipeline {
+    NVWS_SCOPE(_cb, NVWS_BIND);
     if (!_ps) return NO;
     NVMTLRenderPipelineState *selected=_ps;
-    if(_vertexSamplers.count || _fragmentSamplers.count) {
+    // v76: the variant depends only on the pipeline and the pixel samplers bound: while neither changed since the last
+    // draw, that draw's variant is taken instead of writing both sampler tables out as JSON again. nvmtl-no-sampvar-memo
+    if((_vertexSamplers.count || _fragmentSamplers.count) && _sampSel && _sampKeyPs==_ps && _sampKeyGen==_sampGen && !NVMTL_GB_OFF("nvmtl-no-sampvar-memo"))
+        selected=_sampSel;
+    else if(_vertexSamplers.count || _fragmentSamplers.count) {
         NSDictionary *vS=nvmtl_pixel_sampler_norm(_vertexSamplers),*fS=nvmtl_pixel_sampler_norm(_fragmentSamplers);
         NSData *key=[NSJSONSerialization dataWithJSONObject:@[vS,fS] options:NSJSONWritingSortedKeys error:NULL];
         @synchronized(_ps) {
@@ -2781,6 +2817,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
                 nvlog("pixel sampler variant built: %s / %s",_ps->_vname.UTF8String,_ps->_fname.UTF8String);
             }
         }
+        _sampSel=selected; _sampKeyPs=_ps; _sampKeyGen=_sampGen;
     }
     if(!_cb->_resources)_cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:selected];
     nvmtl_vk_cmd_bind_pipeline(&_cb->_c,&selected->_p);
@@ -2933,6 +2970,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     if (!_hasRef) { nvmtl_vk_cmd_set_stencil_ref(&_cb->_c, 0, 0); _hasRef = YES; }
 }
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)ps {
+    NVWS_SCOPE(_cb, NVWS_SET);
     { NVMTLRenderPipelineState *p_ = (NVMTLRenderPipelineState *)ps;
       if (p_ && nvmtl_trace_on()) {
           extern int nvmtl_vk_pipeline_stats(void *pipe, char *out, size_t n);
@@ -3014,6 +3052,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     }
 }
 - (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)off atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLBuffer *nb = (NVMTLBuffer *)b;
     if (!nb) { nvlog("setVertexBuffer: nil at index %lu", (unsigned long)i); return; }
     if (!_cb->_resources) _cb->_resources = [NVMTLResSet new];
@@ -3030,6 +3069,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     NVMTLAccelerationStructure *a = (NVMTLAccelerationStructure *)as;
     if (a && [(id)a isKindOfClass:[NVMTLAccelerationStructure class]] && a->_uid.buf && _cb) nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_FRAGMENT, 31, &a->_uid, 0); }
 - (void)setFragmentBuffer:(id<MTLBuffer>)b offset:(NSUInteger)off atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLBuffer *nb = (NVMTLBuffer *)b;
     if (!nb) { nvlog("setFragmentBuffer: nil at index %lu", (unsigned long)i); return; }
     if (!_cb->_resources) _cb->_resources = [NVMTLResSet new];
@@ -3041,6 +3081,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
 }
 static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, size_t *off);
 - (void)nvmtlBindBytes:(const void *)bytes length:(NSUInteger)len atIndex:(NSUInteger)i set:(uint32_t)set {
+    NVWS_SCOPE(_cb, NVWS_SET);
     size_t roff = 0;
     NVMTLBuffer *nb = nvmtl_bytes_ring(_cb, len, &roff);
     const BOOL ring = nb != nil;
@@ -3061,6 +3102,7 @@ static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, siz
 - (void)setVertexBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_VERTEX]; }
 - (void)setFragmentBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_FRAGMENT]; }
 - (void)setVertexTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLTexture *nt = (NVMTLTexture *)t;
     if (!nt) { nvlog("setVertexTexture: nil at index %lu", (unsigned long)i); return; }
     nvmtl_retain_resource(_cb, nt);
@@ -3077,31 +3119,37 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     return i < 16 ? keys[i] : [@(i) stringValue];
 }
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLSamplerState *ns = (NVMTLSamplerState *)s;
     if (i >= 16 || nvmtl_vk_bind_sampler(&_cb->_c, NVMTL_SET_FRAGMENT, (uint32_t)i, ns ? &ns->_s : NULL)) {
         nvlog("setFragmentSamplerState: invalid index or bind failure"); return;
     }
     if (!_fragmentSamplers) _fragmentSamplers=[NSMutableDictionary new];
     NSString *key=nvmtl_slot_key(i);
+    { NSDictionary *was=_fragmentSamplers[key], *now=ns ? ns->_pixelState : nil; if (was!=now) _sampGen++; }
     if(ns && ns->_pixelState) _fragmentSamplers[key]=ns->_pixelState;else [_fragmentSamplers removeObjectForKey:key];
     nvtrace("FRAGMENT SAMPLER[%lu] pixel=%d bound=%d",(unsigned long)i,ns && ns->_pixelState!=nil,ns!=nil);
     if(ns) { if (!_cb->_resources) _cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:ns]; }
 }
 - (void)setVertexSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLSamplerState *ns = (NVMTLSamplerState *)s;
     if (i >= 16 || nvmtl_vk_bind_sampler(&_cb->_c, NVMTL_SET_VERTEX, (uint32_t)i, ns ? &ns->_s : NULL)) {
         nvlog("setVertexSamplerState: invalid index or bind failure"); return;
     }
     if (!_vertexSamplers) _vertexSamplers=[NSMutableDictionary new];
     NSString *key=nvmtl_slot_key(i);
+    { NSDictionary *was=_vertexSamplers[key], *now=ns ? ns->_pixelState : nil; if (was!=now) _sampGen++; }
     if(ns && ns->_pixelState) _vertexSamplers[key]=ns->_pixelState;else [_vertexSamplers removeObjectForKey:key];
     nvtrace("VERTEX SAMPLER[%lu] pixel=%d bound=%d",(unsigned long)i,ns && ns->_pixelState!=nil,ns!=nil);
     if(ns) { if (!_cb->_resources) _cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:ns]; }
 }
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {
+    NVWS_SCOPE(_cb, NVWS_SET);
     NVMTLTexture *nt = (NVMTLTexture *)t;
     if (!nt) { nvlog("setFragmentTexture: nil at index %lu", (unsigned long)i); return; }
-    if (!strcmp(getprogname(),"Weather")) {
+    static int weather = -1; if (weather < 0) weather = !strcmp(getprogname(), "Weather");
+    if (weather) {
         static _Atomic unsigned traceCount;
         if (atomic_fetch_add(&traceCount,1)<8) {
             NVMTLTexture *root=nt->_parent ?: nt; MTLTextureSwizzleChannels sw=nt.swizzle;
@@ -3124,6 +3172,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
 }
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start vertexCount:(NSUInteger)count
          instanceCount:(NSUInteger)instances baseInstance:(NSUInteger)baseInstance { NVS(NVS_DRAW); NVSN(NVS_DRAWVERTS, count);
+    NVWS_SCOPE(_cb, NVWS_DRAW); _cb->_nDraws++;
     if (!_begun) { nvlog("encoder: draw with no pipeline set"); return; }
     if (![self nvmtlBindSamplerPipeline]) return;
     nvtrace("DRAW type %u | vs %s | fs %s | blend %s", (unsigned)type, _ps ? _ps->_vname.UTF8String : "-", _ps ? _ps->_fname.UTF8String : "-", _ps ? _ps->_blend.UTF8String : "-");
@@ -3251,6 +3300,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     [self nvmtlBeginVisibility];
 }
 - (void)endEncoding {
+    NVWS_SCOPE(_cb, NVWS_END);
     _cb->_nEnd++;
     [self nvmtlCloseVisibility];
     if (_begun) nvmtl_vk_cmd_end_render(&_cb->_c);
@@ -3377,6 +3427,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type indexCount:(NSUInteger)count indexType:(MTLIndexType)it
                   indexBuffer:(id<MTLBuffer>)ib indexBufferOffset:(NSUInteger)off
                 instanceCount:(NSUInteger)instances baseVertex:(NSInteger)baseVertex baseInstance:(NSUInteger)baseInstance { NVS(NVS_DRAWIDX); NVSN(NVS_IDXCOUNT, count); NVSN(NVS_INSTANCES, instances);
+    NVWS_SCOPE(_cb, NVWS_DRAW); _cb->_nDraws++;
     if (!_begun) { nvlog("drawIndexedPrimitives with no pipeline set"); return; }
     NVMTLBuffer *b = (NVMTLBuffer *)ib;
     if (!b) { nvlog("drawIndexedPrimitives with no index buffer"); return; }
@@ -3474,7 +3525,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     NSString *key=nvmtl_slot_key(i);
     if(_fragmentSamplers[key]) {
         NSMutableDictionary *state=[_fragmentSamplers[key] mutableCopy];
-        state[@"lod_min_clamp"]=@(lo);state[@"lod_max_clamp"]=@(hi);_fragmentSamplers[key]=state;
+        state[@"lod_min_clamp"]=@(lo);state[@"lod_max_clamp"]=@(hi);_fragmentSamplers[key]=state;_sampGen++;
     }
 }
 - (void)setVertexSamplerState:(id<MTLSamplerState>)ss lodMinClamp:(float)lo lodMaxClamp:(float)hi atIndex:(NSUInteger)i {
@@ -3482,7 +3533,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     NSString *key=nvmtl_slot_key(i);
     if(_vertexSamplers[key]) {
         NSMutableDictionary *state=[_vertexSamplers[key] mutableCopy];
-        state[@"lod_min_clamp"]=@(lo);state[@"lod_max_clamp"]=@(hi);_vertexSamplers[key]=state;
+        state[@"lod_min_clamp"]=@(lo);state[@"lod_max_clamp"]=@(hi);_vertexSamplers[key]=state;_sampGen++;
     }
 }
 - (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained [])ss lodMinClamps:(const float *)lo lodMaxClamps:(const float *)hi withRange:(NSRange)r {
@@ -4940,6 +4991,7 @@ destinationBytesPerImage:(NSUInteger)img options:(MTLBlitOption)opt {
     return p;
 }
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d { NVS(NVS_RENC);
+    NVWS_SCOPE(self, NVWS_PASS); _nPasses++;
     if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLRenderCommandEncoder class]];
     nvmtl_g79_flush(self);
     NVMTLRenderCommandEncoder *e = [NVMTLRenderCommandEncoder new];
@@ -5115,7 +5167,9 @@ static void nvmtl_app_surface_wait(NVMTLCommandBuffer *cb)
     for (NVMTLSubmissionPart *part in cb->_parts) if (part->waitEvent) return;
     [cb waitUntilCompleted];
 }
-- (void)commit { if (!strcmp(getprogname(),"WindowServer") || !strcmp(getprogname(),"Weather")) _traceCommitNS=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); NVS(NVS_COMMIT); nvmtl_apistat_tick(); nvmtl_mark_pending(self); [self nvmtlSubmitWithEvents]; nvmtl_app_surface_wait(self); }
+- (void)commit { static int traced = -1; if (traced < 0) traced = !strcmp(getprogname(),"WindowServer") || !strcmp(getprogname(),"Weather");
+    if (traced) _traceCommitNS=clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    NVWS_SCOPE(self, NVWS_COMMIT); NVS(NVS_COMMIT); nvmtl_apistat_tick(); nvmtl_mark_pending(self); [self nvmtlSubmitWithEvents]; nvmtl_app_surface_wait(self); }
 - (id<MTLComputeCommandEncoder>)computeCommandEncoder { NVS(NVS_CENC);
     if (_cbError) return [NVMTLFailedEncoder encoderForDevice:[self device] encodingClass:[NVMTLComputeCommandEncoder class]];
     NVMTLComputeCommandEncoder *e = [NVMTLComputeCommandEncoder new]; e->_cb = self; _nEnc++; return e;
@@ -5260,6 +5314,7 @@ static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned s
 - (NSString *)label { return _label; }
 @end
 
+int gNvWsCpu;   // v76: WindowServer, CPU census on (NVMTLObjects.h)
 @implementation NVMTLCommandQueue
 - (NSUInteger)getGPUPriority { return 1; }
 - (NSUInteger)getBackgroundGPUPriority { return 2; }
@@ -5279,7 +5334,7 @@ static void nvmtl_wait_kick(NVMTLCommandBuffer *cb, const char *what, unsigned s
 - (void)dealloc { nvmtl_vk_queue_destroy(&_q); }
 - (id<MTLCommandBuffer>)commandBuffer {
     dispatch_semaphore_t cap = nil;
-    static int ws = -1; if (ws < 0) ws = !strcmp(getprogname(), "WindowServer");
+    static int ws = -1; if (ws < 0) { ws = !strcmp(getprogname(), "WindowServer"); gNvWsCpu = ws && !NVMTL_GB_OFF("nvmtl-no-cpu-census"); }
     const uint64_t w0 = ws ? clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) : 0;
     if (nvmtl_async_commit_on()) {
         @synchronized ([NVMTLCommandQueue class]) { if (!_capacity) _capacity = dispatch_semaphore_create(_capacityCount ? _capacityCount : 64); cap = _capacity; }

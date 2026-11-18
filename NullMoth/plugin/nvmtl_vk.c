@@ -5326,6 +5326,7 @@ static void nvmtl_clear_colour(VkClearColorValue *cv, uint32_t fmt, const float 
 }
 
 static void nvmtl_private_depth_layout(nvk_cmdbuf *, nvk_image *, VkImageLayout);
+static void nvmtl_bind_gfx(nvk_cmdbuf *c, void *pipe);   /* v76: below, with nvmtl_vk_cmd_bind_pipeline */
 int nvmtl_vk_cmd_begin_pass(nvk_cmdbuf *c, const nvk_pass *ps, nvk_pipeline *p)
 {
     if (!p->rp || !ps->w || !ps->h) { nvlog("begin_render: apps2 no render pass or a %ux%u pass — pass REFUSED", ps->w, ps->h); return -1; }
@@ -5505,7 +5506,7 @@ int nvmtl_vk_cmd_begin_pass(nvk_cmdbuf *c, const nvk_pass *ps, nvk_pipeline *p)
       } }
     pvkCmdBeginRenderPass(c->cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
     c->in_rp = 1;
-    if (p->pipe) pvkCmdBindPipeline(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p->pipe);
+    if (p->pipe) nvmtl_bind_gfx(c, p->pipe);
     VkViewport vp = { 0, (float)ps->h, (float)ps->w, -(float)ps->h, 0, 1 }; VkRect2D sc = { { 0, 0 }, { ps->w, ps->h } };
     pvkCmdSetViewport(c->cb, 0, 1, &vp); pvkCmdSetScissor(c->cb, 0, 1, &sc);
     return 0;
@@ -5892,7 +5893,30 @@ void nvmtl_vk_cmd_draw(nvk_cmdbuf *c, uint32_t first, uint32_t count, uint32_t i
 { if (c->nobind) return; pvkCmdDraw(c->cb, count, instances ? instances : 1, first, baseInstance); }
 void nvmtl_vk_cmd_set_scissor(nvk_cmdbuf *c, int32_t x, int32_t y, uint32_t w, uint32_t h)
 { VkRect2D r = { { x, y }, { w, h } }; pvkCmdSetScissor(c->cb, 0, 1, &r); }
-void nvmtl_vk_cmd_bind_pipeline(nvk_cmdbuf *c, nvk_pipeline *p) { pvkCmdBindPipeline(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipeline)p->pipe); }
+/* v76: binding the graphics pipeline that is already bound still costs ANV a shader bind (the shaders' relocations are
+   appended again) and a copy of the pipeline's dynamic state, which the next draw then emits again: CoreAnimation sets
+   a pipeline before every draw, mostly the one already bound. Every state this plugin sets with vkCmdSet* is dynamic
+   in all its graphics pipelines (nvmtl_vk_pipeline_create_* lists them), so binding the same one again changes nothing.
+   Keyed by the VkCommandBuffer as well: a new one starts with nothing bound. nvmtl-no-bind-dedupe: bind every time. */
+static _Atomic unsigned long long g_gfx_binds, g_gfx_bind_skips;
+static void nvmtl_bind_gfx(nvk_cmdbuf *c, void *pipe)
+{
+    static int off = -1;
+    if (off < 0) off = NVMTL_GB_OFF("nvmtl-no-bind-dedupe");
+    atomic_fetch_add_explicit(&g_gfx_binds, 1, memory_order_relaxed);
+    if (!off && pipe && c->gfx_pipe == pipe && c->gfx_pipe_cb == c->cb) {
+        atomic_fetch_add_explicit(&g_gfx_bind_skips, 1, memory_order_relaxed);
+        return;
+    }
+    pvkCmdBindPipeline(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipeline)pipe);
+    c->gfx_pipe = pipe; c->gfx_pipe_cb = c->cb;
+}
+void nvmtl_vk_bind_counts(uint64_t out[2])
+{
+    out[0] = atomic_exchange(&g_gfx_binds, 0);
+    out[1] = atomic_exchange(&g_gfx_bind_skips, 0);
+}
+void nvmtl_vk_cmd_bind_pipeline(nvk_cmdbuf *c, nvk_pipeline *p) { nvmtl_bind_gfx(c, p->pipe); }
 int nvmtl_vk_cmd_set_topology(nvk_cmdbuf *c, unsigned mtlType) { return nvmtl_vk_cmd_set_topology_restart(c, mtlType, 0); }
 /* restart: 0 Metal's rule (strips restart at the all-ones index, lists never), 1 off, 2 on for strips. 1 and 2 come from
    the encoder SPI setPrimitiveRestartEnabled:[index:], which Apple's GL-over-Metal calls to carry GL's restart state;
