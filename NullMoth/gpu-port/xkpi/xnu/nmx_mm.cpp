@@ -462,7 +462,7 @@ extern "C" int nmx_xnu_task_gone(task_t task)
  */
 extern "C" int nmx_xnu_devfs_sweep(void);
 static thread_call_t gSweep;
-static volatile UInt32 gSweepStop;
+static UInt32 gSweepStop;   /* __atomic: no new kernel import */
 static struct { task_t task; int pid; char name[24]; } gSweepRow[128];   /* mm_sweep only: one run at a time */
 
 extern "C" int nmx_xnu_pid_gone(int pid)
@@ -479,7 +479,7 @@ extern "C" int nmx_xnu_pid_gone(int pid)
 
 static void mm_sweep_arm(void)
 {
-    if (gSweep == nullptr || gSweepStop)
+    if (gSweep == nullptr || __atomic_load_n(&gSweepStop, __ATOMIC_ACQUIRE))
         return;
     uint64_t deadline;
     clock_interval_to_deadline(2, kSecondScale, &deadline);
@@ -515,7 +515,7 @@ static void mm_sweep(thread_call_param_t, thread_call_param_t)
 
 static void mm_sweep_start(void)
 {
-    if (gSweep != nullptr || gSweepStop)
+    if (gSweep != nullptr || __atomic_load_n(&gSweepStop, __ATOMIC_ACQUIRE))
         return;
     thread_call_t tc = thread_call_allocate(mm_sweep, nullptr);
     if (tc == nullptr)
@@ -527,16 +527,16 @@ static void mm_sweep_start(void)
     mm_sweep_arm();
 }
 
-/* unload: no sweep runs after this (a run in progress may have armed the next one: cancel twice) */
+/* unload: no sweep runs after this. thread_call_cancel_wait is not exported to kexts (nmx_fb.cpp): cancel and retry
+   the free until a run in progress is out; with the stop flag set it arms no next one */
 extern "C" void nmx_xnu_mm_fini(void)
 {
-    OSCompareAndSwap(0, 1, &gSweepStop);
+    __atomic_store_n(&gSweepStop, 1, __ATOMIC_RELEASE);
     thread_call_t tc = gSweep;
     if (tc == nullptr)
         return;
-    thread_call_cancel_wait(tc);
-    thread_call_cancel_wait(tc);
-    thread_call_free(tc);
+    thread_call_cancel(tc);
+    while (!thread_call_free(tc)) { thread_call_cancel(tc); IOSleep(5); }
     gSweep = nullptr;
 }
 
