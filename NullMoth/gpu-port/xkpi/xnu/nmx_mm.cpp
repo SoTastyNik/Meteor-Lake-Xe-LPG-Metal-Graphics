@@ -19,6 +19,9 @@
 #include <sys/systm.h>
 #include <sys/proc.h>
 #include <kern/task_ref.h>
+#include <kern/thread_call.h>
+#include <kern/clock.h>
+#include <libkern/OSAtomic.h>
 #include "nmx_xnu.h"
 
 namespace {
@@ -59,6 +62,7 @@ task_t find_ref(void *mm)
 }
 }
 
+static void mm_sweep_start(void);
 extern "C" void nmx_xnu_mm_note_task(void *mm)
 {
     MmTask *e = IONew(MmTask, 1);
@@ -73,6 +77,7 @@ extern "C" void nmx_xnu_mm_note_task(void *mm)
     e->next = gList;
     gList = e;
     IOLockUnlock(gLock);
+    mm_sweep_start();
 }
 
 extern "C" void nmx_xnu_mm_forget(void *mm)
@@ -441,6 +446,98 @@ extern "C" int nmx_xnu_task_gone(task_t task)
     for (int i = 0; i < n; i++)
         task_deallocate(drop[i]);
     return n;
+}
+
+/*
+ * v76_1: a process can own an mm record without ever opening a DRM node: the first of its threads to enter the port (an
+ * IOKit call into NMXGPU on its behalf) makes its LinuxKPI current and mm (linux_alloc_current), and only the last DRM
+ * close of a gone process let the record's task go (nmx_devfs.cpp). loginwindow had such a record and no open (11-22,
+ * v76): after the logout its task stayed referenced, so its task port never died, launchd kept the old gui/501 session
+ * for it and logging in again spun forever ("Active GUI session already exists for user, pending request"). Opens a
+ * process never closed (IOKit clients of processes that died) held their tasks the same way.
+ *
+ * Every 2 s, records of processes that are gone - their pid not found, or exiting - let their tasks go, here and in
+ * the opens (nmx_xnu_devfs_sweep). A live process is always found under its pid, so it never loses its task here; a
+ * pid reused meanwhile only delays the release. kernel_task (pid 0) is never swept.
+ */
+extern "C" int nmx_xnu_devfs_sweep(void);
+static thread_call_t gSweep;
+static volatile UInt32 gSweepStop;
+static struct { task_t task; int pid; char name[24]; } gSweepRow[128];   /* mm_sweep only: one run at a time */
+
+extern "C" int nmx_xnu_pid_gone(int pid)
+{
+    if (pid <= 0)
+        return 0;
+    proc_t p = proc_find(pid);
+    if (p == nullptr)
+        return 1;
+    const int gone = proc_exiting(p) != 0;
+    proc_rele(p);
+    return gone;
+}
+
+static void mm_sweep_arm(void)
+{
+    if (gSweep == nullptr || gSweepStop)
+        return;
+    uint64_t deadline;
+    clock_interval_to_deadline(2, kSecondScale, &deadline);
+    thread_call_enter_delayed(gSweep, deadline);
+}
+
+static void mm_sweep(thread_call_param_t, thread_call_param_t)
+{
+    int n = 0;
+    IOLockLock(lock());
+    for (MmTask *e = gList; e != nullptr && n < 128; e = e->next)
+        if (e->task != nullptr && e->pid > 0) {
+            gSweepRow[n].task = e->task;
+            task_reference(e->task);
+            gSweepRow[n].pid = e->pid;
+            strlcpy(gSweepRow[n].name, e->name, sizeof(gSweepRow[n].name));
+            n++;
+        }
+    IOLockUnlock(gLock);
+    for (int i = 0; i < n; i++) {
+        if (nmx_xnu_pid_gone(gSweepRow[i].pid) && nmx_xnu_task_gone(gSweepRow[i].task) > 0) {
+            static SInt32 said;
+            if (OSIncrementAtomic(&said) < 16)
+                IOLog("NullMoth GPU: pid %d (%s) is gone and its mm record still held its task (no last DRM close): "
+                      "let go\n", gSweepRow[i].pid, gSweepRow[i].name);
+        }
+        task_deallocate(gSweepRow[i].task);
+        gSweepRow[i].task = nullptr;
+    }
+    nmx_xnu_devfs_sweep();
+    mm_sweep_arm();
+}
+
+static void mm_sweep_start(void)
+{
+    if (gSweep != nullptr || gSweepStop)
+        return;
+    thread_call_t tc = thread_call_allocate(mm_sweep, nullptr);
+    if (tc == nullptr)
+        return;
+    if (!OSCompareAndSwapPtr(nullptr, tc, (void * volatile *)&gSweep)) {
+        thread_call_free(tc);
+        return;
+    }
+    mm_sweep_arm();
+}
+
+/* unload: no sweep runs after this (a run in progress may have armed the next one: cancel twice) */
+extern "C" void nmx_xnu_mm_fini(void)
+{
+    OSCompareAndSwap(0, 1, &gSweepStop);
+    thread_call_t tc = gSweep;
+    if (tc == nullptr)
+        return;
+    thread_call_cancel_wait(tc);
+    thread_call_cancel_wait(tc);
+    thread_call_free(tc);
+    gSweep = nullptr;
 }
 
 namespace {

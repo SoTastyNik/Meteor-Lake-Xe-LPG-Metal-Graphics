@@ -68,6 +68,8 @@ static GoneRec g_gone[16];                     /* under g_lock */
 static int g_gone_n;
 static thread_call_t g_gone_tc;
 extern "C" void nmx_xnu_task_gone_check(task_t task, int pid, const char *name, int secs);
+extern "C" int nmx_xnu_pid_gone(int pid);
+extern "C" void nmx_xnu_mm_fini(void);
 extern "C" void nmx_xnu_census_add(void *ctx, task_t task, int pid, const char *name, int kind, uint64_t amount);
 
 static void gone_fire(thread_call_param_t, thread_call_param_t)
@@ -220,7 +222,7 @@ static int nmx_close(dev_t dev, int flags, int devtype, struct proc *p)
     }
     for (OpenRec **pp = &g_opens; *pp != nullptr; pp = &(*pp)->next)
         if ((*pp)->minor == m) { rec = *pp; *pp = rec->next; break; }
-    if (rec != nullptr) {
+    if (rec != nullptr && rec->task != nullptr) {   /* v76_1: nullptr once a sweep let a gone opener's task go */
         last = true;
         for (OpenRec *o = g_opens; o != nullptr; o = o->next)
             if (o->task == rec->task) { last = false; break; }
@@ -247,7 +249,7 @@ static int nmx_close(dev_t dev, int flags, int devtype, struct proc *p)
                 thread_call_enter_delayed(tc, deadline);
             }
         }
-        if (!queued)
+        if (!queued && rec->task != nullptr)
             task_deallocate(rec->task);
         IODelete(rec, OpenRec, 1);
     }
@@ -340,8 +342,59 @@ extern "C" int nmx_xnu_devfs_busy(void)
     return busy;
 }
 
+/*
+ * v76_1 (nmx_mm.cpp, every 2 s): opens whose process is gone and never closed them - IOKit clients of processes that
+ * died (AXVisualSupportAgent, NotificationCenter, SafeEjectGPUService on 11-22) - let their tasks go. The open itself
+ * stays until it closes. A process with opens and fixed mappings keeps the mappings' references (needed to unmap).
+ */
+extern "C" int nmx_xnu_devfs_sweep(void)
+{
+    static struct { task_t task; int pid; char name[24]; } row[64];   /* the sweep's thread only */
+    int n = 0, freed = 0;
+    if (g_lock == nullptr)
+        return 0;
+    IOLockLock(g_lock);
+    for (OpenRec *o = g_opens; o != nullptr && n < 64; o = o->next) {
+        if (o->task == nullptr || o->pid <= 0)
+            continue;
+        int k = 0;
+        while (k < n && row[k].task != o->task) k++;
+        if (k < n)
+            continue;
+        row[n].task = o->task;
+        task_reference(o->task);
+        row[n].pid = o->pid;
+        strlcpy(row[n].name, o->name, sizeof(row[n].name));
+        n++;
+    }
+    IOLockUnlock(g_lock);
+    for (int i = 0; i < n; i++) {
+        if (nmx_xnu_pid_gone(row[i].pid)) {
+            task_t drop[16];
+            int nd = 0;
+            IOLockLock(g_lock);
+            for (OpenRec *o = g_opens; o != nullptr && nd < 16; o = o->next)
+                if (o->task == row[i].task) { drop[nd++] = o->task; o->task = nullptr; }
+            IOLockUnlock(g_lock);
+            for (int d = 0; d < nd; d++)
+                task_deallocate(drop[d]);
+            if (nd > 0) {
+                freed += nd;
+                static SInt32 said;
+                if (OSIncrementAtomic(&said) < 16)
+                    IOLog("NullMoth GPU: pid %d (%s) is gone with %d DRM open(s) it never closed: they let its task go\n",
+                          row[i].pid, row[i].name, nd);
+            }
+        }
+        task_deallocate(row[i].task);
+        row[i].task = nullptr;
+    }
+    return freed;
+}
+
 extern "C" void nmx_xnu_devfs_fini(void)
 {
+    nmx_xnu_mm_fini();
     if (g_major >= 0)
         cdevsw_remove(g_major, &g_cdevsw);
     g_major = -1;
