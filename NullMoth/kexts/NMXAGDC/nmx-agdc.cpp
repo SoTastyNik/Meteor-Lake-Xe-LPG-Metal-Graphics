@@ -45,6 +45,14 @@ static int    gAgdcK5 = 0;
 static int    gAgdcGamma = 1;          // answer plane 0's gamma capability (0x711 type 2)
 static SInt64 gAgdcGammaAnswers = 0;
 static int    gAgdc711Types = 0;       // bit t = an extended-capability query of type t (0x711)
+/* v77 (ArrowWhatever patch 0030): the plane-scaler entry's AGDC pixel-format mask says BGRA (AGDC bits 0 and 16, which
+   IOPresentment moves to bits 32 / 48; CoreDisplay's SupportsPixelFormat('BGRA') needs one of them), with the second
+   word 1, as Apple's ICL framebuffer answers. With the old 0x80004 / 0 CoreDisplay could not put WindowServer's BGRA
+   composite on the plane and copied it into a display surface with a full-screen GPUPass every frame - the
+   UberCompositeFragment pass, ~0.45 ms of GPU time a frame on this panel. Read when WindowServer starts;
+   debug.nmxfb_agdc_k5_bgra=0 or the boot argument nmxagdcnobgra answers the old mask. */
+static int    gAgdcK5Bgra = 1;
+static SInt64 gAgdcK5BgraAnswers = 0;
 static SInt64 gAgdcK5Link = 0, gAgdcK5Caps = 0;
 static int    gAgdcK5Why = 0;
 static SInt64 gAgdcCmds = 0, gAgdcUnsupported = 0;
@@ -87,6 +95,13 @@ static IOReturn nvdaK5Answer(IOService *fb, unsigned int cmd, unsigned long *in,
     }
     int why = 0; int32_t idx = -1;
     int r = nvk5_answer_heads(cmd, in, inSize, out, outSize ? *outSize : 0, h, nh, &why, &idx);
+    if (r == NVK5_R_CAPS && gAgdcK5Bgra && cmd == NVK5_CMD_FBCAPEX && out
+        && ((struct NVAGDCFBExtCap *)out)->type == NVK5_CAP_PLANESCALER) {
+        uint8_t *e = ((struct NVAGDCFBExtCap *)out)->entry[0];
+        nvk5_put32(e, 0x000, 0x10001u);
+        nvk5_put32(e, 0x004, 1u);
+        if (OSAddAtomic64(1, &gAgdcK5BgraAnswers) < 4) FBLOG("AGDC 0x711: plane 0 offers BGRA (mask 0x10001, word 1)");
+    }
     const UInt32 bit = (idx >= 0 && idx < 32) ? (1u << idx) : 0;
     if (bit) OSBitOrAtomic(bit, (volatile UInt32 *)&gAgdcK5Asked);
     if (r == NVK5_R_LINK) { OSAddAtomic64(1, &gAgdcK5Link); OSBitOrAtomic(bit, (volatile UInt32 *)&gAgdcK5LinkMask); return kIOReturnSuccess; }
@@ -311,10 +326,13 @@ SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_k5_last_refused_idx, CTLFLAG_RD | CTLFL
 SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_gamma, CTLFLAG_RW | CTLFLAG_LOCKED, &gAgdcGamma, 0, "1 = report plane 0's colour capabilities: CSC, linearization, gamma (read when WindowServer starts)");
 SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_agdc_gamma_answers, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdcGammaAnswers, "colour capability queries answered (CSC, linearization, gamma)");
 SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_711_types, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdc711Types, 0, "the extended capability types (0x711) asked for, ORed");
+SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_k5_bgra, CTLFLAG_RW | CTLFLAG_LOCKED, &gAgdcK5Bgra, 0, "v77: 1 = the plane takes WindowServer's BGRA composite directly (read when WindowServer starts)");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_agdc_k5_bgra_answers, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdcK5BgraAnswers, "v77: plane-scaler answers that offered BGRA");
 static void nvdaAgdcRemoveSysctl(void)
 {
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_gamma); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_gamma_answers);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_711_types);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5_bgra); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5_bgra_answers);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_cmds);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_refused); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_last_refused);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5_link);
@@ -328,6 +346,7 @@ static void nvdaAgdcInstallSysctl(void)
 {
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_gamma); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_gamma_answers);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_711_types);
+    sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5_bgra); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5_bgra_answers);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_cmds);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_refused); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_last_refused);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5_link);
@@ -362,6 +381,7 @@ bool NMXAGDCLoader::start(IOService *provider)
 {
     { if (nvrm_driver_off()) return false; }
     if (!IOService::start(provider)) return false;
+    { char a[8]; if (PE_parse_boot_argn("nmxagdcnobgra", a, sizeof a)) gAgdcK5Bgra = 0; }   // v77
     nvdaAgdcInstallSysctl(); registerService(); FBLOG("loaded; comes up when NMXAccel arms a VM display"); return true;
 }
 void NMXAGDCLoader::stop(IOService *provider)

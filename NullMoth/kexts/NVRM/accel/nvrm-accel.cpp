@@ -1770,6 +1770,13 @@ static SInt64 gCntNmxFrontWritten;
 static int gNmxOrdTrace = 0;
 SYSCTL_INT(_debug, OID_AUTO, nmxfb_ord_trace, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxOrdTrace, 0,
            "VM display: log the next N ordered flips (surface, NMXPublished at transaction/flip, the front surface)");
+/* v77 (as ArrowWhatever's 0036/0037): an ordered flip waits for the work committed into its surface before the swap -
+   the surface's NMXPending when the transaction came in - not for whatever is committed into it while the flip waits.
+   The flip used to read NMXPending again at every poll, so a command buffer committed into the surface after the swap
+   held the frame back too (11-18: flip run to ready p50 6.7 ms, p90 9.7 ms, against 3.9 ms of GPU a buffer). 0: old. */
+static int gNmxOrdWant = 1;
+SYSCTL_INT(_debug, OID_AUTO, nmxfb_ord_want, CTLFLAG_RW | CTLFLAG_LOCKED, &gNmxOrdWant, 0,
+           "VM display: 1 = an ordered flip waits only for the work committed before its transaction (v77)");
 NVACCEL_CNT(nmxfb_front_written, gCntNmxFrontWritten, "VM display: surfaces that got a new frame (NMXPublished) while on the panel");
 static void nmxInstallVmSysctls(void)
 {
@@ -1789,6 +1796,7 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxfb_blob_ordered);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_waited);
     sysctl_register_oid(&sysctl__debug_nmxfb_ord_timeout);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_wait_us);
     sysctl_register_oid(&sysctl__debug_nmxfb_front_written);  sysctl_register_oid(&sysctl__debug_nmxfb_ord_trace);
+    sysctl_register_oid(&sysctl__debug_nmxfb_ord_want);
     sysctl_register_oid(&sysctl__debug_nmxfb_ordered_copy);   sysctl_register_oid(&sysctl__debug_nmxfb_ord_copies);
     sysctl_register_oid(&sysctl__debug_nmxgpu_gt_min_mhz);
     sysctl_register_oid(&sysctl__debug_nmxgpu_boost_mhz);
@@ -2305,9 +2313,14 @@ static uint64_t nmxSurfaceNumber(IOSurface *s, const char *key)
     return v;
 }
 static uint64_t nmxPublished(IOSurface *s) { return nmxSurfaceNumber(s, "NMXPublished"); }
-// ready: every command buffer committed into the surface so far has copied its pixels out
-static bool nmxSurfaceReady(IOSurface *s, uint64_t *pub)
+// ready: every command buffer committed into the surface so far has copied its pixels out; with want (v77) the ones
+// committed before the transaction, whose NMXPending it recorded
+static bool nmxSurfaceReady(IOSurface *s, uint64_t *pub, uint64_t want = 0)
 {
+    if (want) {
+        *pub = nmxPublished(s);
+        return *pub >= want;
+    }
     const uint64_t pending = nmxSurfaceNumber(s, "NMXPending");
     *pub = nmxPublished(s);
     return pending == 0 || *pub >= pending;
@@ -2315,7 +2328,8 @@ static bool nmxSurfaceReady(IOSurface *s, uint64_t *pub)
 static constexpr unsigned kNmxOrdMaxMs = 100;
 // v69: IOSleep(1) took 1.15 ms a step here and saw a frame ready ~0.6 ms late on average, on every frame's way out
 static constexpr unsigned kNmxOrdPollUs = 200;
-struct NMXOrdered { void *pipe; IOService *fb; unsigned head; IOSurface *s; volatile SInt32 busy; struct thread_call *call; uint64_t tSubmit; bool latitude; };
+struct NMXOrdered { void *pipe; IOService *fb; unsigned head; IOSurface *s; volatile SInt32 busy; struct thread_call *call; uint64_t tSubmit; bool latitude;
+                   uint64_t want; /* v77: the surface's NMXPending when the transaction came in, 0 = re-read it */ };
 static NMXOrdered gNmxOrd[kNvMaxFB];
 static struct { unsigned id; uint64_t pub; } gNmxSeen[16];   // a surface's NMXPublished when it last went on the panel
 static unsigned gNmxSeenNext;
@@ -2350,13 +2364,14 @@ static void nmxOrderedRun(void *p0, void *)
 {
     NMXOrdered *e = (NMXOrdered *)p0;
     IOSurface *s = e->s; e->s = nullptr;
+    const uint64_t want = e->want;
     const unsigned id = s->getSurfaceID();
     int k = nmxSeenFind(id);
     const uint64_t lastShown = k >= 0 ? gNmxSeen[k].pub : 0;
     const uint64_t t0 = mach_absolute_time();
     unsigned waited = 0;
     uint64_t pub = 0;
-    bool ready = nmxSurfaceReady(s, &pub);
+    bool ready = nmxSurfaceReady(s, &pub, want);
     const uint64_t pub0 = pub;
     bool final = pub != 0;
     if (k < 0) {
@@ -2370,7 +2385,7 @@ static void nmxOrderedRun(void *p0, void *)
         while (!ready && mach_absolute_time() - t0 < maxWait) {
             IODelay(kNmxOrdPollUs);     // >= 10 us: the thread sleeps
             polled = true;
-            ready = nmxSurfaceReady(s, &pub);
+            ready = nmxSurfaceReady(s, &pub, want);
         }
         if (polled) {
             // in whole ms as before (counters, ordtrace); a timeout only when it never became ready
@@ -2413,10 +2428,11 @@ static void nmxOrderedRun(void *p0, void *)
         // times in us of the mach clock (ns on x86), the same base as NMXVGAFB's debug.nmxfb_vtrace
         gNmxOrdTrace--;
         ALOG("ordtrace submit=%llu run=%llu ready=%llu flipped=%llu us: surface 0x%x pub %llu->%llu (last shown %llu) "
-             "waited %u ms final %d flip %d | front 0x%x pub %llu (when shown %llu)",
+             "waited %u ms final %d flip %d want %llu | front 0x%x pub %llu (when shown %llu)",
              (unsigned long long)(e->tSubmit / 1000), (unsigned long long)(t0 / 1000),
              (unsigned long long)(tReady / 1000), (unsigned long long)(mach_absolute_time() / 1000), id,
              (unsigned long long)pub0, (unsigned long long)pub, (unsigned long long)lastShown, waited, (int)final, b,
+             (unsigned long long)want,
              traceFront ? traceFront->getSurfaceID() : 0u, (unsigned long long)traceFrontPub,
              (unsigned long long)gNmxOrdFrontPub[e->head]);
     }
@@ -2452,6 +2468,7 @@ static bool nmxOrderedStart(void *pipe, IOService *fb, unsigned head, IOSurface 
     ((OSObject *)s)->retain();
     nmxScanoutNote(s);
     e->pipe = pipe; e->fb = fb; e->head = head; e->s = s; e->tSubmit = mach_absolute_time(); e->latitude = latitude;
+    e->want = gNmxOrdWant ? nmxSurfaceNumber(s, "NMXPending") : 0;
     __atomic_store_n(&e->busy, 1, __ATOMIC_RELEASE);
     thread_call_enter(e->call);
     return true;

@@ -461,6 +461,7 @@ extern "C" int nmx_xnu_task_gone(task_t task)
  * pid reused meanwhile only delays the release. kernel_task (pid 0) is never swept.
  */
 extern "C" int nmx_xnu_devfs_sweep(void);
+extern "C" int nmx_xnu_uc_sweep(void);   /* v77, nmx_drmuc.cpp: DRM user clients of gone processes */
 static thread_call_t gSweep;
 static UInt32 gSweepStop;   /* __atomic: no new kernel import */
 static struct { task_t task; int pid; char name[24]; } gSweepRow[128];   /* mm_sweep only: one run at a time */
@@ -509,6 +510,7 @@ static void mm_sweep(thread_call_param_t, thread_call_param_t)
         task_deallocate(gSweepRow[i].task);
         gSweepRow[i].task = nullptr;
     }
+    nmx_xnu_uc_sweep();
     nmx_xnu_devfs_sweep();
     mm_sweep_arm();
 }
