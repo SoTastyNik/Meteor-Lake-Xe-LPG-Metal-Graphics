@@ -115,6 +115,21 @@ static int nvmtl_ss_call(struct nmx_surf_sync *a)
     const kern_return_t kr = IOConnectCallMethod(g_ss_conn, 0, &cmd, 1, a, sizeof *a, &err, &nout, a, &osz);
     return kr != KERN_SUCCESS ? -(int)kr : (int)err;
 }
+static int nvmtl_ss_ready(void);
+/* v78: before a host import of an IOSurface's mapping, NMXGPU is told which surface it is, so the first submission takes
+   the surface's own memory instead of wiring the mapping page by page (nmx_surfsync.cpp, op 8).
+   /Library/GPUBundles/nvmtl-no-surf-import: wire the mapping as before. */
+int nvmtl_vk_surface_expect(uint32_t surface, const void *base, size_t len)
+{
+    static int off = -1;
+    if (off < 0) off = NVMTL_GB_OFF("nvmtl-no-surf-import");
+    if (off || !surface || !base || !nvmtl_ss_ready()) return -1;
+    struct nmx_surf_sync a = { surface, 8, 0, { (uint64_t)(uintptr_t)base, (uint64_t)len, 0, 0, 0, 0 } };
+    const int r = nvmtl_ss_call(&a);
+    static _Atomic unsigned said;
+    if (r && atomic_fetch_add(&said, 1) < 4) syslog(LOG_ERR, "NullMoth: IOSurface %u import announcement refused (%d)", surface, r);
+    return r;
+}
 static int nvmtl_ss_ready(void)
 {
     const int on = __atomic_load_n(&g_ss_on, __ATOMIC_ACQUIRE);

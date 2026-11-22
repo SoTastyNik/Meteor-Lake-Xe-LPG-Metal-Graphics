@@ -28,6 +28,7 @@
 #include <string.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IORegistryEntry.h>
 #include <libkern/OSAtomic.h>
@@ -41,6 +42,7 @@ void *_ZN9IOSurface25deviceCacheForAcceleratorEPvjj(void *surface, void *key, un
 void _ZN20IOSurfaceDeviceCache14setControlFuncEPvPFvS0_PS_jyyE(
     void *cache, void *ctx, void (*fn)(void *, void *, unsigned int, unsigned long long, unsigned long long)) __attribute__((weak_import));
 void _ZN20IOSurfaceDeviceCache10setCurrentEv(void *cache) __attribute__((weak_import));
+void *_ZNK9IOSurface19getMemoryDescriptorEv(void *surface) __attribute__((weak_import));   /* v78 */
 }
 
 /* a weak function is resolved when its address is not gOSKextUnresolved (OSKextSymbolIsResolved, cast for C++) */
@@ -300,6 +302,99 @@ static int nmx_ss_done(unsigned int id, uint64_t seq)
     return 0;
 }
 
+/*
+ * v78: native IOSurface imports. WindowServer imports each surface it draws into as host memory (a GEM userptr over its
+ * mapping), and the first submission that uses it wired the user range page by page: 21 MB took 4-10 ms (wire ~4 ms,
+ * then the page records), on every window and Launchpad open. The plugin now says first (op 8: surface, stats[0] = its
+ * mapping's address, stats[1] = the length) which IOSurface the next host import of that range is. The wiring then
+ * takes the pages from the surface's own memory descriptor (nmx_xnu_surf_expect_take, nmx_mm.cpp) instead of wiring
+ * the user range. An announcement is for the caller's task and that exact range, used once, and dropped after 5 s.
+ * The task is compared by address only: no reference on it is held (a held task kept logouts from finishing, v76_1).
+ */
+#define NMX_SX_N 32
+#define NMX_SX_TTL_NS 5000000000ull
+struct nmx_sx_rec { void *task; uint64_t uaddr, len, until; IOMemoryDescriptor *md; uint32_t id; };
+static nmx_sx_rec g_sx[NMX_SX_N];
+static SInt64 g_sx_expect, g_sx_taken, g_sx_expired, g_sx_refused;
+
+static int nmx_sx_expect(uint32_t id, uint64_t uaddr, uint64_t len)
+{
+    if (!NMX_WEAK_OK(_ZNK9IOSurface19getMemoryDescriptorEv))
+        return ENOTSUP;
+    if (!uaddr || (uaddr & 4095) || !len || (len & 4095))
+        return EINVAL;
+    void *surf = _ZN13IOSurfaceRoot13lookupSurfaceEjP4task(g_ss_root, id, current_task());   /* +1 */
+    if (!surf) {
+        OSIncrementAtomic64(&g_sx_refused);
+        return ENOENT;
+    }
+    IOMemoryDescriptor *md = (IOMemoryDescriptor *)_ZNK9IOSurface19getMemoryDescriptorEv(surf);
+    if (md == nullptr || md->getLength() < len) {
+        ((OSObject *)surf)->release();
+        OSIncrementAtomic64(&g_sx_refused);
+        return ERANGE;
+    }
+    md->retain();                       /* the descriptor holds the memory; the surface object may go */
+    ((OSObject *)surf)->release();
+    uint64_t ttl;
+    nanoseconds_to_absolutetime(NMX_SX_TTL_NS, &ttl);
+    const uint64_t now = mach_absolute_time();
+    void *task = (void *)current_task();
+    IOMemoryDescriptor *drop = nullptr;
+    IOLockLock(g_ss_lock);
+    unsigned k = 0, oldest = 0;
+    for (; k < NMX_SX_N; k++) {
+        if (g_sx[k].md == nullptr || (g_sx[k].task == task && g_sx[k].uaddr == uaddr) || g_sx[k].until < now)
+            break;
+        if (g_sx[k].until < g_sx[oldest].until)
+            oldest = k;
+    }
+    if (k == NMX_SX_N)
+        k = oldest;
+    drop = g_sx[k].md;
+    if (drop != nullptr && g_sx[k].until < now)
+        OSIncrementAtomic64(&g_sx_expired);
+    g_sx[k] = { task, uaddr, len, now + ttl, md, id };
+    IOLockUnlock(g_ss_lock);
+    if (drop != nullptr)
+        drop->release();
+    OSIncrementAtomic64(&g_sx_expect);
+    return 0;
+}
+
+/* the wiring of [uaddr, uaddr + len) in task: the memory of the IOSurface announced for it (+1, the announcement's
+   reference) and where the range starts in it; nullptr: wire the user range */
+extern "C" void *nmx_xnu_surf_expect_take(void *task, uint64_t uaddr, uint64_t len, uint64_t *offset, uint32_t *id)
+{
+    if (g_ss_state <= 0 || g_ss_lock == nullptr)
+        return nullptr;
+    const uint64_t now = mach_absolute_time();
+    IOMemoryDescriptor *md = nullptr;
+    IOLockLock(g_ss_lock);
+    for (unsigned k = 0; k < NMX_SX_N; k++) {
+        nmx_sx_rec *r = &g_sx[k];
+        if (r->md == nullptr || r->task != task || r->until < now)
+            continue;
+        if (uaddr >= r->uaddr && uaddr + len <= r->uaddr + r->len) {
+            md = r->md;
+            *offset = uaddr - r->uaddr;
+            *id = r->id;
+            r->md = nullptr;
+            r->task = nullptr;
+            break;
+        }
+    }
+    IOLockUnlock(g_ss_lock);
+    if (md != nullptr)
+        OSIncrementAtomic64(&g_sx_taken);
+    return md;
+}
+
+extern "C" void nmx_xnu_surf_expect_stats(int64_t out[4])
+{
+    out[0] = g_sx_expect; out[1] = g_sx_taken; out[2] = g_sx_expired; out[3] = g_sx_refused;
+}
+
 extern "C" int nmx_xnu_surf_sync(uint32_t surface, uint32_t op, uint64_t *seq, uint64_t *stats, uint32_t nstats)
 {
     if (!nmx_ss_init())
@@ -314,6 +409,8 @@ extern "C" int nmx_xnu_surf_sync(uint32_t surface, uint32_t op, uint64_t *seq, u
         return nmx_ss_done(surface, *seq);
     case 4:
         return nmx_ss_publish(surface);
+    case 8:
+        return nstats >= 2 ? nmx_sx_expect(surface, stats[0], stats[1]) : EINVAL;
     case 3: {
         const SInt64 v[6] = { g_ss_pend, g_ss_done, g_ss_late, g_ss_inorder, g_ss_waits, g_ss_timeouts };
         for (uint32_t i = 0; i < nstats && i < 6; i++)

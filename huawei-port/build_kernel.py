@@ -165,7 +165,8 @@ def main():
                  '__ZN14IOPMrootDomain18releasePMAssertionEy'}
     # HUAWEI v60 (xnu/nmx_surfsync.cpp): IOSurface's device-cache calls (weak, checked against gOSKextUnresolved), the
     # IOSurfaceRoot lookup and its matching, the caches' key object, the process name in the log, its counters
-    surfsync = ('__ZN9IOSurface', '__ZN13IOSurfaceRoot', '__ZN20IOSurfaceDeviceCache', '__ZN15IORegistryEntry',
+    # v78: IOSurface::getMemoryDescriptor() const (__ZNK9IOSurface), weak, for the native surface imports
+    surfsync = ('__ZN9IOSurface', '__ZNK9IOSurface', '__ZN13IOSurfaceRoot', '__ZN20IOSurfaceDeviceCache', '__ZN15IORegistryEntry',
                 '__ZN9IOService15serviceMatching', '__ZN9IOService22waitForMatchingService')
     upstream |= {u for u in undefined if u.startswith(surfsync)} | {'_gOSKextUnresolved', '_proc_selfname', '_proc_selfpid', '_OSAddAtomic64',
                                                               '_current_thread', '_clock_interval_to_deadline', '_absolutetime_to_nanoseconds',

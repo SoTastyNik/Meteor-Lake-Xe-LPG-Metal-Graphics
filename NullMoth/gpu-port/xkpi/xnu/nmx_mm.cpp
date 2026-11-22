@@ -147,6 +147,9 @@ UserWire *gWires;           /* under lock() */
 SInt64 g_user_wired_pages, g_user_wired_ranges, g_user_wires_total, g_user_wired_peak;
 }
 
+/* v78 (nmx_surfsync.cpp): the IOSurface memory announced for a host import, or nullptr */
+extern "C" void *nmx_xnu_surf_expect_take(void *task, uint64_t uaddr, uint64_t len, uint64_t *offset, uint32_t *id);
+static SInt64 g_surface_wires, g_surface_wire_us;
 extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int write, uint64_t *phys, void **handle)
 {
     *handle = nullptr;
@@ -167,11 +170,29 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
         task_deallocate(task);
         return ENOMEM;
     }
+    /* v78: an IOSurface's mapping the plugin announced: the surface's own memory, no wiring of the user range */
+    uint64_t soff = 0;
+    uint32_t sid = 0;
+    const uint64_t ts = mach_absolute_time();
+    IOMemoryDescriptor *md = (IOMemoryDescriptor *)nmx_xnu_surf_expect_take(task, uaddr, npages * PAGE_SIZE, &soff, &sid);
+    IOReturn pr = kIOReturnNoMemory;
+    if (md != nullptr) {
+        pr = md->prepare();
+        if (pr != kIOReturnSuccess) {
+            IOLog("NullMoth GPU: IOSurface %u's memory refused a prepare (0x%x): its mapping is wired instead\n", sid, pr);
+            md->release();
+            md = nullptr;
+            soff = 0;
+        }
+    }
+    const bool surface = md != nullptr;
     /* the device writes the pages when the mapping is writable (kIODirectionIn), and always reads them */
-    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange((mach_vm_address_t)uaddr, npages * PAGE_SIZE,
-                                                                  write ? kIODirectionOutIn : kIODirectionOut, task);
-    IOReturn pr = md != nullptr ? md->prepare() : kIOReturnNoMemory;
-    if (md != nullptr && pr != kIOReturnSuccess && write) {
+    if (!surface) {
+        md = IOMemoryDescriptor::withAddressRange((mach_vm_address_t)uaddr, npages * PAGE_SIZE,
+                                                  write ? kIODirectionOutIn : kIODirectionOut, task);
+        pr = md != nullptr ? md->prepare() : kIOReturnNoMemory;
+    }
+    if (!surface && md != nullptr && pr != kIOReturnSuccess && write) {
         /*
          * A range this task may only read (WindowServer's mapping of a full-screen IOSurface another process renders
          * into) cannot be wired for writing; the GPU still needs its pages. Wired for reading, the physical pages are
@@ -190,14 +211,27 @@ extern "C" int nmx_xnu_user_wire(void *mm, uint64_t uaddr, size_t npages, int wr
               (long long)g_user_wired_ranges, (long long)g_user_wired_pages, (long long)(g_user_wired_pages >> 8),
               (long long)g_user_wired_peak, (long long)g_user_wires_total);
     int err = md == nullptr ? ENOMEM : pr != kIOReturnSuccess ? EFAULT : 0;
-    for (size_t i = 0; err == 0 && i < npages; i++) {
+    for (size_t i = 0; err == 0 && i < npages;) {
         IOByteCount len = 0;
-        addr64_t pa = md->getPhysicalSegment(i * PAGE_SIZE, &len, kIOMemoryMapperNone);
+        addr64_t pa = md->getPhysicalSegment(soff + i * PAGE_SIZE, &len, kIOMemoryMapperNone);
         if (pa == 0) {
             md->complete();
             err = EFAULT;
+            break;
         }
-        phys[i] = pa;
+        /* a physically contiguous run answers for all its pages */
+        for (IOByteCount o = 0; i < npages && (o == 0 || o < len); o += PAGE_SIZE)
+            phys[i++] = pa + o;
+    }
+    if (surface && err == 0) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(mach_absolute_time() - ts, &ns);
+        const SInt64 n = OSAddAtomic64(1, &g_surface_wires) + 1;
+        const SInt64 us = OSAddAtomic64((SInt64)(ns / 1000), &g_surface_wire_us) + (SInt64)(ns / 1000);
+        if (n <= 8 || (n & 255) == 0)
+            IOLog("NullMoth GPU: wiring 0x%llx + %lu pages from IOSurface %u's own memory: %llu us (%lld such, %lld us avg)\n",
+                  (unsigned long long)uaddr, (unsigned long)npages, sid, (unsigned long long)(ns / 1000), (long long)n,
+                  (long long)(us / n));
     }
     if (err != 0) {
         if (md != nullptr)

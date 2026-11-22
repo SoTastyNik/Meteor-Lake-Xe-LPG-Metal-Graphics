@@ -870,6 +870,7 @@ static int nvmtl_surface_host_image(NVMTLTexture *t, IOSurfaceRef surf, uint32_t
                     : (size_t)w * (bpp ? bpp : 4) > row || h > sh ? "image larger than the surface"
                     : row % 64 ? "row not a multiple of 64 bytes" : row * (h - 1) + (size_t)w * (bpp ? bpp : 4) > len ? "rows pass the allocation" : NULL;
     nvk_buffer hb;
+    if (!why) (void)nvmtl_vk_surface_expect((uint32_t)IOSurfaceGetID(surf), base, len);   /* v78 */
     if (!why && nvmtl_vk_buffer_import_host(base, len, &hb)) why = "host import refused";
     if (!why) {
         if (nvmtl_vk_image_create_buffer_alias(w, h, vkf, bpp, a8, 1, 1, &hb, 0, row, &t->_i)) { why = "no linear image over it"; nvmtl_vk_buffer_destroy(&hb); }
