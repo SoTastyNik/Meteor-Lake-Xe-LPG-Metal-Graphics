@@ -76,6 +76,10 @@ typedef struct { void *cb; void *fb; void *pool; void *dset[2]; void *depth_view
                  nvmtl_sample_pattern sample_pattern;
                  void **rvs; unsigned nrv, caprv;
                  void *gfx_pipe, *gfx_pipe_cb;   /* v76: the graphics pipeline bound last, and in which VkCommandBuffer */
+                 /* v81: an address table snapshot asked for by dynamic offset (nvmtl_snapshot_set_c -> _md), and the
+                    graphics descriptor sets bound last (layout, sets, dynamic offsets) */
+                 uint32_t dyn_req, dyn_off; void *dyn_page;
+                 unsigned bs_valid; void *bs_layout, *bs_set[3]; uint32_t bs_dyn[2];
                } nvk_cmdbuf;
 int  nvmtl_vk_init(void);
 int nvmtl_vk_sample_positions_backend(void);

@@ -4155,7 +4155,9 @@ static NSUInteger nvmtl_compute_maxt(void) { static NSUInteger v; if (!v) v = nv
 enum { NVMTL_E78_H3 = 1, NVMTL_E78_H4 = 2, NVMTL_E78_H5 = 4, NVMTL_E78_P1 = 8, NVMTL_E78_H7 = 16 };
 enum { E78C_ENC, E78C_DISP, E78C_FULL, E78C_NARROW, E78C_NONE, E78C_ENDFULL, E78C_SETNEW, E78C_SETREUSE, E78C_WRITES,
        E78C_RING, E78C_RINGBYTES, E78C_RINGCHUNK, E78C_BYTESOLD, E78C_VARHIT, E78C_VARMISS, E78C_CONC,
-       E78C_SETCACHE, E78C_COPIES, E78C_N };   // v80: keyed set cache hits, descriptors copied from the previous set
+       E78C_SETCACHE, E78C_COPIES,   // v80: keyed set cache hits, descriptors copied from the previous set
+       E78C_R_FIRST, E78C_R_DESC, E78C_R_ADDR, E78C_R_MASK,   // v81: why a new set: none to reuse, a descriptor, the table only, a wider pipeline
+       E78C_ADDRREUSE, E78C_BINDSKIP, E78C_N };   // v81: sets kept with a new table snapshot, set binds skipped
 static uint64_t g_e78c[E78C_N];
 static int g_e78_off = -1, g_e78_census = -1;
 static int nvmtl_enc78_on(int row) {

@@ -711,10 +711,14 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
             uint64_t bc[2], rc[2], ec[3]; nvmtl_vk_bind_counts(bc); nvmtl_resset_counts(rc); nvmtl_emb_counts(ec);
             // v80: descriptor sets in this window (the bind's costliest part, ~3.7 us a draw in v79_1): made new, the last
             // set reused as it was, taken from the keyed cache; descriptors written and copied into the new ones
-            static uint64_t setLast[5]; uint64_t setNow[5] = { __atomic_load_n(&g_e78c[E78C_SETNEW], __ATOMIC_RELAXED),
-                __atomic_load_n(&g_e78c[E78C_SETREUSE], __ATOMIC_RELAXED), __atomic_load_n(&g_e78c[E78C_SETCACHE], __ATOMIC_RELAXED),
-                __atomic_load_n(&g_e78c[E78C_WRITES], __ATOMIC_RELAXED), __atomic_load_n(&g_e78c[E78C_COPIES], __ATOMIC_RELAXED) };
-            double setD[5]; for (int k = 0; k < 5; k++) { setD[k] = (double)(setNow[k] - setLast[k]); setLast[k] = setNow[k]; }
+            // v81: why each new set was made, the sets kept with a new address table snapshot, the set binds skipped
+            static const int setK[11] = { E78C_SETNEW, E78C_SETREUSE, E78C_SETCACHE, E78C_WRITES, E78C_COPIES,
+                                          E78C_R_FIRST, E78C_R_DESC, E78C_R_ADDR, E78C_R_MASK, E78C_ADDRREUSE, E78C_BINDSKIP };
+            static uint64_t setLast[11]; double setD[11];
+            for (int k = 0; k < 11; k++) {
+                const uint64_t now = __atomic_load_n(&g_e78c[setK[k]], __ATOMIC_RELAXED);
+                setD[k] = (double)(now - setLast[k]); setLast[k] = now;
+            }
             const double n = (double)gWsEncN, u = (double)tb.numer / tb.denom * 1e-6 / n;
             const uint64_t setters = gWsCpu[NVWS_SET] + gWsCpu[NVWS_SET_BUF] + gWsCpu[NVWS_SET_BYTES] + gWsCpu[NVWS_SET_TEX]
                                    + gWsCpu[NVWS_SET_SAMP] + gWsCpu[NVWS_SET_PSO];
@@ -724,7 +728,8 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    "pipeline binds skipped %llu of %llu, resource adds by address %llu of %llu; "
                    "setters: buffers %.2f, bytes %.2f, textures %.2f, samplers %.2f, pipeline %.2f, other %.2f; bind: descriptor sets %.2f; "
                    "stage binds: plain %llu, static samplers %llu, embedded fields %llu; "
-                   "sets per buffer: new %.1f, reused %.1f, cached %.1f, writes %.1f, copies %.1f",
+                   "sets per buffer: new %.1f, reused %.1f, cached %.1f, writes %.1f, copies %.1f; "
+                   "new because: first %.1f, descriptor %.1f, table %.1f, wider %.1f; kept by offset %.1f, binds skipped %.1f",
                    gWsEncN, plugin, gWsEncSum / n,
                    gWsCpu[NVWS_PASS] * u, gWsCpu[NVWS_DRAW] * u, gWsCpu[NVWS_BIND] * u, setters * u, gWsCpu[NVWS_END] * u,
                    gWsCpu[NVWS_COMMIT] * u, gWsPasses / n, gWsDraws / n, (unsigned long long)bc[1], (unsigned long long)bc[0],
@@ -732,7 +737,8 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    gWsCpu[NVWS_SET_BUF] * u, gWsCpu[NVWS_SET_BYTES] * u, gWsCpu[NVWS_SET_TEX] * u, gWsCpu[NVWS_SET_SAMP] * u,
                    gWsCpu[NVWS_SET_PSO] * u, gWsCpu[NVWS_SET] * u, gWsCpu[NVWS_BIND_SETS] * u,
                    (unsigned long long)ec[0], (unsigned long long)ec[1], (unsigned long long)ec[2],
-                   setD[0] / n, setD[1] / n, setD[2] / n, setD[3] / n, setD[4] / n);
+                   setD[0] / n, setD[1] / n, setD[2] / n, setD[3] / n, setD[4] / n,
+                   setD[5] / n, setD[6] / n, setD[7] / n, setD[8] / n, setD[9] / n, setD[10] / n);
         }
         nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;

@@ -2733,7 +2733,11 @@ typedef struct { nvmtl_slot s[2][NVMTL_NBIND];
                  nvmtl_setcache sc[2][NVMTL_SETCACHE_N]; unsigned sc_next[2];
                  /* v56: samplers a shader brought itself, parked in sampler slots it leaves free, and what each displaced */
                  uint32_t park_mask[2]; uint8_t park_kind[2][NVMTL_NSAMP], park_saved_kind[2][NVMTL_NSAMP];
-                 void *park_h[2][NVMTL_NSAMP], *park_saved[2][NVMTL_NSAMP]; } nvmtl_bindtable;
+                 void *park_h[2][NVMTL_NSAMP], *park_saved[2][NVMTL_NSAMP];
+                 /* v81: the address table page the last set's descriptor points at (NULL: an offset baked into the
+                    descriptor, the old way) and the dynamic offset of its current snapshot */
+                 void *last_page[2]; uint32_t last_dyn[2];
+                 uint8_t chg_wide[2];   /* v81: a binding past the first 256 (a storage texture) changed */ } nvmtl_bindtable;
 
 static VkDescriptorSetLayout g_setLayout;
 #define NVMTL_MAX_POOLS 64
@@ -3123,7 +3127,8 @@ static int nvmtl_bind_slot(nvk_cmdbuf *c, uint32_t set, uint32_t binding, uint8_
     nvmtl_slot *sl = &t->s[set][binding];
     if (sl->kind != kind || sl->h != h || sl->off != off) {
         t->dirty[set] = 1;
-        t->chg[set][binding >> 6] |= 1ull << (binding & 63);
+        // v81: chg holds the first 256 bindings; storage textures past them were written past its end
+        if (binding < 256) t->chg[set][binding >> 6] |= 1ull << (binding & 63); else t->chg_wide[set] = 1;
         if (kind != NVMTL_SLOT_BUF || sl->kind != NVMTL_SLOT_BUF) t->texgen[set]++;
     }
     sl->kind = kind; sl->h = h; sl->off = off;
@@ -3149,13 +3154,15 @@ int nvmtl_vk_bind_buffer_offset(nvk_cmdbuf *c, uint32_t set, uint32_t index, siz
     nvmtl_bindtable *t = (nvmtl_bindtable *)c->table;
     if (t->s[set][index].kind != NVMTL_SLOT_BUF) return -1;
     if (offset >= t->s[set][index].size) { nvlog("buffer offset %zu exceeds buffer length %zu", offset, t->s[set][index].size); return -1; }
-    if (t->s[set][index].off != offset) t->dirty[set] = 1;
+    // v81: the changed binding is noted too (a set that holds its descriptor is not reused for it)
+    if (t->s[set][index].off != offset) { t->dirty[set] = 1; t->chg[set][index >> 6] |= 1ull << (index & 63); }
     t->s[set][index].off = offset;
     return 0;
 }
 
 #define NVMTL_TABLES_PER_PAGE 256
 #define NVMTL_TABLE_BYTES ((2 * NVMTL_NBUF + NVMTL_NTEX) * sizeof(uint64_t))
+_Static_assert(NVMTL_TABLE_BYTES % 256 == 0, "v81: address table snapshots are bound by dynamic offset (minUniformBufferOffsetAlignment <= 256)");
 typedef struct nvmtl_address_page { nvk_buffer buffer; struct nvmtl_address_page *next; } nvmtl_address_page;
 #define NVMTL_KEEP 256
 static pthread_mutex_t g_keep_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -3423,7 +3430,13 @@ static int nvmtl_address_snapshot(nvk_cmdbuf *c, uint32_t which, VkDescriptorBuf
         const nvmtl_slot *s = t ? &t->s[which][NVMTL_NBUF + i] : NULL;
         addresses[2 * NVMTL_NBUF + i] = (s && s->kind == NVMTL_SLOT_TEX && s->h) ? (uint64_t)s->size : 0;
     }
-    *out = (VkDescriptorBufferInfo){ page->buffer.buf, slot * NVMTL_TABLE_BYTES, NVMTL_TABLE_BYTES };
+    /* v81: asked for by dynamic offset (c->dyn_req), the descriptor holds the page from its start and the snapshot's
+       place goes to vkCmdBindDescriptorSets: a set stays valid while only the table's contents change. The table size
+       (1536 bytes) keeps every snapshot at a multiple of 256, the strictest minUniformBufferOffsetAlignment. */
+    if (c->dyn_req) {
+        *out = (VkDescriptorBufferInfo){ page->buffer.buf, 0, NVMTL_TABLE_BYTES };
+        c->dyn_off = slot * NVMTL_TABLE_BYTES; c->dyn_page = page->buffer.buf;
+    } else *out = (VkDescriptorBufferInfo){ page->buffer.buf, slot * NVMTL_TABLE_BYTES, NVMTL_TABLE_BYTES };
     c->address_count++;
     return 0;
 }
@@ -3669,6 +3682,21 @@ static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint
  * A set this recording already wrote serves again when every binding the pipeline reads (its mask, its storage
  * textures) holds what it held then. /Library/GPUBundles/nvmtl-ws-no-setcache turns it off.
  */
+/* v81, WindowServer, while /Library/GPUBundles/nvmtl-ws-dynaddr exists (checked every second): graphics sets take
+   the address table by dynamic offset and are reused while only the table's contents change (CoreAnimation's draws
+   made 1.85 new sets a draw in v80, the address table in nearly all of them), and the same sets are not bound again */
+static int nvmtl_dynaddr_on(void)
+{
+    static int on = -1; static uint64_t next;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (on < 0 || now >= next) {
+        next = now + 1000000000ull;
+        const int v = nvmtl_table_ubo() && nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-dynaddr", F_OK) == 0;
+        if (v != on && nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: address table by dynamic offset %s", v ? "ON" : "OFF");
+        on = v;
+    }
+    return on;
+}
 static int nvmtl_setcache_on(void)
 {
     static int on = -1; static uint64_t next;
@@ -3711,20 +3739,48 @@ static void nvmtl_setcache_note(int hit)
         syslog(LOG_ERR, "NullMoth: descriptor set cache: %llu of %llu sets reused (%.0f%%)", (unsigned long long)h,
                (unsigned long long)all, 100.0 * (double)h / (double)all);
 }
-static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const nvk_pipeline *p)
+/* dynOut: graphics callers get the dynamic offset to bind the set with (0 for a set holding its offset in the
+   descriptor); compute callers pass NULL, bind with zero offsets and never reuse a set made by dynamic offset */
+static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const nvk_pipeline *p, uint32_t *dynOut)
 {
     nvmtl_bindtable *t = (nvmtl_bindtable *)c->table;
+    if (dynOut) *dynOut = 0;
     if (!t || which > 1 || !nvmtl_enc78_on(NVMTL_E78_H3) || p->tbany) return nvmtl_snapshot_set_t(c, which, p->stex_hi[which], p->tbany ? p->tbm[which] : NULL);
     const uint64_t all[4] = { ~0ull, ~0ull, ~0ull, ~0ull };
     const uint64_t *pm = p->bmask_ok ? p->bmask : (p->gmask_ok && which < 2) ? p->gmask[which] : all;
     uint32_t hi = p->stex_hi[which];
-    int live = t->last[which] && !t->dirty[which] && t->last_idx[which] < c->nsets
-               && (VkDescriptorSet)c->sets[t->last_idx[which]].set == t->last[which];
+    const int haveAddr = NVMTL_E78_HAS(pm, NVMTL_ADDRESS_BINDING);
+    const int dyn = dynOut && haveAddr && nvmtl_dynaddr_on();
+    const int lastOk = t->last[which] && t->last_idx[which] < c->nsets
+                       && (VkDescriptorSet)c->sets[t->last_idx[which]].set == t->last[which] && (dynOut || !t->last_page[which]);
+    int live = lastOk && !t->dirty[which];
     if (live && hi <= t->last_hi[which]) {
         int covered = 1;
         for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
-        if (covered) { nvmtl_enc78_count(E78C_SETREUSE, 1); return t->last[which]; }
+        if (covered) { nvmtl_enc78_count(E78C_SETREUSE, 1); if (dynOut) *dynOut = t->last_dyn[which]; return t->last[which]; }
     }
+    // v81: no descriptor the last set holds has changed, only bindings the table carries: a new table snapshot in the
+    // same page, the same set at the snapshot's dynamic offset
+    uint64_t descChg = 0;
+    if (lastOk && t->dirty[which]) {
+        for (int k = 0; k < 4; k++) descChg |= t->chg[which][k] & (pm[k] | t->lastw[which][k]) & ~(k == (NVMTL_ADDRESS_BINDING >> 6) ? 1ull << (NVMTL_ADDRESS_BINDING & 63) : 0);
+        if (t->chg_wide[which]) descChg = 1;
+        if (dyn && !descChg && t->last_page[which] && hi <= t->last_hi[which]) {
+            int covered = 1;
+            for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
+            VkDescriptorBufferInfo ai;
+            c->dyn_req = 1;
+            const int got = covered && nvmtl_address_snapshot(c, which, &ai) == 0;
+            c->dyn_req = 0;
+            if (got && c->dyn_page == t->last_page[which]) {
+                t->last_dyn[which] = c->dyn_off; t->dirty[which] = 0; memset(t->chg[which], 0, sizeof t->chg[which]); t->chg_wide[which] = 0;
+                nvmtl_enc78_count(E78C_ADDRREUSE, 1); *dynOut = c->dyn_off;
+                return t->last[which];
+            }
+        }
+    }
+    // why a new set (census): none to reuse, a descriptor changed, only the table changed, or the pipeline needs more
+    nvmtl_enc78_count(!lastOk ? E78C_R_FIRST : !t->dirty[which] ? E78C_R_MASK : descChg ? E78C_R_DESC : E78C_R_ADDR, 1);
     uint64_t sckey = 0;
     if ((p->bmask_ok || (p->gmask_ok && which < 2)) && !NVMTL_E78_HAS(pm, NVMTL_ADDRESS_BINDING) && nvmtl_setcache_on()) {
         sckey = nvmtl_set_key(t, which, pm, hi);
@@ -3733,8 +3789,9 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
             if (e->key != sckey || !e->set || e->hi != hi || e->idx >= c->nsets || (VkDescriptorSet)c->sets[e->idx].set != e->set) continue;
             // only the bindings the key covered are known to match: later incremental sets copy just those from it
             t->last[which] = e->set; t->last_idx[which] = e->idx; t->last_hi[which] = hi; t->dirty[which] = 0;
-            memset(t->chg[which], 0, sizeof t->chg[which]);
+            memset(t->chg[which], 0, sizeof t->chg[which]); t->chg_wide[which] = 0;
             memcpy(t->lastw[which], pm, sizeof t->lastw[which]);
+            t->last_page[which] = NULL; t->last_dyn[which] = 0;   // keyed sets hold no address table
             nvmtl_setcache_note(1); nvmtl_enc78_count(E78C_SETCACHE, 1);
             return e->set;
         }
@@ -3752,15 +3809,19 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
         }
         for (int k = 0; k < 4; k++) cm[k] &= ~t->chg[which][k];
     }
+    c->dyn_req = dyn; c->dyn_page = NULL; c->dyn_off = 0;
     VkDescriptorSet s = nvmtl_snapshot_set_md(c, which, hi, m, NULL, from, from ? cm : NULL);
+    c->dyn_req = 0;
     if (!s) return s;
+    t->last_page[which] = dyn ? c->dyn_page : NULL; t->last_dyn[which] = dyn ? c->dyn_off : 0;
+    if (dynOut) *dynOut = t->last_dyn[which];
     if (sckey) {
         nvmtl_setcache *e = &t->sc[which][t->sc_next[which]++ % NVMTL_SETCACHE_N];
         e->key = sckey; e->set = s; e->idx = c->nsets - 1; e->hi = p->stex_hi[which];
         nvmtl_setcache_note(0);
     }
     t->last[which] = s; t->last_idx[which] = c->nsets - 1; t->last_hi[which] = hi; t->dirty[which] = 0;
-    memset(t->chg[which], 0, sizeof t->chg[which]);
+    memset(t->chg[which], 0, sizeof t->chg[which]); t->chg_wide[which] = 0;
     memcpy(t->lastw[which], m, sizeof m);
     nvmtl_enc78_count(E78C_SETNEW, 1);
     return s;
@@ -3772,7 +3833,7 @@ int nvmtl_vk_bind_buffer(nvk_cmdbuf *c, uint32_t set, uint32_t index, nvk_buffer
     if (!b || !b->buf || offset >= b->size) { nvlog("bind buffer: offset %zu outside length %zu", offset, b ? b->size : 0); return -1; }
     int r = nvmtl_bind_slot(c, set, index, NVMTL_SLOT_BUF, b->buf, offset);
     if (!r) { nvmtl_bindtable *t = (nvmtl_bindtable *)c->table; nvmtl_slot *sl = &t->s[set][index]; uint64_t a = nvmtl_vk_buffer_address(b);
-              if (sl->size != b->size || sl->address != a) t->dirty[set] = 1;
+              if (sl->size != b->size || sl->address != a) { t->dirty[set] = 1; t->chg[set][index >> 6] |= 1ull << (index & 63); }
               sl->size = b->size; sl->address = a; }
     return r;
 }
@@ -3872,13 +3933,23 @@ static VkSampleLocationsInfoEXT nvmtl_sample_info(const nvmtl_sample_pattern *p,
 
 void nvmtl_vk_cmd_bind_set(nvk_cmdbuf *c, nvk_pipeline *p)
 {
-    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p), nvmtl_snapshot_set_c(c, 1, p), g_heapSet };
+    uint32_t dyn[2] = { 0, 0 };
+    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p, &dyn[0]), nvmtl_snapshot_set_c(c, 1, p, &dyn[1]), g_heapSet };
     if (!s[0] || !s[1]) { c->nobind = 1; return; }
     c->nobind = 0;
     if (g_sample_locations && c->sample_pattern.count)
         pvkCmdPushConstants(c->cb, (VkPipelineLayout)p->layout, VK_SHADER_STAGE_FRAGMENT_BIT, NVMTL_SAMPLE_POSITION_OFFSET,
                            NVMTL_SAMPLE_POSITION_BYTES, c->sample_pattern.position);
-    pvkCmdBindDescriptorSets(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipelineLayout)p->layout, 0, g_heapSet ? 3 : 2, s, nvmtl_table_ubo() ? 2 : 0, g_dyn_zero);
+    // v81 (nvmtl-ws-dynaddr): the same sets at the same offsets under the same layout are still bound; binding a
+    // pipeline does not disturb them, and this is the only graphics vkCmdBindDescriptorSets
+    if (c->bs_valid && c->bs_layout == p->layout && c->bs_set[0] == (void *)s[0] && c->bs_set[1] == (void *)s[1]
+        && c->bs_set[2] == (void *)s[2] && c->bs_dyn[0] == dyn[0] && c->bs_dyn[1] == dyn[1] && nvmtl_dynaddr_on()) {
+        nvmtl_enc78_count(E78C_BINDSKIP, 1);
+        return;
+    }
+    pvkCmdBindDescriptorSets(c->cb, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipelineLayout)p->layout, 0, g_heapSet ? 3 : 2, s, nvmtl_table_ubo() ? 2 : 0, dyn);
+    c->bs_valid = 1; c->bs_layout = p->layout; c->bs_set[0] = (void *)s[0]; c->bs_set[1] = (void *)s[1]; c->bs_set[2] = (void *)s[2];
+    c->bs_dyn[0] = dyn[0]; c->bs_dyn[1] = dyn[1];
 }
 
 #define NVMTL_DEPTH_USAGE (VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | \
@@ -5044,7 +5115,7 @@ void nvmtl_vk_cmd_dispatch_threads(nvk_cmdbuf *c, nvk_pipeline *p, const uint32_
     uint32_t tg[3], groups[3];
     for (int d = 0; d < 3; d++) { if (!tgIn[d] || !threads[d]) return; tg[d] = tgIn[d]; groups[d] = (threads[d] + tg[d] - 1) / tg[d]; }
     if (!(p = nvmtl_align_guard_pick(c, p))) { c->skipped++; return; }
-    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p), nvmtl_snapshot_set_c(c, 1, p), g_heapSet };
+    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p, NULL), nvmtl_snapshot_set_c(c, 1, p, NULL), g_heapSet };
     if (!s[0] || !s[1]) { c->nobind = 1; return; }
     c->nobind = 0;
     int bound = 0;
@@ -5094,7 +5165,7 @@ void nvmtl_vk_cmd_dispatch_indirect_tg(nvk_cmdbuf *c, nvk_pipeline *p, nvk_buffe
     if (!(p = nvmtl_align_guard_pick(c, p))) { c->skipped++; return; }
     VkPipeline vp = nvmtl_compute_variant(p, tg);
     if (!vp) { c->skipped++; return; }
-    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p), nvmtl_snapshot_set_c(c, 1, p), g_heapSet };
+    VkDescriptorSet s[3] = { nvmtl_snapshot_set_c(c, 0, p, NULL), nvmtl_snapshot_set_c(c, 1, p, NULL), g_heapSet };
     if (!s[0] || !s[1]) { c->nobind = 1; return; }
     c->nobind = 0;
     if (b->map && off + 12 <= b->size) memcpy(g, (const char *)b->map + off, 12);
