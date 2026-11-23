@@ -43,6 +43,8 @@ static_assert(sizeof(NVAGDCGPUCapability) == 0xdc, "AGDCGPUCapability_t is 0xdc"
 
 static int    gAgdcK5 = 0;
 static int    gAgdcGamma = 1;          // answer plane 0's gamma capability (0x711 type 2)
+static int    gAgdcColourLayout = 2;   // v80: 2 = Apple's ICL layout of the colour stages, 1 = the VM layout (v77-v79)
+static SInt64 gAgdcColourApple = 0;    // v80: colour stages answered in Apple's layout
 static SInt64 gAgdcGammaAnswers = 0;
 static int    gAgdc711Types = 0;       // bit t = an extended-capability query of type t (0x711)
 /* v77 (ArrowWhatever patch 0030): the plane-scaler entry's AGDC pixel-format mask says BGRA (AGDC bits 0 and 16, which
@@ -167,7 +169,32 @@ IOReturn NMXDeviceControl::vendor_doDeviceAttribute(unsigned int cmd, unsigned l
         struct NVAGDCFBExtCap *c = (struct NVAGDCFBExtCap *)out;
         const uint32_t type = c->type;
         OSBitOrAtomic(type, (volatile UInt32 *)&gAgdc711Types);
-        if ((type == 1 || type == 2 || type == 4) && gAgdcGamma && c->fbIndex == 0) {
+        if ((type == 1 || type == 2 || type == 4) && gAgdcGamma && c->fbIndex == 0 && gAgdcColourLayout == 2) {
+            /* v80 (ArrowWhatever patch 0030): the colour stages as Apple's ICL framebuffer answers them for its built-in
+               panel, one generic entry each: type 1 the CSC matrix (range -1..1), types 2 / 4 1024-entry tables (0..1).
+               With the VM layout below CoreDisplay still ran its full-screen UberCompositeFragment pass every frame (the
+               colour applied in a shader, ~9% of WindowServer's GPU time in Launchpad); with these it hands the colour
+               to the pipe, which NMXAccel's latitudePipeColour programs into LatitudeMTLFB's hardware table.
+               debug.nmxfb_agdc_colour_layout=1 (or the boot argument nmxagdccolour=1) answers the old layout;
+               read when WindowServer starts. */
+            nvk5_zero(c, sizeof *c); c->fbIndex = 0; c->type = type; c->count = 1;
+            uint8_t *e = c->entry[0];
+            if (type == 1) {
+                nvk5_put32(e, 0x00, 5); nvk5_put32(e, 0x10, 8); nvk5_put32(e, 0x20, 0x30700);
+                nvk5_put32(e, 0x24, 0xbf800000u); nvk5_put32(e, 0x28, 0x3f800000u);          // -1.0 .. 1.0
+            } else {
+                nvk5_put32(e, 0x00, type == 2 ? 0x101001u : 0x100001u);
+                nvk5_put32(e, 0x04, type == 2 ? 3u : 2u);
+                nvk5_put32(e, 0x0c, type == 2 ? 0x41480000u : 0x40855555u);                 // 12.5 / 4.17 ms
+                nvk5_put32(e, 0x10, type == 2 ? 0x10u : 0x8u);
+                nvk5_put32(e, 0x20, 0); nvk5_put32(e, 0x24, 0x3f800000u);                    // 0.0 .. 1.0
+                nvk5_put32(e, 0x28, 0x400);                                                   // 1024 entries
+            }
+            OSAddAtomic64(1, &gAgdcGammaAnswers);
+            if (OSAddAtomic64(1, &gAgdcColourApple) < 3) FBLOG("AGDC 0x711: colour stage type %u answered in Apple's layout", type);
+            return kIOReturnSuccess;
+        }
+        if ((type == 1 || type == 2 || type == 4) && gAgdcGamma && c->fbIndex == 0 && gAgdcColourLayout == 1) {
             nvk5_zero(c, sizeof *c); c->fbIndex = 0; c->type = type; c->count = 1;
             uint8_t *e = c->entry[0];
             nvk5_put32(e, 0x000, 0x80004);                        // flags; bit 2 is what CoreDisplay checks
@@ -328,9 +355,12 @@ SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_agdc_gamma_answers, CTLFLAG_RD | CTLFLAG_LOC
 SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_711_types, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdc711Types, 0, "the extended capability types (0x711) asked for, ORed");
 SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_k5_bgra, CTLFLAG_RW | CTLFLAG_LOCKED, &gAgdcK5Bgra, 0, "v77: 1 = the plane takes WindowServer's BGRA composite directly (read when WindowServer starts)");
 SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_agdc_k5_bgra_answers, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdcK5BgraAnswers, "v77: plane-scaler answers that offered BGRA");
+SYSCTL_INT (_debug, OID_AUTO, nmxfb_agdc_colour_layout, CTLFLAG_RW | CTLFLAG_LOCKED, &gAgdcColourLayout, 0, "v80: colour stages in 2 = Apple's ICL layout, 1 = the VM layout (read when WindowServer starts)");
+SYSCTL_QUAD(_debug, OID_AUTO, nmxfb_agdc_colour_apple, CTLFLAG_RD | CTLFLAG_LOCKED, &gAgdcColourApple, "v80: colour stages answered in Apple's layout");
 static void nvdaAgdcRemoveSysctl(void)
 {
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_gamma); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_gamma_answers);
+    sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_colour_layout); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_colour_apple);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_711_types);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5_bgra); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_k5_bgra_answers);
     sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc); sysctl_unregister_oid(&sysctl__debug_nmxfb_agdc_cmds);
@@ -345,6 +375,7 @@ static void nvdaAgdcRemoveSysctl(void)
 static void nvdaAgdcInstallSysctl(void)
 {
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_gamma); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_gamma_answers);
+    sysctl_register_oid(&sysctl__debug_nmxfb_agdc_colour_layout); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_colour_apple);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_711_types);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5_bgra); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_k5_bgra_answers);
     sysctl_register_oid(&sysctl__debug_nmxfb_agdc); sysctl_register_oid(&sysctl__debug_nmxfb_agdc_cmds);
@@ -382,6 +413,7 @@ bool NMXAGDCLoader::start(IOService *provider)
     { if (nvrm_driver_off()) return false; }
     if (!IOService::start(provider)) return false;
     { char a[8]; if (PE_parse_boot_argn("nmxagdcnobgra", a, sizeof a)) gAgdcK5Bgra = 0; }   // v77
+    { int v = 0; if (PE_parse_boot_argn("nmxagdccolour", &v, sizeof v) && (v == 1 || v == 2)) gAgdcColourLayout = v; }   // v80
     nvdaAgdcInstallSysctl(); registerService(); FBLOG("loaded; comes up when NMXAccel arms a VM display"); return true;
 }
 void NMXAGDCLoader::stop(IOService *provider)

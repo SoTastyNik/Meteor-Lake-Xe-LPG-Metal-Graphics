@@ -3659,7 +3659,7 @@ static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint
         ii[i] = (VkDescriptorImageInfo){ VK_NULL_HANDLE, (VkImageView)view, VK_IMAGE_LAYOUT_GENERAL };
         w[nw++] = (VkWriteDescriptorSet){ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, set, NVMTL_BINDING_NUMBER(i), 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &ii[i], NULL, NULL };
     }
-    nvmtl_enc78_count(E78C_WRITES, nw);
+    nvmtl_enc78_count(E78C_WRITES, nw); nvmtl_enc78_count(E78C_COPIES, ncp);
     pvkUpdateDescriptorSets(g_dev, nw, w, ncp, cp);
     return set;
 }
@@ -3735,7 +3735,7 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
             t->last[which] = e->set; t->last_idx[which] = e->idx; t->last_hi[which] = hi; t->dirty[which] = 0;
             memset(t->chg[which], 0, sizeof t->chg[which]);
             memcpy(t->lastw[which], pm, sizeof t->lastw[which]);
-            nvmtl_setcache_note(1);
+            nvmtl_setcache_note(1); nvmtl_enc78_count(E78C_SETCACHE, 1);
             return e->set;
         }
     }
