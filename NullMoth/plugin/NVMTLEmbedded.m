@@ -220,12 +220,14 @@ static void nvmtl_clear_embedded_slot(NVMTLCommandBuffer *cb, uint32_t set, uint
     }
 }
 /* v79: whether binding fn's stage does anything beyond giving parked sampler slots back (no static samplers and no
-   embedded fields: CoreAnimation's shaders). The encoder keeps the answer per function (nvmtl_enc_embedded). */
+   embedded fields). The encoder keeps the answer per function (nvmtl_enc_embedded).
+   v79_1: 1 = static samplers, 2 = embedded fields; only fields read the buffer table, so a shader with static samplers
+   alone no longer has it built at every draw */
 int nvmtl_embedded_needed(NVMTLFunction *fn)
 {
     if (!fn) return 0;
     NSArray *statics = nvmtl_static_samplers_on() ? nvmtl_static_samplers(fn) : nil;
-    return statics.count > 0 || nvmtl_embedded_plan(fn).count > 0;
+    return (statics.count > 0 ? 1 : 0) | (nvmtl_embedded_plan(fn).count > 0 ? 2 : 0);
 }
 void nvmtl_bind_embedded(NVMTLCommandBuffer *cb, uint32_t set, NVMTLFunction *fn, NSDictionary *bufferAtIndex)
 {

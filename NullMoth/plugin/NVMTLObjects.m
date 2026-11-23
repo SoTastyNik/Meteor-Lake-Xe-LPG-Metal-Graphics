@@ -2811,15 +2811,21 @@ NSDictionary *nvmtl_bufslot_dict(NVMTLRenderCommandEncoder *e, uint32_t set) {
     if (v) e->_vbStale = NO; else e->_fbStale = NO;
     return d;
 }
+/* v79_1, WindowServer census: stage binds by what the function needs (nothing, static samplers only, embedded fields) */
+static _Atomic uint64_t gEmbKinds[3];
+void nvmtl_emb_counts(uint64_t out[3]) { for (int i = 0; i < 3; i++) out[i] = atomic_exchange(&gEmbKinds[i], 0); }
 /* v79: a function with neither static samplers nor embedded fields only gives back parked sampler slots, which is all
    nvmtl_bind_embedded does for it; the answer is kept per stage while the same function draws */
 static void nvmtl_enc_embedded(NVMTLRenderCommandEncoder *e, uint32_t set, NVMTLFunction *fn) {
     if (!fn) return;
     const int k = set == NVMTL_SET_VERTEX ? 0 : 1;
     static int off = -1; if (off < 0) off = NVMTL_GB_OFF("nvmtl-no-embedded-memo");
-    if (!off && e->_embFn[k] != (id)fn) { e->_embFn[k] = fn; e->_embNeed[k] = nvmtl_embedded_needed(fn) ? 1 : 0; }
+    if (!off && e->_embFn[k] != (id)fn) { e->_embFn[k] = fn; e->_embNeed[k] = (int8_t)nvmtl_embedded_needed(fn); }
+    if (gNvWsCpu && !off) atomic_fetch_add_explicit(&gEmbKinds[e->_embNeed[k] & 2 ? 2 : e->_embNeed[k] & 1], 1, memory_order_relaxed);
     if (!off && !e->_embNeed[k]) { nvmtl_vk_parked_samplers_keep(&e->_cb->_c, set, 0); return; }
-    nvmtl_bind_embedded(e->_cb, set, fn, nvmtl_bufslot_dict(e, set));
+    // v79_1: v79 built the whole buffer dictionary at every draw of a shader with static samplers, which never reads it
+    // (bind +1-2.5 us a draw, all the setters gained)
+    nvmtl_bind_embedded(e->_cb, set, fn, (off || (e->_embNeed[k] & 2)) ? nvmtl_bufslot_dict(e, set) : nil);
 }
 - (BOOL)nvmtlBindSamplerPipeline {
     NVWS_SCOPE(_cb, NVWS_BIND);

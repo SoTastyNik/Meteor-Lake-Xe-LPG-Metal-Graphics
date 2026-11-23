@@ -244,7 +244,7 @@ uint32_t nvmtl_geoms_from_descriptor(id desc, nvmtl_geom *out, uint32_t max, int
 
 NSArray<NSDictionary *> *nvmtl_embedded_bindings(NVMTLFunction *function);
 void nvmtl_bind_embedded(NVMTLCommandBuffer *cb, uint32_t set, NVMTLFunction *fn, NSDictionary *bufferAtIndex);
-int nvmtl_embedded_needed(NVMTLFunction *fn);                                      // v79: statics or embedded plans
+int nvmtl_embedded_needed(NVMTLFunction *fn);                                      // v79: 1 statics | 2 embedded plans
 NSDictionary *nvmtl_bufslot_dict(NVMTLRenderCommandEncoder *e, uint32_t set);     // v79: index -> [buffer, offset]
 uint64_t nvmtl_resid_for_texture(id t);
 uint64_t nvmtl_resid_for_sampler(id s);
