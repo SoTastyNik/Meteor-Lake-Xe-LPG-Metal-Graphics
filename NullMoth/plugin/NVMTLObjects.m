@@ -1097,6 +1097,7 @@ static BOOL nvmtl_surface_pending_write(NVMTLCommandBuffer *cb, NVMTLTexture *t)
 static void nvmtl_surface_in_for_cb(NVMTLCommandBuffer *cb, NVMTLTexture *t) {
     if (!t) return;
     NVMTLTexture *r = t->_parent ? t->_parent : t;
+    if (!r->_surf) return;   // v79: nvmtlSurfaceIn has nothing to do without a surface; skip the pending-write lookup too
     if (cb && r->_surf && [cb->_surfOverwrites containsObject:r]) return;
     // A prior committed buffer defines this GPU backing's contents.
     // Importing the old CPU surface here would run ahead of this buffer and
@@ -2782,6 +2783,44 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     for (NSString *k in m) { NSMutableDictionary *st = [m[k] mutableCopy]; st[@"lod_max_clamp"] = @65504.0f; o[k] = st; }
     return o;
 }
+/* v79: the buffer slots. Setting one used to build an [buffer, offset] array and an NSNumber into a dictionary on every
+   call (0.98 ms of setters a command buffer, 14 us a draw, while closing Launchpad); the dictionary is now built from
+   the slots only when a shader reads it. Indices past 31 keep the dictionary. */
+static void nvmtl_bufslot_put(NVMTLRenderCommandEncoder *e, uint32_t set, NSUInteger i, NVMTLBuffer *b, NSUInteger off) {
+    if (i < 32 && set == NVMTL_SET_VERTEX) { e->_vbS[i] = b; e->_vbO[i] = off; e->_vbBits |= 1u << i; e->_vbStale = YES; return; }
+    if (i < 32 && set == NVMTL_SET_FRAGMENT) { e->_fbS[i] = b; e->_fbO[i] = off; e->_fbBits |= 1u << i; e->_fbStale = YES; return; }
+    if (set == NVMTL_SET_VERTEX) { if (!e->_vbufAt) e->_vbufAt = [NSMutableDictionary new]; e->_vbufAt[@(i)] = @[b, @(off)]; }
+    else if (set == NVMTL_SET_FRAGMENT) { if (!e->_fbufAt) e->_fbufAt = [NSMutableDictionary new]; e->_fbufAt[@(i)] = @[b, @(off)]; }
+}
+static void nvmtl_bufslot_offset(NVMTLRenderCommandEncoder *e, uint32_t set, NSUInteger i, NSUInteger off) {
+    if (i < 32 && set == NVMTL_SET_VERTEX && (e->_vbBits >> i & 1)) { e->_vbO[i] = off; e->_vbStale = YES; return; }
+    if (i < 32 && set == NVMTL_SET_FRAGMENT && (e->_fbBits >> i & 1)) { e->_fbO[i] = off; e->_fbStale = YES; return; }
+    NSMutableDictionary *d = set == NVMTL_SET_VERTEX ? e->_vbufAt : e->_fbufAt;
+    NSArray *b = d[@(i)]; if (b) d[@(i)] = @[b[0], @(off)];
+}
+NSDictionary *nvmtl_bufslot_dict(NVMTLRenderCommandEncoder *e, uint32_t set) {
+    const BOOL v = set == NVMTL_SET_VERTEX;
+    if (!(v ? e->_vbStale : e->_fbStale)) return v ? e->_vbufAt : e->_fbufAt;
+    NSMutableDictionary *d = v ? e->_vbufAt : e->_fbufAt;
+    if (!d) { d = [NSMutableDictionary new]; if (v) e->_vbufAt = d; else e->_fbufAt = d; }
+    for (uint32_t bits = v ? e->_vbBits : e->_fbBits; bits; bits &= bits - 1) {
+        const uint32_t i = (uint32_t)__builtin_ctz(bits);
+        NVMTLBuffer *b = v ? e->_vbS[i] : e->_fbS[i];
+        if (b) d[@(i)] = @[b, @(v ? e->_vbO[i] : e->_fbO[i])];
+    }
+    if (v) e->_vbStale = NO; else e->_fbStale = NO;
+    return d;
+}
+/* v79: a function with neither static samplers nor embedded fields only gives back parked sampler slots, which is all
+   nvmtl_bind_embedded does for it; the answer is kept per stage while the same function draws */
+static void nvmtl_enc_embedded(NVMTLRenderCommandEncoder *e, uint32_t set, NVMTLFunction *fn) {
+    if (!fn) return;
+    const int k = set == NVMTL_SET_VERTEX ? 0 : 1;
+    static int off = -1; if (off < 0) off = NVMTL_GB_OFF("nvmtl-no-embedded-memo");
+    if (!off && e->_embFn[k] != (id)fn) { e->_embFn[k] = fn; e->_embNeed[k] = nvmtl_embedded_needed(fn) ? 1 : 0; }
+    if (!off && !e->_embNeed[k]) { nvmtl_vk_parked_samplers_keep(&e->_cb->_c, set, 0); return; }
+    nvmtl_bind_embedded(e->_cb, set, fn, nvmtl_bufslot_dict(e, set));
+}
 - (BOOL)nvmtlBindSamplerPipeline {
     NVWS_SCOPE(_cb, NVWS_BIND);
     if (!_ps) return NO;
@@ -2821,9 +2860,9 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     }
     if(!_cb->_resources)_cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:selected];
     nvmtl_vk_cmd_bind_pipeline(&_cb->_c,&selected->_p);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX,   (NVMTLFunction *)_ps->_descriptor.vertexFunction,   _vbufAt);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_FRAGMENT, (NVMTLFunction *)_ps->_descriptor.fragmentFunction, _fbufAt);
-    nvmtl_vk_cmd_bind_set(&_cb->_c,&selected->_p);
+    nvmtl_enc_embedded(self, NVMTL_SET_VERTEX,   (NVMTLFunction *)_ps->_descriptor.vertexFunction);
+    nvmtl_enc_embedded(self, NVMTL_SET_FRAGMENT, (NVMTLFunction *)_ps->_descriptor.fragmentFunction);
+    { NVWS_SCOPE_AS(_cb, NVWS_BIND_SETS, nvws_sets_); nvmtl_vk_cmd_bind_set(&_cb->_c,&selected->_p); }
     return YES;
 }
 - (BOOL)nvmtlSamplePositionError:(NSString *)message {
@@ -2970,7 +3009,7 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     if (!_hasRef) { nvmtl_vk_cmd_set_stencil_ref(&_cb->_c, 0, 0); _hasRef = YES; }
 }
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)ps {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_PSO);
     { NVMTLRenderPipelineState *p_ = (NVMTLRenderPipelineState *)ps;
       if (p_ && nvmtl_trace_on()) {
           extern int nvmtl_vk_pipeline_stats(void *pipe, char *out, size_t n);
@@ -2993,6 +3032,8 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
       } }
     NVMTLRenderPipelineState *p = (NVMTLRenderPipelineState *)ps;
     if (!p) { nvlog("encoder: nil render pipeline refused"); return; }
+    // v79: the pipeline already set in a pass in progress: nothing changes (it is retained, compatible and noted)
+    if (p == _ps && _begun) return;
     if (_begun && !nvmtl_vk_pipeline_compatible(&_passSig, &p->_p)) {
         nvlog("encoder: incompatible render pipeline refused before changing draw state"); return;
     }
@@ -3052,13 +3093,12 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     }
 }
 - (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)off atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_BUF);
     NVMTLBuffer *nb = (NVMTLBuffer *)b;
     if (!nb) { nvlog("setVertexBuffer: nil at index %lu", (unsigned long)i); return; }
     if (!_cb->_resources) _cb->_resources = [NVMTLResSet new];
     [_cb->_resources addObject:nb];
-    if (!_vbufAt) _vbufAt = [NSMutableDictionary new];
-    _vbufAt[@(i)] = @[nb, @(off)];
+    nvmtl_bufslot_put(self, NVMTL_SET_VERTEX, i, nb, off);
     nvtrace_floats("VB", (unsigned long)i, (unsigned long)off, nb->_b.map, 24);
     if (nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, (uint32_t)i, &nb->_b, off)) nvlog("setVertexBuffer: bind FAILED");
 }
@@ -3069,19 +3109,18 @@ static NSDictionary *nvmtl_pixel_sampler_norm(NSDictionary *m) {
     NVMTLAccelerationStructure *a = (NVMTLAccelerationStructure *)as;
     if (a && [(id)a isKindOfClass:[NVMTLAccelerationStructure class]] && a->_uid.buf && _cb) nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_FRAGMENT, 31, &a->_uid, 0); }
 - (void)setFragmentBuffer:(id<MTLBuffer>)b offset:(NSUInteger)off atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_BUF);
     NVMTLBuffer *nb = (NVMTLBuffer *)b;
     if (!nb) { nvlog("setFragmentBuffer: nil at index %lu", (unsigned long)i); return; }
     if (!_cb->_resources) _cb->_resources = [NVMTLResSet new];
     [_cb->_resources addObject:nb];
-    if (!_fbufAt) _fbufAt = [NSMutableDictionary new];
-    _fbufAt[@(i)] = @[nb, @(off)];
+    nvmtl_bufslot_put(self, NVMTL_SET_FRAGMENT, i, nb, off);
     nvtrace_floats("FB", (unsigned long)i, (unsigned long)off, nb->_b.map, 16);
     if (nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_FRAGMENT, (uint32_t)i, &nb->_b, off)) nvlog("setFragmentBuffer: bind FAILED");
 }
 static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, size_t *off);
 - (void)nvmtlBindBytes:(const void *)bytes length:(NSUInteger)len atIndex:(NSUInteger)i set:(uint32_t)set {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_BYTES);
     size_t roff = 0;
     NVMTLBuffer *nb = nvmtl_bytes_ring(_cb, len, &roff);
     const BOOL ring = nb != nil;
@@ -3096,13 +3135,12 @@ static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, siz
         if (!_cb->_scratch) _cb->_scratch = [NSMutableArray new];
         [_cb->_scratch addObject:nb];
     }
-    if (set == NVMTL_SET_VERTEX)        { if (!_vbufAt) _vbufAt = [NSMutableDictionary new]; _vbufAt[@(i)] = @[nb, @(roff)]; }
-    else if (set == NVMTL_SET_FRAGMENT) { if (!_fbufAt) _fbufAt = [NSMutableDictionary new]; _fbufAt[@(i)] = @[nb, @(roff)]; }
+    if (set == NVMTL_SET_VERTEX || set == NVMTL_SET_FRAGMENT) nvmtl_bufslot_put(self, set, i, nb, roff);
 }
 - (void)setVertexBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_VERTEX]; }
 - (void)setFragmentBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_FRAGMENT]; }
 - (void)setVertexTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_TEX);
     NVMTLTexture *nt = (NVMTLTexture *)t;
     if (!nt) { nvlog("setVertexTexture: nil at index %lu", (unsigned long)i); return; }
     nvmtl_retain_resource(_cb, nt);
@@ -3119,33 +3157,38 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     return i < 16 ? keys[i] : [@(i) stringValue];
 }
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_SAMP);
     NVMTLSamplerState *ns = (NVMTLSamplerState *)s;
     if (i >= 16 || nvmtl_vk_bind_sampler(&_cb->_c, NVMTL_SET_FRAGMENT, (uint32_t)i, ns ? &ns->_s : NULL)) {
         nvlog("setFragmentSamplerState: invalid index or bind failure"); return;
     }
+    // v79: CoreAnimation binds samplers without pixel coordinates at every draw: no table work while it stays empty
+    if ((ns && ns->_pixelState) || _fragmentSamplers.count) {
     if (!_fragmentSamplers) _fragmentSamplers=[NSMutableDictionary new];
     NSString *key=nvmtl_slot_key(i);
     { NSDictionary *was=_fragmentSamplers[key], *now=ns ? ns->_pixelState : nil; if (was!=now) _sampGen++; }
     if(ns && ns->_pixelState) _fragmentSamplers[key]=ns->_pixelState;else [_fragmentSamplers removeObjectForKey:key];
+    }
     nvtrace("FRAGMENT SAMPLER[%lu] pixel=%d bound=%d",(unsigned long)i,ns && ns->_pixelState!=nil,ns!=nil);
     if(ns) { if (!_cb->_resources) _cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:ns]; }
 }
 - (void)setVertexSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_SAMP);
     NVMTLSamplerState *ns = (NVMTLSamplerState *)s;
     if (i >= 16 || nvmtl_vk_bind_sampler(&_cb->_c, NVMTL_SET_VERTEX, (uint32_t)i, ns ? &ns->_s : NULL)) {
         nvlog("setVertexSamplerState: invalid index or bind failure"); return;
     }
+    if ((ns && ns->_pixelState) || _vertexSamplers.count) {
     if (!_vertexSamplers) _vertexSamplers=[NSMutableDictionary new];
     NSString *key=nvmtl_slot_key(i);
     { NSDictionary *was=_vertexSamplers[key], *now=ns ? ns->_pixelState : nil; if (was!=now) _sampGen++; }
     if(ns && ns->_pixelState) _vertexSamplers[key]=ns->_pixelState;else [_vertexSamplers removeObjectForKey:key];
+    }
     nvtrace("VERTEX SAMPLER[%lu] pixel=%d bound=%d",(unsigned long)i,ns && ns->_pixelState!=nil,ns!=nil);
     if(ns) { if (!_cb->_resources) _cb->_resources=[NVMTLResSet new];[_cb->_resources addObject:ns]; }
 }
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)i {
-    NVWS_SCOPE(_cb, NVWS_SET);
+    NVWS_SCOPE(_cb, NVWS_SET_TEX);
     NVMTLTexture *nt = (NVMTLTexture *)t;
     if (!nt) { nvlog("setFragmentTexture: nil at index %lu", (unsigned long)i); return; }
     static int weather = -1; if (weather < 0) weather = !strcmp(getprogname(), "Weather");
@@ -3474,7 +3517,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
 }
 - (void)setVertexBufferOffset:(NSUInteger)off atIndex:(NSUInteger)i {
     nvtrace("VBOFF[%lu] -> %lu", (unsigned long)i, (unsigned long)off);
-    { NSArray *b = _vbufAt[@(i)]; if (b) _vbufAt[@(i)] = @[b[0], @(off)]; }
+    nvmtl_bufslot_offset(self, NVMTL_SET_VERTEX, i, off);
     if (nvmtl_vk_bind_buffer_offset(&_cb->_c, NVMTL_SET_VERTEX, (uint32_t)i, off))
         nvlog("setVertexBufferOffset: nothing bound at vertex index %lu", (unsigned long)i);
 }
@@ -3498,7 +3541,7 @@ static NSString *nvmtl_slot_key(NSUInteger i) {
     [self setVertexBytes:b length:l atIndex:i]; [self nvmtlVertexStride:st atIndex:i]; }
 - (void)setFragmentBufferOffset:(NSUInteger)off atIndex:(NSUInteger)i {
     nvtrace("FBOFF[%lu] -> %lu", (unsigned long)i, (unsigned long)off);
-    { NSArray *b = _fbufAt[@(i)]; if (b) _fbufAt[@(i)] = @[b[0], @(off)]; }
+    nvmtl_bufslot_offset(self, NVMTL_SET_FRAGMENT, i, off);
     if (nvmtl_vk_bind_buffer_offset(&_cb->_c, NVMTL_SET_FRAGMENT, (uint32_t)i, off))
         nvlog("setFragmentBufferOffset: nothing bound at fragment index %lu", (unsigned long)i);
 }

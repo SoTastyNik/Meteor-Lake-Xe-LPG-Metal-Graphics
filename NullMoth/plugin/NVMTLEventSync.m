@@ -709,13 +709,19 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
             static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
             uint64_t bc[2], rc[2]; nvmtl_vk_bind_counts(bc); nvmtl_resset_counts(rc);
             const double n = (double)gWsEncN, u = (double)tb.numer / tb.denom * 1e-6 / n;
-            const double plugin = (gWsCpu[NVWS_PASS] + gWsCpu[NVWS_DRAW] + gWsCpu[NVWS_SET] + gWsCpu[NVWS_END]) * u;
+            const uint64_t setters = gWsCpu[NVWS_SET] + gWsCpu[NVWS_SET_BUF] + gWsCpu[NVWS_SET_BYTES] + gWsCpu[NVWS_SET_TEX]
+                                   + gWsCpu[NVWS_SET_SAMP] + gWsCpu[NVWS_SET_PSO];
+            const double plugin = (gWsCpu[NVWS_PASS] + gWsCpu[NVWS_DRAW] + setters + gWsCpu[NVWS_END]) * u;
             syslog(LOG_ERR, "NullMoth: frame timing CPU ms avg per command buffer over %llu: plugin %.2f of encode %.2f (pass setup %.2f, "
                    "draws %.2f incl. bind %.2f, setters %.2f, pass ends %.2f) + commit %.2f; %.1f passes, %.1f draws each; "
-                   "pipeline binds skipped %llu of %llu, resource adds by address %llu of %llu", gWsEncN, plugin, gWsEncSum / n,
-                   gWsCpu[NVWS_PASS] * u, gWsCpu[NVWS_DRAW] * u, gWsCpu[NVWS_BIND] * u, gWsCpu[NVWS_SET] * u, gWsCpu[NVWS_END] * u,
+                   "pipeline binds skipped %llu of %llu, resource adds by address %llu of %llu; "
+                   "setters: buffers %.2f, bytes %.2f, textures %.2f, samplers %.2f, pipeline %.2f, other %.2f; bind: descriptor sets %.2f",
+                   gWsEncN, plugin, gWsEncSum / n,
+                   gWsCpu[NVWS_PASS] * u, gWsCpu[NVWS_DRAW] * u, gWsCpu[NVWS_BIND] * u, setters * u, gWsCpu[NVWS_END] * u,
                    gWsCpu[NVWS_COMMIT] * u, gWsPasses / n, gWsDraws / n, (unsigned long long)bc[1], (unsigned long long)bc[0],
-                   (unsigned long long)rc[0], (unsigned long long)(rc[0] + rc[1]));
+                   (unsigned long long)rc[0], (unsigned long long)(rc[0] + rc[1]),
+                   gWsCpu[NVWS_SET_BUF] * u, gWsCpu[NVWS_SET_BYTES] * u, gWsCpu[NVWS_SET_TEX] * u, gWsCpu[NVWS_SET_SAMP] * u,
+                   gWsCpu[NVWS_SET_PSO] * u, gWsCpu[NVWS_SET] * u, gWsCpu[NVWS_BIND_SETS] * u);
         }
         nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;

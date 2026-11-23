@@ -2801,7 +2801,7 @@ NVMTL_MESH_BINDERS(Object, YES, NO)
     nvmtl_mesh_replay(self, mb ? mb->_obj : nil);
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 29, &sb->_b, 0);
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 30, &sb->_b, 0);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_o->_function, _vbufAt);
+    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_o->_function, nvmtl_bufslot_dict(self, NVMTL_SET_VERTEX));
     uint32_t ol[3] = { (uint32_t)ot.width, (uint32_t)ot.height, (uint32_t)ot.depth };
     uint32_t tt[3] = { (uint32_t)(g.width * ot.width), (uint32_t)(g.height * ot.height), (uint32_t)(g.depth * ot.depth) };
     nvmtl_vk_cmd_dispatch_threads(&_cb->_c, &mi->_o->_p, tt, ol);
@@ -2809,7 +2809,7 @@ NVMTL_MESH_BINDERS(Object, YES, NO)
     nvmtl_mesh_replay(self, mb ? mb->_mesh : nil);
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 29, &sb->_b, 0);
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 30, &sb->_b, 0);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_k->_function, _vbufAt);
+    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_k->_function, nvmtl_bufslot_dict(self, NVMTL_SET_VERTEX));
     uint32_t ml[3] = { (uint32_t)mt.width, (uint32_t)mt.height, (uint32_t)mt.depth };
     nvmtl_vk_cmd_dispatch_indirect_tg(&_cb->_c, &mi->_k->_p, &sb->_b, 0, ml);
     nvmtl_vk_cmd_barrier(&_cb->_c);
@@ -2836,7 +2836,7 @@ NVMTL_MESH_BINDERS(Object, YES, NO)
     if (nvmtl_vk_cmd_fill_buffer(&_cb->_c, &sb->_b, 0, (size_t)bytes, 0)) nvlog("mesh: scratch clear FAILED - counts may be stale");
     nvmtl_vk_cmd_barrier(&_cb->_c);
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 30, &sb->_b, 0);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_k->_function, _vbufAt);
+    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_k->_function, nvmtl_bufslot_dict(self, NVMTL_SET_VERTEX));
     uint32_t l[3] = { (uint32_t)mt.width, (uint32_t)mt.height, (uint32_t)mt.depth };
     uint32_t t[3] = { (uint32_t)(g.width * mt.width), (uint32_t)(g.height * mt.height), (uint32_t)(g.depth * mt.depth) };
     nvmtl_vk_cmd_dispatch_threads(&_cb->_c, &mi->_k->_p, t, l);
@@ -2879,7 +2879,7 @@ NVMTL_MESH_BINDERS(Object, YES, NO)
     nvmtl_vk_cmd_barrier(&_cb->_c);
     [_cb->_resources addObject:mi->_ki]; [_cb->_resources addObject:mi->_psi];
     nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_VERTEX, 30, &sb->_b, 0);
-    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_ki->_function, _vbufAt);
+    nvmtl_bind_embedded(_cb, NVMTL_SET_VERTEX, mi->_ki->_function, nvmtl_bufslot_dict(self, NVMTL_SET_VERTEX));
     uint32_t ml[3] = { (uint32_t)mt.width, (uint32_t)mt.height, (uint32_t)mt.depth };
     nvmtl_vk_cmd_dispatch_indirect_tg(&_cb->_c, &mi->_ki->_p, &ab->_b, off, ml);
     nvmtl_vk_cmd_barrier(&_cb->_c);
