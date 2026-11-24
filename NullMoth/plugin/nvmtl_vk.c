@@ -3682,20 +3682,14 @@ static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint
  * A set this recording already wrote serves again when every binding the pipeline reads (its mask, its storage
  * textures) holds what it held then. /Library/GPUBundles/nvmtl-ws-no-setcache turns it off.
  */
-/* v81, WindowServer, while /Library/GPUBundles/nvmtl-ws-dynaddr exists (checked every second): graphics sets take
-   the address table by dynamic offset and are reused while only the table's contents change (CoreAnimation's draws
-   made 1.85 new sets a draw in v80, the address table in nearly all of them), and the same sets are not bound again */
+/* v81, WindowServer: graphics sets take the address table by dynamic offset and are reused while only the table's
+   contents change (CoreAnimation's draws made 1.85 new sets a draw in v80, 224 of 306 a command buffer only for the
+   table; with this 83), and the same sets are not bound again. v82: on by default (v81's A/B showed no artefacts);
+   /Library/GPUBundles/nvmtl-ws-no-dynaddr turns it off, checked every second. */
 static int nvmtl_dynaddr_on(void)
 {
     static int on = -1; static uint64_t next;
-    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    if (on < 0 || now >= next) {
-        next = now + 1000000000ull;
-        const int v = nvmtl_table_ubo() && nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-dynaddr", F_OK) == 0;
-        if (v != on && nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: address table by dynamic offset %s", v ? "ON" : "OFF");
-        on = v;
-    }
-    return on;
+    return nvmtl_table_ubo() && nvmtl_ws_switch_live("/Library/GPUBundles/nvmtl-ws-no-dynaddr", "address table by dynamic offset", &on, &next);
 }
 static int nvmtl_setcache_on(void)
 {
@@ -3761,9 +3755,9 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
     }
     // v81: no descriptor the last set holds has changed, only bindings the table carries: a new table snapshot in the
     // same page, the same set at the snapshot's dynamic offset
-    uint64_t descChg = 0;
+    uint64_t descChg = 0, dc[4] = { 0, 0, 0, 0 };
     if (lastOk && t->dirty[which]) {
-        for (int k = 0; k < 4; k++) descChg |= t->chg[which][k] & (pm[k] | t->lastw[which][k]) & ~(k == (NVMTL_ADDRESS_BINDING >> 6) ? 1ull << (NVMTL_ADDRESS_BINDING & 63) : 0);
+        for (int k = 0; k < 4; k++) { dc[k] = t->chg[which][k] & (pm[k] | t->lastw[which][k]) & ~(k == (NVMTL_ADDRESS_BINDING >> 6) ? 1ull << (NVMTL_ADDRESS_BINDING & 63) : 0); descChg |= dc[k]; }
         if (t->chg_wide[which]) descChg = 1;
         if (dyn && !descChg && t->last_page[which] && hi <= t->last_hi[which]) {
             int covered = 1;
@@ -3781,6 +3775,15 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
     }
     // why a new set (census): none to reuse, a descriptor changed, only the table changed, or the pipeline needs more
     nvmtl_enc78_count(!lastOk ? E78C_R_FIRST : !t->dirty[which] ? E78C_R_MASK : descChg ? E78C_R_DESC : E78C_R_ADDR, 1);
+    // v82: which kinds of descriptor changed (bindings 0-31 buffers, 32-159 textures, 160-191 samplers, 193+ storage
+    // textures); a set can count under several
+    if (lastOk && descChg) {
+        _Static_assert(NVMTL_NBUF == 32 && NVMTL_NTEX == 128 && NVMTL_NSAMP == 32 && NVMTL_ADDRESS_BINDING == 192, "v82 census ranges");
+        if (dc[0] & 0xffffffffull) nvmtl_enc78_count(E78C_D_BUF, 1);
+        if ((dc[0] >> 32) | dc[1] | (dc[2] & 0xffffffffull)) nvmtl_enc78_count(E78C_D_TEX, 1);
+        if (dc[2] >> 32) nvmtl_enc78_count(E78C_D_SAMP, 1);
+        if ((dc[3] & ~1ull) || t->chg_wide[which]) nvmtl_enc78_count(E78C_D_STEX, 1);
+    }
     uint64_t sckey = 0;
     if ((p->bmask_ok || (p->gmask_ok && which < 2)) && !NVMTL_E78_HAS(pm, NVMTL_ADDRESS_BINDING) && nvmtl_setcache_on()) {
         sckey = nvmtl_set_key(t, which, pm, hi);
