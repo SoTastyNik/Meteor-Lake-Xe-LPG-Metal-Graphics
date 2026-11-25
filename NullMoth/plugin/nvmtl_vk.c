@@ -2737,7 +2737,9 @@ typedef struct { nvmtl_slot s[2][NVMTL_NBIND];
                  /* v81: the address table page the last set's descriptor points at (NULL: an offset baked into the
                     descriptor, the old way) and the dynamic offset of its current snapshot */
                  void *last_page[2]; uint32_t last_dyn[2];
-                 uint8_t chg_wide[2];   /* v81: a binding past the first 256 (a storage texture) changed */ } nvmtl_bindtable;
+                 uint8_t chg_wide[2];   /* v81: a binding past the first 256 (a storage texture) changed */
+                 uint32_t park_pend[2];   /* v83: parked sampler slots whose app sampler goes back only when a pipeline reads them */
+               } nvmtl_bindtable;
 
 static VkDescriptorSetLayout g_setLayout;
 #define NVMTL_MAX_POOLS 64
@@ -3133,6 +3135,35 @@ static int nvmtl_bind_slot(nvk_cmdbuf *c, uint32_t set, uint32_t binding, uint8_
     }
     sl->kind = kind; sl->h = h; sl->off = off;
     return 0;
+}
+/* v83 (WindowServer, while /Library/GPUBundles/nvmtl-ws-lazy exists, checked every second): a pipeline that reads
+   none of the changed bindings keeps the last descriptor set (their descriptors are marked stale in it); a parked
+   static sampler's slot gets the app's sampler back only when a pipeline reads that slot; the same setBytes data at
+   the same index points at the copy already in the ring. v82's census: of ~80 new sets a command buffer, samplers
+   changed in 65 (static samplers parked and given back at every pipeline switch) and buffers in 56. */
+int nvmtl_vk_lazy_on(void)
+{
+    static int on = -1; static uint64_t next;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    if (on < 0 || now >= next) {
+        next = now + 1000000000ull;
+        const int v = nvmtl_vk_windowserver_serial() && access("/Library/GPUBundles/nvmtl-ws-lazy", F_OK) == 0;
+        if (v != on && nvmtl_vk_windowserver_serial()) syslog(LOG_ERR, "NullMoth: lazy descriptor sets (v83) %s", v ? "ON" : "OFF");
+        on = v;
+    }
+    return on;
+}
+// v83: give the app's samplers back to the parked slots in want that are still waiting for it
+static void nvmtl_park_apply(nvk_cmdbuf *c, nvmtl_bindtable *t, uint32_t set, uint32_t want)
+{
+    for (uint32_t drop = t->park_pend[set] & want; drop; drop &= drop - 1) {
+        const uint32_t i = (uint32_t)__builtin_ctz(drop), b = NVMTL_NBUF + NVMTL_NTEX + i;
+        const nvmtl_slot *sl = &t->s[set][b];
+        if (sl->kind == t->park_kind[set][i] && sl->h == t->park_h[set][i])
+            nvmtl_bind_slot(c, set, b, t->park_saved_kind[set][i], t->park_saved[set][i], 0);
+        t->park_mask[set] &= ~(1u << i);
+    }
+    t->park_pend[set] &= ~want;
 }
 
 int nvmtl_vk_emb_same(nvk_cmdbuf *c, uint32_t set, const void *fn, const uint64_t *key, uint32_t n)
@@ -3549,6 +3580,8 @@ static VkDescriptorSet nvmtl_snapshot_set_m(nvk_cmdbuf *c, uint32_t which, uint3
 static VkDescriptorSet nvmtl_snapshot_set_md(nvk_cmdbuf *c, uint32_t which, uint32_t stex_hi, const uint64_t *mask, const uint64_t *tb,
                                              VkDescriptorSet from, const uint64_t *copym)
 {
+    // v83: a set written from every binding (no pipeline mask) gets the app's samplers in the waiting parked slots
+    { nvmtl_bindtable *pt = (nvmtl_bindtable *)c->table; if (!mask && pt && which <= 1 && pt->park_pend[which]) nvmtl_park_apply(c, pt, which, ~0u); }
     VkDescriptorSet set = VK_NULL_HANDLE; VkDescriptorPool pool = VK_NULL_HANDLE;
     VkResult r = VK_ERROR_OUT_OF_POOL_MEMORY;
     if (c->ndcache) {
@@ -3739,10 +3772,17 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
 {
     nvmtl_bindtable *t = (nvmtl_bindtable *)c->table;
     if (dynOut) *dynOut = 0;
-    if (!t || which > 1 || !nvmtl_enc78_on(NVMTL_E78_H3) || p->tbany) return nvmtl_snapshot_set_t(c, which, p->stex_hi[which], p->tbany ? p->tbm[which] : NULL);
+    if (!t || which > 1 || !nvmtl_enc78_on(NVMTL_E78_H3) || p->tbany) {
+        if (t && which <= 1 && t->park_pend[which]) nvmtl_park_apply(c, t, which, ~0u);   // v83: no pipeline mask here
+        return nvmtl_snapshot_set_t(c, which, p->stex_hi[which], p->tbany ? p->tbm[which] : NULL);
+    }
     const uint64_t all[4] = { ~0ull, ~0ull, ~0ull, ~0ull };
     const uint64_t *pm = p->bmask_ok ? p->bmask : (p->gmask_ok && which < 2) ? p->gmask[which] : all;
     uint32_t hi = p->stex_hi[which];
+    // v83: the parked slots this pipeline reads (sampler bindings 160-191) get the app's sampler back first, a change
+    // like any other; with lazy sets off, all of them
+    const int lazy = nvmtl_vk_lazy_on();
+    if (t->park_pend[which]) nvmtl_park_apply(c, t, which, lazy ? (uint32_t)(pm[2] >> 32) : ~0u);
     const int haveAddr = NVMTL_E78_HAS(pm, NVMTL_ADDRESS_BINDING);
     const int dyn = dynOut && haveAddr && nvmtl_dynaddr_on();
     const int lastOk = t->last[which] && t->last_idx[which] < c->nsets
@@ -3753,22 +3793,39 @@ static VkDescriptorSet nvmtl_snapshot_set_c(nvk_cmdbuf *c, uint32_t which, const
         for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
         if (covered) { nvmtl_enc78_count(E78C_SETREUSE, 1); if (dynOut) *dynOut = t->last_dyn[which]; return t->last[which]; }
     }
-    // v81: no descriptor the last set holds has changed, only bindings the table carries: a new table snapshot in the
-    // same page, the same set at the snapshot's dynamic offset
-    uint64_t descChg = 0, dc[4] = { 0, 0, 0, 0 };
+    // v81: no descriptor the last set holds has changed: the same set; bindings the address table carries need a new
+    // snapshot in the same page, bound at its dynamic offset. v83 (lazy): the pipeline reads none of the changed
+    // bindings: the same set, with their descriptors marked stale in it (taken out of lastw)
+    uint64_t descChg = 0, readChg = 0, dc[4] = { 0, 0, 0, 0 };
     if (lastOk && t->dirty[which]) {
-        for (int k = 0; k < 4; k++) { dc[k] = t->chg[which][k] & (pm[k] | t->lastw[which][k]) & ~(k == (NVMTL_ADDRESS_BINDING >> 6) ? 1ull << (NVMTL_ADDRESS_BINDING & 63) : 0); descChg |= dc[k]; }
-        if (t->chg_wide[which]) descChg = 1;
-        if (dyn && !descChg && t->last_page[which] && hi <= t->last_hi[which]) {
-            int covered = 1;
-            for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
-            VkDescriptorBufferInfo ai;
-            c->dyn_req = 1;
-            const int got = covered && nvmtl_address_snapshot(c, which, &ai) == 0;
-            c->dyn_req = 0;
-            if (got && c->dyn_page == t->last_page[which]) {
-                t->last_dyn[which] = c->dyn_off; t->dirty[which] = 0; memset(t->chg[which], 0, sizeof t->chg[which]); t->chg_wide[which] = 0;
-                nvmtl_enc78_count(E78C_ADDRREUSE, 1); *dynOut = c->dyn_off;
+        for (int k = 0; k < 4; k++) {
+            const uint64_t a = k == (NVMTL_ADDRESS_BINDING >> 6) ? 1ull << (NVMTL_ADDRESS_BINDING & 63) : 0;
+            dc[k] = t->chg[which][k] & (pm[k] | t->lastw[which][k]) & ~a; descChg |= dc[k];
+            readChg |= t->chg[which][k] & pm[k] & ~a;
+        }
+        if (t->chg_wide[which]) descChg = readChg = 1;
+        // the table holds the buffers' addresses (bindings 0-31) and the textures' sizes (32-159)
+        const int tableChg = (t->chg[which][0] | t->chg[which][1] | (t->chg[which][2] & 0xffffffffull)) != 0;
+        int covered = hi <= t->last_hi[which];
+        for (int k = 0; k < 4; k++) if (pm[k] & ~t->lastw[which][k]) covered = 0;
+        if (covered && !(lazy ? readChg : descChg)) {
+            int keep = 0; uint32_t dynNow = t->last_dyn[which];
+            if (haveAddr && tableChg) {
+                if (dyn && t->last_page[which]) {
+                    VkDescriptorBufferInfo ai;
+                    c->dyn_req = 1;
+                    const int got = nvmtl_address_snapshot(c, which, &ai) == 0;
+                    c->dyn_req = 0;
+                    if (got && c->dyn_page == t->last_page[which]) { keep = 1; dynNow = c->dyn_off; nvmtl_enc78_count(E78C_ADDRREUSE, 1); }
+                }
+            } else if (lazy) { keep = 1; nvmtl_enc78_count(E78C_LAZYREUSE, 1); }
+            else if (haveAddr && dyn && t->last_page[which]) { keep = 1; nvmtl_enc78_count(E78C_ADDRREUSE, 1); }
+            if (keep) {
+                for (int k = 0; k < 4; k++) t->lastw[which][k] &= ~t->chg[which][k];
+                if (tableChg && !haveAddr) t->lastw[which][NVMTL_ADDRESS_BINDING >> 6] &= ~(1ull << (NVMTL_ADDRESS_BINDING & 63));
+                t->last_dyn[which] = dynNow; t->dirty[which] = 0;
+                memset(t->chg[which], 0, sizeof t->chg[which]); t->chg_wide[which] = 0;
+                if (dynOut) *dynOut = dynNow;
                 return t->last[which];
             }
         }
@@ -3903,12 +3960,16 @@ int nvmtl_vk_bind_parked_sampler(nvk_cmdbuf *c, uint32_t set, uint32_t index, nv
     if (!parked) { t->park_saved_kind[set][index] = kind; t->park_saved[set][index] = h; }
     t->park_kind[set][index] = t->s[set][b].kind; t->park_h[set][index] = t->s[set][b].h;
     t->park_mask[set] |= bit;
+    t->park_pend[set] &= ~bit;   // v83: parked again on purpose
     return 0;
 }
 void nvmtl_vk_parked_samplers_keep(nvk_cmdbuf *c, uint32_t set, uint32_t keep)
 {
     nvmtl_bindtable *t = c ? (nvmtl_bindtable *)c->table : NULL;
     if (!t || set > 1) return;
+    // v83: the dropped slots wait for a pipeline that reads them (nvmtl_park_apply in nvmtl_snapshot_set_c / _md)
+    if (nvmtl_vk_lazy_on()) { t->park_pend[set] = (t->park_pend[set] | (t->park_mask[set] & ~keep)) & ~keep; return; }
+    t->park_pend[set] = 0;
     for (uint32_t drop = t->park_mask[set] & ~keep; drop; drop &= drop - 1) {
         const uint32_t i = (uint32_t)__builtin_ctz(drop), b = NVMTL_NBUF + NVMTL_NTEX + i;
         const nvmtl_slot *sl = &t->s[set][b];

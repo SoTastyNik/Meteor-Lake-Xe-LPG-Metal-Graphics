@@ -235,6 +235,8 @@ uint32_t nvmtl_geoms_from_descriptor(id desc, nvmtl_geom *out, uint32_t max, int
      (embedded argument-buffer fields, mesh replay): nvmtl_bufslot_dict. */
   __unsafe_unretained NVMTLBuffer *_vbS[32], *_fbS[32]; NSUInteger _vbO[32], _fbO[32]; uint32_t _vbBits, _fbBits; BOOL _vbStale, _fbStale;
   __unsafe_unretained id _embFn[2]; int8_t _embNeed[2];   // v79: whether the last function per stage has embedded/static bindings
+  // v83: the last setBytes data per stage and index 0-7 (its ring copy, kept by the command buffer)
+  __unsafe_unretained NVMTLBuffer *_bytesB[2][8]; size_t _bytesOff[2][8]; uint32_t _bytesLen[2][8];
 } @end
 @interface NVMTLRenderCommandEncoder ()
 - (BOOL)nvmtlBuildPass:(MTLRenderPassDescriptor *)d;

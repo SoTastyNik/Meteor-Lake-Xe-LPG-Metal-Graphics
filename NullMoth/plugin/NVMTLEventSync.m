@@ -712,14 +712,17 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
             // v80: descriptor sets in this window (the bind's costliest part, ~3.7 us a draw in v79_1): made new, the last
             // set reused as it was, taken from the keyed cache; descriptors written and copied into the new ones
             // v81: why each new set was made, the sets kept with a new address table snapshot, the set binds skipped
-            static const int setK[15] = { E78C_SETNEW, E78C_SETREUSE, E78C_SETCACHE, E78C_WRITES, E78C_COPIES,
+            static const int setK[16] = { E78C_SETNEW, E78C_SETREUSE, E78C_SETCACHE, E78C_WRITES, E78C_COPIES,
                                           E78C_R_FIRST, E78C_R_DESC, E78C_R_ADDR, E78C_R_MASK, E78C_ADDRREUSE, E78C_BINDSKIP,
-                                          E78C_D_BUF, E78C_D_TEX, E78C_D_SAMP, E78C_D_STEX };   // v82: the kinds that changed
-            static uint64_t setLast[15]; double setD[15];
-            for (int k = 0; k < 15; k++) {
+                                          E78C_D_BUF, E78C_D_TEX, E78C_D_SAMP, E78C_D_STEX,   // v82: the kinds that changed
+                                          E78C_LAZYREUSE };   // v83: kept although the pipeline reads none of the changes
+            static uint64_t setLast[16], bytesLast; double setD[16];
+            for (int k = 0; k < 16; k++) {
                 const uint64_t now = __atomic_load_n(&g_e78c[setK[k]], __ATOMIC_RELAXED);
                 setD[k] = (double)(now - setLast[k]); setLast[k] = now;
             }
+            const uint64_t bytesNow = atomic_load_explicit(&gBytesSame, memory_order_relaxed);
+            const double bytesD = (double)(bytesNow - bytesLast); bytesLast = bytesNow;
             const double n = (double)gWsEncN, u = (double)tb.numer / tb.denom * 1e-6 / n;
             const uint64_t setters = gWsCpu[NVWS_SET] + gWsCpu[NVWS_SET_BUF] + gWsCpu[NVWS_SET_BYTES] + gWsCpu[NVWS_SET_TEX]
                                    + gWsCpu[NVWS_SET_SAMP] + gWsCpu[NVWS_SET_PSO];
@@ -731,7 +734,7 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    "stage binds: plain %llu, static samplers %llu, embedded fields %llu; "
                    "sets per buffer: new %.1f, reused %.1f, cached %.1f, writes %.1f, copies %.1f; "
                    "new because: first %.1f, descriptor %.1f, table %.1f, wider %.1f; kept by offset %.1f, binds skipped %.1f; "
-                   "changed: buffers %.1f, textures %.1f, samplers %.1f, storage %.1f",
+                   "changed: buffers %.1f, textures %.1f, samplers %.1f, storage %.1f; lazy kept %.1f, bytes same %.1f",
                    gWsEncN, plugin, gWsEncSum / n,
                    gWsCpu[NVWS_PASS] * u, gWsCpu[NVWS_DRAW] * u, gWsCpu[NVWS_BIND] * u, setters * u, gWsCpu[NVWS_END] * u,
                    gWsCpu[NVWS_COMMIT] * u, gWsPasses / n, gWsDraws / n, (unsigned long long)bc[1], (unsigned long long)bc[0],
@@ -741,7 +744,7 @@ static void nvmtl_ws_timing_census(NVMTLCommandBuffer *cb, double deviceStart, d
                    (unsigned long long)ec[0], (unsigned long long)ec[1], (unsigned long long)ec[2],
                    setD[0] / n, setD[1] / n, setD[2] / n, setD[3] / n, setD[4] / n,
                    setD[5] / n, setD[6] / n, setD[7] / n, setD[8] / n, setD[9] / n, setD[10] / n,
-                   setD[11] / n, setD[12] / n, setD[13] / n, setD[14] / n);
+                   setD[11] / n, setD[12] / n, setD[13] / n, setD[14] / n, setD[15] / n, bytesD / n);
         }
         nvmtl_vk_mesa_census();
         memset(gWsPathSum, 0, sizeof gWsPathSum); memset(gWsPathMax, 0, sizeof gWsPathMax); gWsPathN = 0;

@@ -3125,8 +3125,22 @@ static void nvmtl_enc_embedded(NVMTLRenderCommandEncoder *e, uint32_t set, NVMTL
     if (nvmtl_vk_bind_buffer(&_cb->_c, NVMTL_SET_FRAGMENT, (uint32_t)i, &nb->_b, off)) nvlog("setFragmentBuffer: bind FAILED");
 }
 static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, size_t *off);
+int nvmtl_vk_lazy_on(void);   // nvmtl_vk.c, v83
+static _Atomic uint64_t gBytesSame;   // v83: setBytes calls that pointed at the last copy (the census reads it)
 - (void)nvmtlBindBytes:(const void *)bytes length:(NSUInteger)len atIndex:(NSUInteger)i set:(uint32_t)set {
     NVWS_SCOPE(_cb, NVWS_SET_BYTES);
+    // v83 (lazy sets): the same data as the last setBytes at this stage and index points at that copy in the ring,
+    // which the command buffer keeps: the binding does not change, and the descriptor set need not either
+    const int bk = set == NVMTL_SET_VERTEX ? 0 : set == NVMTL_SET_FRAGMENT ? 1 : -1;
+    if (bk >= 0 && i < 8 && len <= 512 && nvmtl_vk_lazy_on()) {
+        NVMTLBuffer *pb = _bytesB[bk][i];
+        if (pb && _bytesLen[bk][i] == len && pb->_b.map && !memcmp((const uint8_t *)pb->_b.map + _bytesOff[bk][i], bytes, len)) {
+            if (nvmtl_vk_bind_buffer(&_cb->_c, set, (uint32_t)i, &pb->_b, _bytesOff[bk][i])) nvlog("setBytes: bind FAILED");
+            nvmtl_bufslot_put(self, set, i, pb, _bytesOff[bk][i]);
+            atomic_fetch_add_explicit(&gBytesSame, 1, memory_order_relaxed);
+            return;
+        }
+    }
     size_t roff = 0;
     NVMTLBuffer *nb = nvmtl_bytes_ring(_cb, len, &roff);
     const BOOL ring = nb != nil;
@@ -3142,6 +3156,7 @@ static NVMTLBuffer *nvmtl_bytes_ring(NVMTLCommandBuffer *cb, NSUInteger len, siz
         [_cb->_scratch addObject:nb];
     }
     if (set == NVMTL_SET_VERTEX || set == NVMTL_SET_FRAGMENT) nvmtl_bufslot_put(self, set, i, nb, roff);
+    if (bk >= 0 && i < 8) { _bytesB[bk][i] = nb; _bytesOff[bk][i] = roff; _bytesLen[bk][i] = (uint32_t)len; }
 }
 - (void)setVertexBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_VERTEX]; }
 - (void)setFragmentBytes:(const void *)b length:(NSUInteger)l atIndex:(NSUInteger)i { [self nvmtlBindBytes:b length:l atIndex:i set:NVMTL_SET_FRAGMENT]; }
@@ -4158,7 +4173,8 @@ enum { E78C_ENC, E78C_DISP, E78C_FULL, E78C_NARROW, E78C_NONE, E78C_ENDFULL, E78
        E78C_SETCACHE, E78C_COPIES,   // v80: keyed set cache hits, descriptors copied from the previous set
        E78C_R_FIRST, E78C_R_DESC, E78C_R_ADDR, E78C_R_MASK,   // v81: why a new set: none to reuse, a descriptor, the table only, a wider pipeline
        E78C_ADDRREUSE, E78C_BINDSKIP,   // v81: sets kept with a new table snapshot, set binds skipped
-       E78C_D_BUF, E78C_D_TEX, E78C_D_SAMP, E78C_D_STEX, E78C_N };   // v82: kinds of the changed descriptors
+       E78C_D_BUF, E78C_D_TEX, E78C_D_SAMP, E78C_D_STEX,   // v82: kinds of the changed descriptors
+       E78C_LAZYREUSE, E78C_N };   // v83: sets kept although bindings they hold changed (the pipeline reads none of them)
 static uint64_t g_e78c[E78C_N];
 static int g_e78_off = -1, g_e78_census = -1;
 static int nvmtl_enc78_on(int row) {
