@@ -280,6 +280,25 @@ extern "C" uint64_t nmx_xnu_execbuf_begin(void)
 }
 
 static uint64_t s_phase_ns[8], s_phase_max[8];
+/* v84: inside the pin and add phases: 0 the vma pins, 1 the fence slot reservations, 2 request commit, 3 request queue
+   (to the GuC), 4 retiring the timeline's finished requests, 5 the timeline unlock; and counts: 0 vma pins that missed
+   the quick path, 1 fence slot reservations over 20 us (the list had to grow) */
+static uint64_t s_sub_ns[6], s_sub_max[6], s_sub_cnt[2];
+extern "C" uint64_t nmx_xnu_execbuf_sub(int k, uint64_t *t)
+{
+    const uint64_t now = mach_absolute_time();
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(now - *t, &ns);
+    *t = now;
+    __atomic_add_fetch(&s_sub_ns[k], ns, __ATOMIC_RELAXED);
+    if (ns > s_sub_max[k])
+        s_sub_max[k] = ns;
+    return ns;
+}
+extern "C" void nmx_xnu_execbuf_count(int k)
+{
+    __atomic_add_fetch(&s_sub_cnt[k], 1, __ATOMIC_RELAXED);
+}
 static uint64_t s_vma_ns[3], s_vma_max[3], s_vma_bytes, s_vma_binds, s_vma_userptr, s_vma_user_bytes;
 static uint64_t s_vma_sizes[6];   /* <64K <256K <1M <4M <16M 16M+ */
 
@@ -433,6 +452,18 @@ extern "C" void nmx_xnu_execbuf_end(uint64_t t0, unsigned objects)
               (unsigned long long)avg[2], (unsigned long long)top[2], (unsigned long long)avg[3], (unsigned long long)top[3],
               (unsigned long long)avg[4], (unsigned long long)top[4], (unsigned long long)avg[5], (unsigned long long)top[5],
               (unsigned long long)avg[6], (unsigned long long)top[6], (unsigned long long)avg[7], (unsigned long long)top[7]);
+        uint64_t sa[6], st[6], sc[2];
+        for (int i = 0; i < 6; i++) {
+            sa[i] = __atomic_exchange_n(&s_sub_ns[i], 0, __ATOMIC_RELAXED) / 1024000;
+            st[i] = __atomic_exchange_n(&s_sub_max[i], 0, __ATOMIC_RELAXED) / 1000;
+        }
+        for (int i = 0; i < 2; i++) sc[i] = __atomic_exchange_n(&s_sub_cnt[i], 0, __ATOMIC_RELAXED);
+        IOLog("NullMoth GPU: execbuffer detail, us avg/max: vma pins %llu/%llu fence reserve %llu/%llu commit %llu/%llu "
+              "queue %llu/%llu retire %llu/%llu unlock %llu/%llu; per 1024 calls: slow vma pins %llu, fence reserves over 20 us %llu\n",
+              (unsigned long long)sa[0], (unsigned long long)st[0], (unsigned long long)sa[1], (unsigned long long)st[1],
+              (unsigned long long)sa[2], (unsigned long long)st[2], (unsigned long long)sa[3], (unsigned long long)st[3],
+              (unsigned long long)sa[4], (unsigned long long)st[4], (unsigned long long)sa[5], (unsigned long long)st[5],
+              (unsigned long long)sc[0], (unsigned long long)sc[1]);
     }
 }
 

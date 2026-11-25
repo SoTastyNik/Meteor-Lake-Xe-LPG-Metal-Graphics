@@ -253,6 +253,9 @@ struct eb_fence {
 extern u64 nmx_xnu_execbuf_begin(void);
 extern void nmx_xnu_execbuf_mark(int phase, u64 *t);
 extern void nmx_xnu_execbuf_end(u64 t0, unsigned int objects);
+/* v84: the pin and add phases taken apart (vma pins, fence slots; commit, queue, retire, unlock) */
+extern u64 nmx_xnu_execbuf_sub(int k, u64 *t);
+extern void nmx_xnu_execbuf_count(int k);
 #endif
 
 struct i915_execbuffer {
@@ -1101,8 +1104,16 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 		struct drm_i915_gem_exec_object2 *entry = &eb->exec[i];
 		struct eb_vma *ev = &eb->vma[i];
 		struct i915_vma *vma = ev->vma;
+#ifdef NMXKPI
+		u64 nmx_s = nmx_xnu_execbuf_begin();
+#endif
 
 		err = eb_pin_vma(eb, entry, ev);
+#ifdef NMXKPI
+		nmx_xnu_execbuf_sub(0, &nmx_s);
+		if (err)
+			nmx_xnu_execbuf_count(0);
+#endif
 		if (err == -EDEADLK)
 			return err;
 
@@ -1123,7 +1134,14 @@ static int eb_validate_vmas(struct i915_execbuffer *eb)
 		}
 
 		/* Reserve enough slots to accommodate composite fences */
+#ifdef NMXKPI
+		nmx_s = nmx_xnu_execbuf_begin();
+#endif
 		err = dma_resv_reserve_fences(vma->obj->base.resv, eb->num_batches);
+#ifdef NMXKPI
+		if (nmx_xnu_execbuf_sub(1, &nmx_s) > 20000)
+			nmx_xnu_execbuf_count(1);
+#endif
 		if (err)
 			return err;
 
@@ -3177,13 +3195,22 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 	struct intel_timeline * const tl = i915_request_timeline(rq);
 	struct i915_sched_attr attr = {};
 	struct i915_request *prev;
+#ifdef NMXKPI
+	u64 nmx_s;
+#endif
 
 	lockdep_assert_held(&tl->mutex);
 	lockdep_unpin_lock(&tl->mutex, rq->cookie);
 
 	trace_i915_request_add(rq);
 
+#ifdef NMXKPI
+	nmx_s = nmx_xnu_execbuf_begin();
+#endif
 	prev = __i915_request_commit(rq);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_sub(2, &nmx_s);
+#endif
 
 	/* Check that the context wasn't destroyed before submission */
 	if (likely(!intel_context_is_closed(eb->context))) {
@@ -3206,13 +3233,25 @@ static int eb_request_add(struct i915_execbuffer *eb, struct i915_request *rq,
 				&rq->fence.flags);
 	}
 
+#ifdef NMXKPI
+	nmx_s = nmx_xnu_execbuf_begin();
+#endif
 	__i915_request_queue(rq, &attr);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_sub(3, &nmx_s);
+#endif
 
 	/* Try to clean up the client's timeline after submitting the request */
 	if (prev)
 		retire_requests(tl, prev);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_sub(4, &nmx_s);
+#endif
 
 	mutex_unlock(&tl->mutex);
+#ifdef NMXKPI
+	nmx_xnu_execbuf_sub(5, &nmx_s);
+#endif
 
 	return err;
 }
