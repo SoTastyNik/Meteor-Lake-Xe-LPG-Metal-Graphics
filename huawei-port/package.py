@@ -101,7 +101,9 @@ def main():
         with tarfile.open(archive) as t:
             member = next(m for m in t.getmembers() if m.name.endswith('/' + llvm_rel) or m.name == llvm_rel)
             data = t.extractfile(member).read()
-    assert hashlib.sha256(data).hexdigest() == sums[llvm_rel], 'libLLVM.dylib does not match the runtime hash'
+    # a copy from our own package was ad-hoc re-signed by sign() below: the v83 package's (CI 45561884064) is accepted too
+    signed_copies = {'2a6d807ce8f3a3ab772e8f861ff40cff63363b90ee1d80ca7e289147b39405aa'}
+    assert hashlib.sha256(data).hexdigest() in {sums[llvm_rel]} | signed_copies, 'libLLVM.dylib does not match the runtime hash'
     (PKG / llvm_rel).write_bytes(data)
 
     # Vulkan backend: rebuilt ANV + libdrm, upstream loader/air-opt/ICD
