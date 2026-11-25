@@ -10,6 +10,10 @@ on:
         description: 'Take Mesa from this run id instead of building it (macOS arm64 runners unavailable)'
         required: false
         default: ''
+      llvm_run:
+        description: 'Take air-runtime/libLLVM.dylib from the package of this run id (NullMoth removed its v2.0.2 release)'
+        required: false
+        default: ''
   push:
     branches: [huawei-matebook14-7d55]
     paths-ignore: ['**.md', 'huawei-port/README-RU.txt', 'huawei-port/efi/**', 'huawei-port/acpi-tables/**', '.github/workflows/huawei-efi-tools.yml', 'huawei-port/wifi/**', '.github/workflows/huawei-wifi.yml', '.github/workflows/huawei-bt.yml', 'huawei-port/trace/**', '.github/workflows/huawei-trace.yml']
@@ -117,7 +121,16 @@ jobs:
           path: out/mesa
           run-id: ${{ inputs.mesa_run }}
           github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.llvm_run }}
+        with:
+          name: Huawei-MateBook14-Graphics
+          path: out/llvm-prev
+          run-id: ${{ inputs.llvm_run }}
+          github-token: ${{ github.token }}
       - run: python3 huawei-port/package.py out/kernel out/desktop out/mesa out/Huawei-MateBook14-Graphics
+        env:
+          NMX_PREV_PACKAGE: ${{ inputs.llvm_run && 'out/llvm-prev/Huawei-MateBook14-Graphics.tar.gz' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: Huawei-MateBook14-Graphics

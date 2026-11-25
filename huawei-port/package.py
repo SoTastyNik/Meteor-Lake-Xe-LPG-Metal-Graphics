@@ -85,12 +85,22 @@ def main():
                 ('/NVMTLDriver', '/libnvmtl_translate.dylib', '/Info.plist', '/air-runtime/libLLVM.dylib')):
             copy_verified(rel, sums, PKG / rel)
     llvm_rel = 'Library/GPUBundles/NVMTLDriver.bundle/Contents/MacOS/air-runtime/libLLVM.dylib'
-    archive = PKG.parent / 'nullmoth-nvidia-2.0.2.tar.gz'
-    if not archive.exists():
-        urllib.request.urlretrieve(NULLMOTH, archive)
-    with tarfile.open(archive) as t:
-        member = next(m for m in t.getmembers() if m.name.endswith('/' + llvm_rel) or m.name == llvm_rel)
-        data = t.extractfile(member).read()
+    data = None
+    # 2026-11-25: NullMoth removed its v2.0.2 release (404); an earlier package of ours (workflow input llvm_run) holds
+    # the same libLLVM.dylib, checked against the same runtime hash below
+    prev = os.environ.get('NMX_PREV_PACKAGE')
+    if prev and Path(prev).exists():
+        with tarfile.open(prev) as t:
+            member = next((m for m in t.getmembers() if m.name.endswith('/' + llvm_rel)), None)
+            if member:
+                data = t.extractfile(member).read()
+    if data is None:
+        archive = PKG.parent / 'nullmoth-nvidia-2.0.2.tar.gz'
+        if not archive.exists():
+            urllib.request.urlretrieve(NULLMOTH, archive)
+        with tarfile.open(archive) as t:
+            member = next(m for m in t.getmembers() if m.name.endswith('/' + llvm_rel) or m.name == llvm_rel)
+            data = t.extractfile(member).read()
     assert hashlib.sha256(data).hexdigest() == sums[llvm_rel], 'libLLVM.dylib does not match the runtime hash'
     (PKG / llvm_rel).write_bytes(data)
 
