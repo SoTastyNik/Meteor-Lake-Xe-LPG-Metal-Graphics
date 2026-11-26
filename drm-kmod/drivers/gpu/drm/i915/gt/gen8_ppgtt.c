@@ -298,6 +298,9 @@ static u64 __gen8_ppgtt_clear(struct i915_address_space * const vm,
 		}
 
 		if (release_pd_entry(pd, idx, pt, scratch))
+#ifdef NMXKPI
+			if (!nmx_pt_give(vm, pt, lvl))
+#endif
 			free_px(vm, pt, lvl);
 	} while (idx++, --len);
 

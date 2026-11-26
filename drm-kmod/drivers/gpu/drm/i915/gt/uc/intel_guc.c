@@ -39,10 +39,33 @@
  * just the HuC, but more are expected to land in the future).
  */
 
+#ifdef NMXKPI
+/*
+ * v84_1: the MTL forcewake table wakes the GT for this one register (an i915 FIXME, "WA to wake GT while triggering
+ * H2G": the GuC could see a doorbell late while the platform enters or leaves a deep sleep state), so every submission
+ * waited on the CPU for the GT to leave RC6 and acknowledge: the request queue phase took ~290 us of each execbuffer
+ * (v84). The register is in the always-on sgunit, and xe writes it plainly (xe_guc_notify); so does this port unless
+ * debug.nmxgpu_h2g_wake=1 (NMXAccel) brings the wake back.
+ */
+int nmx_h2g_wake = 0;
+extern u64 nmx_xnu_execbuf_begin(void);
+extern u64 nmx_xnu_execbuf_sub(int k, u64 *t);
+extern void nmx_xnu_execbuf_count(int k);
+#endif
+
 void intel_guc_notify(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
+#ifdef NMXKPI
+	u64 nmx_s = nmx_xnu_execbuf_begin();
 
+	if (!READ_ONCE(nmx_h2g_wake))
+		intel_uncore_write_fw(gt->uncore, guc->notify_reg, GUC_SEND_TRIGGER);
+	else
+		intel_uncore_write(gt->uncore, guc->notify_reg, GUC_SEND_TRIGGER);
+	if (nmx_xnu_execbuf_sub(6, &nmx_s) > 20000)
+		nmx_xnu_execbuf_count(2);
+#else
 	/*
 	 * On Gen11+, the value written to the register is passes as a payload
 	 * to the FW. However, the FW currently treats all values the same way
@@ -50,6 +73,7 @@ void intel_guc_notify(struct intel_guc *guc)
 	 * on older gens.
 	 */
 	intel_uncore_write(gt->uncore, guc->notify_reg, GUC_SEND_TRIGGER);
+#endif
 }
 
 static inline i915_reg_t guc_send_reg(struct intel_guc *guc, u32 i)

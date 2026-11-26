@@ -210,6 +210,9 @@ int i915_vm_lock_objects(struct i915_address_space *vm,
 
 void i915_address_space_fini(struct i915_address_space *vm)
 {
+#ifdef NMXKPI
+	nmx_pt_drain(vm);
+#endif
 	drm_mm_takedown(&vm->mm);
 }
 
@@ -272,6 +275,9 @@ void i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	vm->pending_unbind = RB_ROOT_CACHED;
 	INIT_WORK(&vm->release_work, __i915_vm_release);
+#ifdef NMXKPI
+	spin_lock_init(&vm->nmx_pt_lock);
+#endif
 
 	/*
 	 * The vm->mutex must be reclaim safe (for use in the shrinker).

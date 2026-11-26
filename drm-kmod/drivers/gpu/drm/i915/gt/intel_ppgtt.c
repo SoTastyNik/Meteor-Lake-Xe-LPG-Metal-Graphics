@@ -220,6 +220,74 @@ static unsigned long pd_count(u64 size, int shift)
 	return (size + 2 * (BIT_ULL(shift) - 1)) >> shift;
 }
 
+#ifdef NMXKPI
+/*
+ * v84_1: a binding's stash is sized for the worst case - for a 64 KB buffer 2 page tables and 4 directories, each a GEM
+ * object allocated, its page pinned and mapped - and the walk mostly found them in place, so the rest was freed again.
+ * At WindowServer's ~30 new bindings a second that was half of an execbuffer's pin time (tables 100-180 us per binding,
+ * v84). Leftovers and tables emptied by an unbind go to a small pool of their address space instead, still mapped, and
+ * the next stash takes from it: like xe, which allocates only the tables a bind is missing. The objects share the vm's
+ * reservation lock, so a pool is per vm. debug.nmxgpu_pt_pool=0 (NMXAccel) turns it off.
+ */
+int nmx_pt_pool = 1;
+u64 nmx_pt_stat[3];    /* taken from a pool, newly allocated, kept by a pool */
+#define NMX_PT_POOL_MAX 16
+
+static struct i915_page_table *nmx_pt_take(struct i915_address_space *vm, int n)
+{
+	struct i915_page_table *pt;
+	unsigned long flags;
+
+	if (!READ_ONCE(nmx_pt_pool) || !READ_ONCE(vm->nmx_pt_free[n]))
+		return NULL;
+	spin_lock_irqsave(&vm->nmx_pt_lock, flags);
+	pt = vm->nmx_pt_free[n];
+	if (pt) {
+		vm->nmx_pt_free[n] = pt->stash;
+		vm->nmx_pt_count[n]--;
+	}
+	spin_unlock_irqrestore(&vm->nmx_pt_lock, flags);
+	if (pt)
+		nmx_pt_stat[0]++;
+	return pt;
+}
+
+/* lvl 0 a page table, else a directory; false: not pooled, the caller frees it */
+bool nmx_pt_give(struct i915_address_space *vm, struct i915_page_table *pt, int lvl)
+{
+	const int n = lvl ? 1 : 0;
+	struct drm_i915_gem_object *obj = pt->base;
+	unsigned long flags;
+	bool kept = false;
+
+	if (!READ_ONCE(nmx_pt_pool) || !obj || obj->base.size != I915_GTT_PAGE_SIZE_4K || pt->is_compact ||
+	    !READ_ONCE(obj->mm.mapping) || READ_ONCE(vm->nmx_pt_count[n]) >= NMX_PT_POOL_MAX)
+		return false;
+	if (n) {
+		struct i915_page_directory *pd = container_of(pt, typeof(*pd), pt);
+		unsigned int i;
+
+		for (i = 0; i < I915_PDES; i++)
+			if (pd->entry[i])
+				return false;
+	}
+	/* the map holds one pin; the walk took one more for a table it used (and for one it lost a race with) */
+	while (atomic_read(&obj->mm.pages_pin_count) > 1)
+		__i915_gem_object_unpin_pages(obj);
+	spin_lock_irqsave(&vm->nmx_pt_lock, flags);
+	if (vm->nmx_pt_count[n] < NMX_PT_POOL_MAX) {
+		pt->stash = vm->nmx_pt_free[n];
+		vm->nmx_pt_free[n] = pt;
+		vm->nmx_pt_count[n]++;
+		kept = true;
+	}
+	spin_unlock_irqrestore(&vm->nmx_pt_lock, flags);
+	if (kept)
+		nmx_pt_stat[2]++;
+	return kept;
+}
+#endif
+
 int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash,
 			   u64 size)
@@ -243,7 +311,15 @@ int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 	while (count--) {
 		struct i915_page_table *pt;
 
+#ifdef NMXKPI
+		pt = pt_sz == I915_GTT_PAGE_SIZE_4K ? nmx_pt_take(vm, 0) : NULL;
+		if (!pt) {
+			nmx_pt_stat[1]++;
+			pt = alloc_pt(vm, pt_sz);
+		}
+#else
 		pt = alloc_pt(vm, pt_sz);
+#endif
 		if (IS_ERR(pt)) {
 			i915_vm_free_pt_stash(vm, stash);
 			return PTR_ERR(pt);
@@ -259,7 +335,18 @@ int i915_vm_alloc_pt_stash(struct i915_address_space *vm,
 		while (count--) {
 			struct i915_page_directory *pd;
 
+#ifdef NMXKPI
+			struct i915_page_table *got = nmx_pt_take(vm, 1);
+
+			if (got) {
+				pd = container_of(got, typeof(*pd), pt);
+			} else {
+				nmx_pt_stat[1]++;
+				pd = alloc_pd(vm);
+			}
+#else
 			pd = alloc_pd(vm);
+#endif
 			if (IS_ERR(pd)) {
 				i915_vm_free_pt_stash(vm, stash);
 				return PTR_ERR(pd);
@@ -281,6 +368,10 @@ int i915_vm_map_pt_stash(struct i915_address_space *vm,
 
 	for (n = 0; n < ARRAY_SIZE(stash->pt); n++) {
 		for (pt = stash->pt[n]; pt; pt = pt->stash) {
+#ifdef NMXKPI
+			if (READ_ONCE(pt->base->mm.mapping))
+				continue;       /* from the pool: mapped, its page pinned */
+#endif
 			err = map_pt_dma_locked(vm, pt->base);
 			if (err)
 				return err;
@@ -303,6 +394,42 @@ void i915_vm_free_pt_stash(struct i915_address_space *vm,
 		}
 	}
 }
+
+#ifdef NMXKPI
+/* After the bind walk, while the vm is surely alive (the work's release may run after the vm is gone): its leftovers */
+void nmx_pt_give_stash(struct i915_address_space *vm, struct i915_vm_pt_stash *stash)
+{
+	int n;
+
+	for (n = 0; n < ARRAY_SIZE(stash->pt); n++) {
+		struct i915_page_table *pt, *rest = NULL;
+
+		while ((pt = stash->pt[n])) {
+			stash->pt[n] = pt->stash;
+			if (!nmx_pt_give(vm, pt, n)) {
+				pt->stash = rest;
+				rest = pt;
+			}
+		}
+		stash->pt[n] = rest;
+	}
+}
+
+/* The vm's end (i915_address_space_fini): nothing binds into it any more */
+void nmx_pt_drain(struct i915_address_space *vm)
+{
+	struct i915_page_table *pt;
+	int n;
+
+	for (n = 0; n < 2; n++) {
+		while ((pt = vm->nmx_pt_free[n])) {
+			vm->nmx_pt_free[n] = pt->stash;
+			vm->nmx_pt_count[n]--;
+			free_px(vm, pt, n);
+		}
+	}
+}
+#endif
 
 void ppgtt_init(struct i915_ppgtt *ppgtt, struct intel_gt *gt,
 		unsigned long lmem_pt_obj_flags)

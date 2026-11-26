@@ -368,6 +368,9 @@ static void __vma_bind(struct dma_fence_work *work)
 
 	vma_res->ops->bind_vma(vma_res->vm, &vw->stash,
 			       vma_res, vw->pat_index, vw->flags);
+#ifdef NMXKPI
+	nmx_pt_give_stash(vw->vm, &vw->stash);
+#endif
 }
 
 static void __vma_release(struct dma_fence_work *work)

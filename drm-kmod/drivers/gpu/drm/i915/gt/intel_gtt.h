@@ -304,6 +304,13 @@ struct i915_address_space {
 	/* Interval tree for pending unbind vma resources */
 	struct rb_root_cached pending_unbind;
 
+#ifdef NMXKPI
+	/* v84_1: page tables [0] and directories [1] a binding did not need, still mapped, for the next ones (intel_ppgtt.c) */
+	spinlock_t nmx_pt_lock;
+	struct i915_page_table *nmx_pt_free[2];
+	unsigned int nmx_pt_count[2];
+#endif
+
 	struct drm_i915_gem_object *
 		(*alloc_pt_dma)(struct i915_address_space *vm, int sz);
 	struct drm_i915_gem_object *
@@ -679,6 +686,11 @@ int i915_vm_map_pt_stash(struct i915_address_space *vm,
 			 struct i915_vm_pt_stash *stash);
 void i915_vm_free_pt_stash(struct i915_address_space *vm,
 			   struct i915_vm_pt_stash *stash);
+#ifdef NMXKPI
+bool nmx_pt_give(struct i915_address_space *vm, struct i915_page_table *pt, int lvl);
+void nmx_pt_give_stash(struct i915_address_space *vm, struct i915_vm_pt_stash *stash);
+void nmx_pt_drain(struct i915_address_space *vm);
+#endif
 
 struct i915_vma *
 __vm_create_scratch_for_read(struct i915_address_space *vm, unsigned long size);

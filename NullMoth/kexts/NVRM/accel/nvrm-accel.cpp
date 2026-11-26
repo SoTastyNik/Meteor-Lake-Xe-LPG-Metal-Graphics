@@ -1718,6 +1718,42 @@ static int nmxgpu_zero_pool_sysctl SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_zero_pool, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
             nmxgpu_zero_pool_sysctl, "I",
             "MateBook GPU: 1 = freed pages are zeroed ahead of use (v65 default), 0 = zeroed when allocated");
+// v84_1: NMXGPU rings the GuC doorbell without waking the GT first, as xe does, unless this is 1 (read every 64 submissions)
+static int gNmxGpuH2gWake = 0;
+static int nmxgpu_h2g_wake_sysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gNmxGpuH2gWake;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    if (v != 0 && v != 1) return EINVAL;
+    NVAccel *a = NVAccel::gAccel;
+    IOService *pci = a ? a->getProvider() : nullptr;
+    if (!pci) return ENXIO;
+    pci->setProperty("nmxgpu-h2g-wake", (unsigned long long)v, 32);
+    gNmxGpuH2gWake = v;
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_h2g_wake, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
+            nmxgpu_h2g_wake_sysctl, "I",
+            "MateBook GPU: 0 = the GuC doorbell is written plainly (v84_1 default, as xe), 1 = the GT is woken first (i915)");
+// v84_1: NMXGPU keeps the page tables a binding did not need for the next ones unless this is 0 (read every 64 submissions)
+static int gNmxGpuPtPool = 1;
+static int nmxgpu_pt_pool_sysctl SYSCTL_HANDLER_ARGS
+{
+    int v = gNmxGpuPtPool;
+    int err = sysctl_handle_int(oidp, &v, 0, req);
+    if (err || !req->newptr) return err;
+    if (v != 0 && v != 1) return EINVAL;
+    NVAccel *a = NVAccel::gAccel;
+    IOService *pci = a ? a->getProvider() : nullptr;
+    if (!pci) return ENXIO;
+    pci->setProperty("nmxgpu-pt-pool", (unsigned long long)v, 32);
+    gNmxGpuPtPool = v;
+    return 0;
+}
+SYSCTL_PROC(_debug, OID_AUTO, nmxgpu_pt_pool, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, nullptr, 0,
+            nmxgpu_pt_pool_sysctl, "I",
+            "MateBook GPU: 1 = page tables are pooled per address space (v84_1 default), 0 = allocated and freed per binding");
 static constexpr unsigned kNmxFrameBuckets = 8;
 static SInt64 gCntNmxFrameMs[kNmxFrameBuckets];
 NVACCEL_CNT(nmxfb_frames_under_9ms, gCntNmxFrameMs[0], "Frames reaching the panel under 9 ms after the previous one (120 Hz)");
@@ -1803,6 +1839,8 @@ static void nmxInstallVmSysctls(void)
     sysctl_register_oid(&sysctl__debug_nmxgpu_census);
     sysctl_register_oid(&sysctl__debug_nmxgpu_pin_reclaim);
     sysctl_register_oid(&sysctl__debug_nmxgpu_zero_pool);
+    sysctl_register_oid(&sysctl__debug_nmxgpu_h2g_wake);
+    sysctl_register_oid(&sysctl__debug_nmxgpu_pt_pool);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_under_9ms); sysctl_register_oid(&sysctl__debug_nmxfb_frames_9_13ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_13_17ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_17_25ms);
     sysctl_register_oid(&sysctl__debug_nmxfb_frames_25_34ms);  sysctl_register_oid(&sysctl__debug_nmxfb_frames_34_50ms);

@@ -3879,6 +3879,27 @@ i915_gem_execbuffer2_ioctl(struct drm_device *dev, void *data,
 					 intel_rps_get_min_frequency(rps), intel_rps_get_max_frequency(rps),
 					 (unsigned long long)nmx_boosts, nmx_boost_mhz);
 				nmx_awake = nmx_sum = nmx_top = 0;
+				{
+					extern int nmx_h2g_wake, nmx_pt_pool;
+					extern u64 nmx_pt_stat[3];
+					const u64 took = __atomic_exchange_n(&nmx_pt_stat[0], 0, __ATOMIC_RELAXED),
+						  made = __atomic_exchange_n(&nmx_pt_stat[1], 0, __ATOMIC_RELAXED),
+						  kept = __atomic_exchange_n(&nmx_pt_stat[2], 0, __ATOMIC_RELAXED);
+
+					drm_info(dev, "Latitude MTL: execbuffer page tables, per 1024 calls: %llu from the pool, %llu allocated, %llu kept; pool %s, doorbell %s\n",
+						 (unsigned long long)took, (unsigned long long)made, (unsigned long long)kept,
+						 READ_ONCE(nmx_pt_pool) ? "on" : "off", READ_ONCE(nmx_h2g_wake) ? "wakes the GT" : "plain");
+				}
+			}
+			/* v84_1: debug.nmxgpu_h2g_wake and debug.nmxgpu_pt_pool (NMXAccel); absent: the defaults */
+			if ((nmx_calls & 63) == 0) {
+				extern int nmx_h2g_wake, nmx_pt_pool;
+				const int wake = nmx_xnu_tunable("nmxgpu-h2g-wake"), pool = nmx_xnu_tunable("nmxgpu-pt-pool");
+
+				if (wake >= 0)
+					WRITE_ONCE(nmx_h2g_wake, !!wake);
+				if (pool >= 0)
+					WRITE_ONCE(nmx_pt_pool, !!pool);
 			}
 		}
 	}
